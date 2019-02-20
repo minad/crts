@@ -1,0 +1,27 @@
+SOURCES=$(wildcard native/*.c native/standalone/*.c native/standalone/hv/*.c test/*/*/*.c test/*/*.c test/*.c)
+OBJECTS=$(patsubst %.c, %.o, $(SOURCES))
+#MODULE=Spawnalot
+MODULE=ParStress
+COMMON_WARNINGS=-Wformat=2 -Wdouble-promotion -Wnull-dereference -Wshadow \
+   -Wpointer-arith -Wcast-qual -Wcast-align -Wall -Wextra -Wconversion -Wc++-compat \
+   -Wmissing-prototypes -Wstrict-prototypes -Wvla \
+   -Wnested-externs -Wdisabled-optimization \
+   -Wmissing-format-attribute -Wdate-time \
+   -Winit-self -Wundef \
+   -Wswitch-enum \
+   -Wno-gnu-alignof-expression
+   #-Wno-packed-bitfield-compat
+#CC=aarch64-linux-gnu-gcc
+CC=clang-8
+FLAGS=-DCHI_CONFIG=release.h -DCHI_MODE=release -std=gnu11 $(COMMON_WARNINGS) -g -O2 -DNDEBUG -Inative/include -Inative -Igenerated -Iconfig/native -Inative/standalone -Inative/standalone/hv -D_GNU_SOURCE -ffreestanding -nostdinc -nostdlib -DCHI_STANDALONE_HV
+
+run: $(OBJECTS)
+	$(CC) $(FLAGS) $^ \
+        -Wl,--defsym=z_Main=z_$(MODULE) -Wl,--defsym=z_Main_z_main=z_$(MODULE)_z_main \
+	-Wl,--script=config/sort-text.lds -o $@ -static -lgcc -Lopenlibm -lopenlibm
+
+%.o : %.c
+	$(CC) -DCHI_GUID=$$(echo -n $< | md5sum | colrm 33) $(FLAGS) -o $@ -c $<
+
+clean:
+	rm -f $(OBJECTS)

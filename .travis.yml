@@ -1,0 +1,26 @@
+env:
+  global:
+    secure: "DXMInRquF2j7qNdgLoecAf51ap4EAWcp5eY8LAUhWsGBhfAzsoEB5943TK/o0VeKEo4wAvr/kwrEf+YFLV43yK1qX4QXg+1wZJVR5Eyta2GlqgDGsLqyUrPwxGnUiS49t6Py8HTh7Vjo2UPVZC4kcegNzu7y9mkP8oudRxI8pMHFiRRkJEzF/Kahz4CY6ujWlHQhMmrDgmEf4CNNA14LiurCQOaLnlPaJMIouGAB8R0cUNJVQjrgxMXgiwb3kwHDSaIcetOiZjIkDh8TQnkq1o20/01f5PVtWUuXARGCuY40K5Skg7bjV2qEoMNSsZCUWBeGOrlGw/q4k38ZXCERMikDV/pBdhlrZr4sTLPQzvyaYKHbbRj2dHTuv7+HntDGTd1hRQBE/KNqdQyCMCQI9rKonzOAAzIZpEbHDpg79D8Zp3+3I0vf7MrTZkXwEGryZpLO2O2q5K8voPM1epmEDnQXmUQUl+c84o/hIcq5s3MF1Fgw+0HUYb35EVPfs/HxLP1tedJMFo4cnIzOZ455pLk/mlEP4kvT3XSJGOWeu/tKz2H5QIgB8qYQqbGrG154KGp88UKMK34sBF5wLvkUxI46NMKnKCLyRVWw3nC/W5cJRbp81YEQQ5aDPeB9szanXmieCq6jhQv51Vu/4MLKw6nLZLghchdbQ87fFuXCOf4="
+
+before_install:
+  - eval "${MATRIX_EVAL}"
+
+dist: xenial
+language: c
+script: ./build.sh
+
+matrix:
+  include:
+    - os: linux
+      addons:
+        apt:
+          sources:
+            - ubuntu-toolchain-r-test
+          packages:
+            - gcc-8
+      env:
+        - MATRIX_EVAL="CC=gcc-8"
+
+addons:
+  apt:
+    update: true

@@ -1,0 +1,332 @@
+enum {
+   CHI_EVENT_VERSION = 1
+};
+
+CHI_NEWTYPE(Micros, uint64_t)
+CHI_NEWTYPE(Nanos,  uint64_t)
+CHI_NEWTYPE(Millis, uint64_t)
+CHI_NEWTYPE(Secs,   uint64_t)
+
+typedef struct {
+    uint32_t version;
+} ChiEventVersion;
+
+typedef struct ChiLocInfo_ {
+    ChiStringRef module;
+    ChiStringRef fn;
+    ChiStringRef file;
+    size_t       size;
+    uint32_t     line;
+    bool         interp;
+} ChiLocInfo;
+
+typedef struct ChiActivity_ {
+    ChiNanos cpuTimeUser;
+    ChiNanos cpuTimeSystem;
+    size_t   residentSize;
+    uint64_t pageFault;
+    uint64_t pageSwap;
+    uint64_t contextSwitch;
+    uint64_t diskRead;
+    uint64_t diskWrite;
+} ChiActivity;
+
+typedef struct {
+    size_t   allocSinceSweep;
+    uint64_t allocSinceStart;
+    size_t   totalWords;
+} ChiHeapClassUsage;
+
+typedef struct {
+    ChiHeapClassUsage small;
+    ChiHeapClassUsage medium;
+    ChiHeapClassUsage large;
+} ChiHeapUsage;
+
+typedef struct {
+    size_t count;
+    size_t words;
+} ChiObjectCount;
+
+typedef struct {
+    ChiObjectCount promoted;
+    ChiObjectCount copied;
+    ChiObjectCount copied1;
+} ChiScavengerObjectCount;
+
+typedef struct {
+    ChiObjectCount promoted;
+    ChiObjectCount copied;
+} ChiScavengerRawCount;
+
+typedef struct {
+    ChiObjectCount object;
+    ChiObjectCount stack;
+} ChiScavengerDirtyCount;
+
+typedef struct {
+    ChiScavengerDirtyCount  dirty;
+    ChiScavengerRawCount    raw;
+    ChiScavengerObjectCount object;
+    size_t                  collapsed;
+    uint32_t                gen;
+    bool                    snapshot;
+} ChiScavengerStats;
+
+typedef struct {
+    ChiObjectCount live;
+    ChiObjectCount free;
+} ChiSweepClassStats;
+
+typedef struct {
+    ChiSweepClassStats small;
+    ChiSweepClassStats medium;
+    ChiSweepClassStats large;
+} ChiSweepStats;
+
+typedef struct {
+    ChiObjectCount object;
+    ChiObjectCount stack;
+    size_t         collapsed;
+} ChiScanStats;
+
+typedef struct {
+    size_t usedWords;
+    size_t totalWords;
+} ChiMinorUsage;
+
+typedef struct {
+    ChiStringRef trace;
+} ChiEventStackTrace;
+
+typedef struct {
+    ChiStringRef name;
+} ChiEventTraceFFI;
+
+typedef struct {
+    ChiStringRef name;
+    ChiStringRef trace;
+} ChiEventException;
+
+typedef struct {
+    uint32_t     tid;
+    ChiStringRef name;
+} ChiEventThreadName;
+
+typedef struct {
+    uint32_t tid;
+    uint32_t count;
+} ChiEventThreadNew;
+
+typedef struct {
+    uint32_t count;
+} ChiEventThreadTerm;
+
+typedef struct {
+    ChiStringRef name;
+} ChiEventWorkerName;
+
+typedef struct {
+    ChiStringRef data;
+} ChiEventUser;
+
+typedef struct {
+    ChiStringRef file;
+} ChiEventHeapDump;
+
+typedef struct ChiHeapProf_ {
+    ChiObjectCount array;
+    ChiObjectCount bigint;
+    ChiObjectCount box64;
+    ChiObjectCount buffer;
+    ChiObjectCount data;
+    ChiObjectCount ffi;
+    ChiObjectCount fn;
+    ChiObjectCount raw;
+    ChiObjectCount stack;
+    ChiObjectCount string;
+    ChiObjectCount stringbuilder;
+    ChiObjectCount thread;
+    ChiObjectCount thunk;
+} ChiHeapProf;
+
+typedef struct {
+    size_t reqSize;
+    size_t oldSize;
+    size_t newSize;
+    size_t usedSize;
+} ChiEventStackSize;
+
+typedef struct {
+    size_t oldLimit;
+    size_t newLimit;
+} ChiEventNursery;
+
+typedef struct {
+    size_t    heapSize;
+    size_t    size;
+    size_t    align;
+    uintptr_t start;
+} ChiEventChunk;
+
+typedef struct {
+    ChiStringRef module;
+    ChiStringRef name;
+} ChiEventFFI;
+
+typedef struct {
+    ChiStringRef module;
+    ChiStringRef file;
+    ChiStringRef path;
+} ChiEventModuleLoad;
+
+typedef struct {
+    ChiStringRef module;
+} ChiEventModuleName;
+
+typedef enum {
+    CHI_SIG_INTERRUPT,
+    CHI_SIG_DUMPSTACK,
+    CHI_SIG_DUMPHEAP,
+    _CHI_SIG_MAX = CHI_SIG_DUMPHEAP,
+} ChiSig;
+
+typedef struct {
+    ChiSig   sig;
+} ChiEventSignal;
+
+typedef enum {
+    CHI_GC_REQUESTOR_BLOCKMAN,
+    CHI_GC_REQUESTOR_HEAP,
+    CHI_GC_REQUESTOR_USER,
+    CHI_GC_REQUESTOR_RUNTIME,
+    CHI_GC_REQUESTOR_SIG,
+} ChiGCRequestor;
+
+typedef enum {
+    CHI_GC_TRIGGER_INACTIVE,
+    CHI_GC_TRIGGER_SLICE,
+    CHI_GC_TRIGGER_MARKSWEEP,
+    CHI_GC_TRIGGER_FULL,
+} ChiGCTrigger;
+
+typedef enum {
+    CHI_HEAP_LIMIT_ALLOC,
+    CHI_HEAP_LIMIT_SOFT,
+    CHI_HEAP_LIMIT_HARD,
+} ChiHeapLimit;
+
+typedef struct {
+    ChiGCTrigger   trigger;
+} ChiEventGCSlice;
+
+typedef struct {
+    ChiGCTrigger   trigger;
+    ChiGCRequestor requestor;
+} ChiEventGCRequest;
+
+typedef struct {
+    ChiHeapLimit limit;
+    size_t heapSize;
+    size_t softLimit;
+    size_t hardLimit;
+} ChiEventHeapLimit;
+
+typedef struct {
+    ChiStringRef type;
+    size_t       size;
+} ChiEventHeapAlloc;
+
+typedef struct {
+    size_t count;
+} ChiEventBlackhole;
+
+typedef struct {
+    uint32_t count;
+} ChiEventResumeReq;
+
+typedef struct {
+    ChiHeapUsage  major;
+    ChiMinorUsage minor;
+    size_t        totalWords;
+} ChiEventHeapUsage;
+
+typedef ChiHeapProf       ChiEventHeapProf;
+typedef ChiActivity       ChiEventActivity;
+typedef ChiLocInfo        ChiEventTrace;
+typedef ChiSweepStats     ChiEventSweep;
+typedef ChiScavengerStats ChiEventScavenger;
+typedef ChiScanStats      ChiEventMark;
+
+# class  name                ctx       payload     stats         description
+INSTANT  BEGIN               RUNTIME   Version     0             "Beginning of event log"
+INSTANT  END                 RUNTIME   0           0             "End of event log""
+INSTANT  PROC_INIT           PROCESSOR 0           1             "Processor initialized"
+INSTANT  PROC_DESTROY        PROCESSOR 0           0             "Processor destroyed"
+INSTANT  PROC_RESUME_REQ     THREAD    ResumeReq   0             "Processor: Resume requested"
+INSTANT  PROC_TICK           PROCESSOR 0           0             "Processor: Scheduling tick"
+INSTANT  WORKER_INIT         WORKER    0           0             "Worker: Initialized"
+INSTANT  WORKER_DESTROY      WORKER    0           0             "Worker: Destroyed"
+INSTANT  WORKER_NAME         WORKER    WorkerName  0             "Worker: Name modified"
+INSTANT  MODULE_LOAD         PROCESSOR ModuleLoad  0             "Interpreter: Module loaded"
+INSTANT  MODULE_UNLOAD       PROCESSOR ModuleName  0             "Interpreter: Module unloaded"
+INSTANT  MODULE_INIT         PROCESSOR ModuleName  0             "Module initialized"
+INSTANT  FFI_LOAD            PROCESSOR FFI         0             "Interpreter: Foreign function loaded"
+INSTANT  TRACE_FFI           THREAD    TraceFFI    0             "Tracing interpreter: Foreign function"
+INSTANT  TRACE_ENTER         THREAD    Trace       0             "Tracing interpreter: Function entered"
+INSTANT  TRACE_LEAVE         THREAD    Trace       0             "Tracing interpreter: Function left"
+INSTANT  TRACE_ENTER_JMP     THREAD    Trace       0             "Tracing interpreter: Function entered via jump"
+INSTANT  EXCEPTION_HANDLED   THREAD    Exception   1             "Handled exception"
+INSTANT  EXCEPTION_UNHANDLED THREAD    Exception   1             "Unhandled exception"
+INSTANT  GC_BLOCK            THREAD    0           0             "Garbage collector blocked"
+INSTANT  GC_UNBLOCK          THREAD    0           0             "Garbage collector unblocked"
+INSTANT  GC_REQ              RUNTIME   GCRequest   0             "Garbage collection requested"
+INSTANT  GC_MARK_STATS       WORKER    Mark        0             "GC: Marking statistics from mark & sweep collector"
+INSTANT  GC_SWEEP_STATS      WORKER    Sweep       0             "GC: Sweeping statistics from mark & sweep collector"
+INSTANT  GC_SWEEP_NOTIFY     RUNTIME   0           0             "GC: Notify sweeper"
+INSTANT  NURSERY_RESIZE      PROCESSOR Nursery     0             "Nursery limits resized"
+INSTANT  HEAP_BEFORE_SCAV    PROCESSOR HeapUsage   0             "Heap usage statistics before scavenging"
+INSTANT  HEAP_AFTER_SCAV     PROCESSOR HeapUsage   0             "Heap usage statistics after scavenging"
+INSTANT  BLOCK_CHUNK_NEW     RUNTIME   Chunk       0             "Block manager: New chunk allocated"
+INSTANT  BLOCK_CHUNK_FREE    RUNTIME   Chunk       0             "Block manager: Chunk freed"
+INSTANT  HEAP_CHUNK_NEW      RUNTIME   Chunk       0             "Heap: New Chunk allocated"
+INSTANT  HEAP_CHUNK_FREE     RUNTIME   Chunk       0             "Heap: Chunk freed"
+INSTANT  HEAP_LIMIT          RUNTIME   HeapLimit   0             "Heap: Limit reached"
+INSTANT  HEAP_ALLOC_FAILED   THREAD    HeapAlloc   0             "Heap: Allocation failed"
+INSTANT  PAR                 THREAD    0           1             "Thunk pushed for parallel evaluation"
+INSTANT  STACK_GROW          THREAD    StackSize   1             "Stack: Growing"
+INSTANT  STACK_SHRINK        THREAD    StackSize   1             "Stack: Shrinking"
+INSTANT  STACK_TRACE         THREAD    StackTrace  0             "Stack trace collected"
+INSTANT  STACK_BLACKHOLE     THREAD    Blackhole   0             "Stack: Lazy blackholing"
+INSTANT  PROF_TRACE          WORKER    StackTrace  0             "Profiling: Stack trace collected"
+INSTANT  PROF_ENABLED        WORKER    0           0             "Profiling enabled"
+INSTANT  PROF_DISABLED       WORKER    0           0             "Profiling disabled"
+INSTANT  THREAD_NAME         PROCESSOR ThreadName  0             "Thread: Name modified"
+INSTANT  THREAD_NEW          THREAD    ThreadNew   1             "Thread: New thread created"
+INSTANT  THREAD_TERMINATED   THREAD    ThreadTerm  1             "Thread: Terminated"
+INSTANT  THREAD_BLACKHOLE    THREAD    0           0             "Thread: Entered blackhole"
+INSTANT  BIGINT_OVERFLOW     THREAD    0           0             "Big integer overflow"
+INSTANT  STRBUILDER_OVERFLOW THREAD    0           0             "String builder overflow"
+INSTANT  TICK                RUNTIME   0           0             "Timer tick received"
+INSTANT  SIGNAL              RUNTIME   Signal      0             "Signal received"
+INSTANT  ACTIVITY            RUNTIME   Activity    0             "System activity statistics"
+INSTANT  USER                THREAD    User        0             "User event"
+DURATION HEAP_CHECK          PROCESSOR 0           1             "Heap checking"
+DURATION HEAP_DUMP           PROCESSOR HeapDump    1             "Heap dumping"
+DURATION HEAP_PROF           PROCESSOR HeapProf    1             "Heap profiling"
+DURATION GC_SLICE            PROCESSOR GCSlice     1             "Garbage collector slice"
+DURATION GC_MARKSWEEP        RUNTIME   0           1             "GC: Mark & sweep collector running"
+DURATION GC_MARK_PHASE       RUNTIME   0           1             "GC: Marking phase of mark & sweep collector"
+DURATION GC_MARK_SLICE       WORKER    0           1             "GC: Marking slice of mark & sweep collector"
+DURATION GC_SWEEP_PHASE      RUNTIME   0           1             "GC: Sweeping phase of mark & sweep collector"
+DURATION GC_SWEEP_SLICE      WORKER    0           1             "GC: Sweeping slice of mark & sweep collector"
+DURATION GC_SCAVENGER        PROCESSOR Scavenger   1+CHI_GEN_MAX "GC: Scavenger running"
+DURATION PROC_RUN            PROCESSOR 0           1             "Processor: Running"
+DURATION PROC_SUSPEND        PROCESSOR 0           1             "Processor: Suspended"
+DURATION PROC_WAIT_SYNC      PROCESSOR 0           1             "Processor: Waiting for synchronization"
+DURATION PROC_SYNC           PROCESSOR 0           1             "Processor: Synchronized"
+DURATION THREAD_SCHED        THREAD    0           1             "Thread: Scheduler running"
+DURATION THREAD_RUN          THREAD    0           1             "Thread: Running"
+DURATION USER_DURATION       THREAD    User        1             "User event with duration"
+DURATION STARTUP             RUNTIME   0           1             "Runtime startup"
+DURATION SHUTDOWN            RUNTIME   0           1             "Runtime shutdown"

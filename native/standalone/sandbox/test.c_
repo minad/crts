@@ -1,0 +1,105 @@
+#include <sandbox.h>
+
+static void test_block_read(uint32_t id) {
+    uint64_t s = sb_info->block[id].size;
+    size_t u = sb_info->block[id].unit;
+    char buf[2 * u];
+
+    // valid reads
+    sb_block_read(id, 0, buf, u); // ok!
+    sb_block_read(id, 0, buf, sizeof (buf)); // ok!
+    sb_block_read(id, u, buf, u); // ok!
+    sb_block_read(id, s - sizeof (buf), buf, sizeof (buf)); // ok!
+    sb_block_read(id, s - u, buf, u); // ok!
+
+    if (s > 0xFFFFFFFF)
+       sb_block_read(id, (1UL << 32) - u, buf, sizeof (buf)); // ok!
+
+    // invalid alignment
+    //sb_block_read(id, u / 2, buf, u); // fail: non aligned
+    //sb_block_read(id, u, buf, u / 2); // fail: invalid size
+
+    // out of bounds
+    //sb_block_read(id, s, buf, u);
+    //sb_block_read(id, s - u, buf, sizeof (buf));
+}
+
+static void test_block_write(uint32_t id) {
+    uint64_t s = sb_info->block[id].size;
+    size_t u = sb_info->block[id].unit;
+    char buf[2 * u];
+
+    // valid writes
+    sb_block_write(id, 0, buf, u); // ok!
+    sb_block_write(id, 0, buf, sizeof (buf)); // ok!
+    sb_block_write(id, u, buf, u); // ok!
+    sb_block_write(id, s - sizeof (buf), buf, sizeof (buf)); // ok!
+    sb_block_write(id, s - u, buf, u); // ok!
+
+    if (s > 0xFFFFFFFF)
+        sb_block_write(id, (1UL << 32) - u, buf, sizeof (buf)); // ok!
+
+    // invalid alignment
+    //sb_block_write(id, u / 2, buf, u); // fail: non aligned
+    //sb_block_write(id, u, buf, u / 2); // fail: invalid size
+
+    // out of bounds
+    //sb_block_write(id, s, buf, u);
+    //sb_block_write(id, s - u, buf, sizeof (buf));
+}
+
+static void test_block_discard(uint32_t id) {
+    uint64_t s = sb_info->block[id].size;
+    size_t u = sb_info->block[id].unit;
+
+    // valid discards
+    sb_block_discard(id, 0, u); // ok!
+    sb_block_discard(id, 0, 2 * u); // ok!
+    sb_block_discard(id, u, 3 * u); // ok!
+    sb_block_discard(id, s - u, s); // ok!
+
+    // invalid alignment
+    //sb_block_discard(id, u / 2, u); // fail: non aligned discard
+    //sb_block_discard(id, 0, u / 2); // fail: non aligned discard
+
+    // out of bounds
+    //sb_block_discard(id, s, s + u);
+    //sb_block_discard(id, s - u, s + u);
+
+    // end < begin
+    //sb_block_discard(id, 2 * u, u);
+}
+
+static void test_block_sync(uint32_t id) {
+    sb_block_sync(id);
+}
+
+static void test_clock(void) {
+    sb_clock_monotonic();
+    sb_clock_wall();
+}
+
+static void test_yield(void) {
+    sb_yield(0, &(struct sb_mask){});
+    sb_yield(1000000, &(struct sb_mask){});
+}
+
+static void test(void) {
+    test_clock();
+    test_yield();
+
+    if (sb_info->block_count) {
+        for (uint32_t id = 0; id < sb_info->block_count; ++id) {
+            test_block_read(id);
+            test_block_write(id);
+            test_block_sync(id);
+            test_block_discard(id);
+        }
+    } else {
+        sb_stream_puts(SB_STREAM_ERR, "Block tests skipped\n");
+    }
+
+    sb_stream_puts(SB_STREAM_ERR, "Tests succeeded\n");
+}
+
+__attribute__ ((constructor)) static void run_test() { test(); }

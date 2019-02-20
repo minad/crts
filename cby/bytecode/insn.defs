@@ -1,0 +1,392 @@
+// Load %n data fields res[i] <- idxi
+idx1 w8:res r8:var u8:i0 %n=1
+idx2 w8:res r8:var u8:i0 u8:i1 %n=2
+idxl1 w16:res r16:var u16:i0 %n=1
+idxl2 w16:res r16:var u16:i0 u16:i1 %n=2 {
+    res[%i] = IDX(var, i%i);
+}
+
+// Set closure field (used for letrec)
+fset r16:var u16:i r16:field {
+    chiToCbyFn(var)->clos[i] = field;
+}
+
+// Set thunk field (used for letrec)
+tset r16:var u16:i r16:field {
+    chiToCbyFn(_chiAtomicLoad(&chiToThunk(var)->val))->clos[i] = field;
+}
+
+// Load Int%n immediate
+int8 w8:res i8:val %n=8
+int32 w16:res i32:val %n=32
+int64 w16:res i64:val %n=64 {
+    *res = chiFromInt%n(val);
+}
+
+// Load UInt%n immediate
+uint8 w8:res u8:val %n=8
+uint32 w16:res u32:val %n=32
+uint64 w16:res u64:val %n=64 {
+    *res = chiFromUInt%n(val);
+}
+
+// Load Float%n immediate
+float32 w16:res f32:val %n=32
+float64 w16:res f64:val %n=64 {
+    *res = chiFromFloat%n(val);
+}
+
+// Load String from constant store
+string w16:res strref {
+    *res = chiStringNew(strref);
+}
+
+// Load Buffer from constant store
+buffer w16:res bytesref {
+    *res = chiBufferFromBytes(bytesref.bytes, bytesref.size);
+}
+
+// Load Int from constant store
+xint w16:res bytesref {
+    *res = chiBigIntFromBytes(bytesref.bytes, bytesref.size);
+}
+
+// Load negative Int from constant store
+xintn w16:res bytesref {
+    *res = chiBigIntNeg(chiBigIntFromBytes(bytesref.bytes, bytesref.size));
+}
+
+// Load Int immediate
+xint8 w8:res u8:val
+xint64 w16:res u64:val {
+    *res = chiUInt64ToBigInt(val);
+}
+
+// Move consecutive registers res[i] <- src[i]
+movc2 w8:res w8:src %n=2
+movc3 w8:res w8:src %n=3
+movc4 w8:res w8:src %n=4
+movcl2 w16:res w16:src %n=2
+movcl3 w16:res w16:src %n=3
+movcl4 w16:res w16:src %n=4 {
+    const Chili src%i = src[%i];
+    res[%i] = src%i;
+}
+
+// Move registers res[i] <- srci
+mov1 w8:res r8:src0 %n=1
+mov2 w8:res r8:src0 r8:src1 %n=2
+mov3 w8:res r8:src0 r8:src1 r8:src2 %n=3
+mov4 w8:res r8:src0 r8:src1 r8:src2 r8:src3 %n=4
+movl1 w16:res r16:src0 %n=1
+movl2 w16:res r16:src0 r16:src1 %n=2 {
+    res[%i] = src%i;
+}
+
+// Thunk with variable number of bound variables
+thk w16:res fnref u16:nclos clos[nclos](r16:a) {
+    instrumentAlloc(proc, &interpPS->data, CURRFN, SP, CHI_SIZEOF_WORDS(CbyFn) + nclos + 1);
+    Chili c = chiNew(CHI_THUNKFN, CHI_SIZEOF_WORDS(CbyFn) + nclos);
+    *res = chiThunkInit(chiNew(CHI_THUNK, 1), c);
+    CbyFn* fn = chiToCbyFn(c);
+    fn->fn = chiFromCont(&interpFn);
+    fn->module = chiToCbyFn(CURRFN)->module;
+    fn->ip = chiFromIP(fnref);
+    for (uint32_t i = 0; i < nclos; ++i)
+        fn->clos[i] = REG[FETCH16];
+}
+
+// New thunk with %n bound variables
+thk0 w8:res fnref %n=0
+thk1 w8:res w8:c0 fnref %n=1
+thk2 w8:res w8:c0 w8:c1 fnref %n=2
+thk3 w8:res w8:c0 w8:c1 w8:c2 fnref %n=3
+thk4 w8:res w8:c0 w8:c1 w8:c2 w8:c3 fnref %n=4 {
+    GROW_HEAP(CHI_SIZEOF_WORDS(CbyFn) + %n + 1);
+    instrumentAlloc(proc, &interpPS->data, CURRFN, SP, CHI_SIZEOF_WORDS(CbyFn) + %n + 1);
+    Chili clos = NEW(CHI_THUNKFN, CHI_SIZEOF_WORDS(CbyFn) + %n);
+    *res = chiThunkInit(NEW(CHI_THUNK, 1), clos);
+    CbyFn* fn = chiToCbyFn(clos);
+    fn->fn = chiFromCont(&interpFn);
+    fn->module = chiToCbyFn(CURRFN)->module;
+    fn->ip = chiFromIP(fnref);
+    fn->clos[%i] = *c%i;
+}
+
+// Closure with variable number of bound variables
+fn w16:res fnref u8:arity u16:nclos clos[nclos](r16:a) {
+    instrumentAlloc(proc, &interpPS->data, CURRFN, SP, CHI_SIZEOF_WORDS(CbyFn) + nclos);
+    *res = chiNew(CHI_FN(arity), CHI_SIZEOF_WORDS(CbyFn) + nclos);
+    CbyFn* fn = chiToCbyFn(*res);
+    fn->fn = chiFromCont(&interpFn);
+    fn->module = chiToCbyFn(CURRFN)->module;
+    fn->ip = chiFromIP(fnref);
+    for (uint32_t i = 0; i < nclos; ++i)
+        fn->clos[i] = REG[FETCH16];
+}
+
+// New closure with %n bound variables
+fn0 w8:res u8:arity fnref %n=0
+fn1 w8:res u8:arity w8:c0 fnref %n=1
+fn2 w8:res u8:arity w8:c0 w8:c1 fnref %n=2
+fn3 w8:res u8:arity w8:c0 w8:c1 w8:c2 fnref %n=3
+fn4 w8:res u8:arity w8:c0 w8:c1 w8:c2 w8:c3 fnref %n=4 {
+    GROW_HEAP(CHI_SIZEOF_WORDS(CbyFn) + %n);
+    instrumentAlloc(proc, &interpPS->data, CURRFN, SP, CHI_SIZEOF_WORDS(CbyFn) + %n);
+    *res = NEW(CHI_FN(arity), CHI_SIZEOF_WORDS(CbyFn) + %n);
+    CbyFn* fn = chiToCbyFn(*res);
+    fn->fn = chiFromCont(&interpFn);
+    fn->module = chiToCbyFn(CURRFN)->module;
+    fn->ip = chiFromIP(fnref);
+    fn->clos[%i] = *c%i;
+}
+
+// New data value with variable number of fields
+data w16:res u16:tag u16:nargs args[nargs](r16:a) {
+    instrumentAlloc(proc, &interpPS->data, CURRFN, SP, nargs);
+    Chili c = chiNew(CHI_TAG(tag), nargs);
+    for (uint32_t i = 0; i < nargs; ++i)
+        IDX(c, i) = REG[FETCH16];
+    *res = c;
+}
+
+// New empty data value
+data0 w8:res u8:tag
+datal0 w16:res u16:tag {
+    *res = chiNewEmpty(CHI_TAG(tag));
+}
+
+// New data value with %n fields
+data1 w8:res u8:tag r8:a0 %n=1
+data2 w8:res u8:tag r8:a0 r8:a1 %n=2
+data3 w8:res u8:tag r8:a0 r8:a1 r8:a2 %n=3
+data4 w8:res u8:tag r8:a0 r8:a1 r8:a2 r8:a3 %n=4 {
+    GROW_HEAP(%n);
+    instrumentAlloc(proc, &interpPS->data, CURRFN, SP, %n);
+    Chili c = NEW(CHI_TAG(tag), %n);
+    IDX(c, %i) = a%i;
+    *res = c;
+}
+
+// Case branching using table lookup
+casetbl r16:scrut u32:lo u32:hi table[hi - lo + 1](u32:target) {
+    const uint32_t x = chiToUInt32(scrut);
+    IP += x >= lo && x <= hi ? chiPeekUInt32(IP + 4 * (x - lo)) : 4 * (hi - lo + 1);
+}
+
+// Case branching using binary search
+case r16:scrut u16:nalts table[nalts](u32:val u32:target) {
+    const uint32_t x = chiToUInt32(scrut);
+    uint32_t first = 0, last = nalts - 1U;
+    for (;;) {
+        const uint32_t mid = first + (last - first) / 2, t = chiPeekUInt32(IP + 8 * mid);
+        if (x < t && first < mid) {
+            last = mid - 1;
+            continue;
+        }
+        if (x > t && mid < last) {
+            first = mid + 1;
+            continue;
+        }
+        IP += x == t ? chiPeekUInt32(IP + 8 * mid + 4) : 8U * nalts;
+        break;
+    }
+}
+
+// Create continuation frame
+cont w8:top u8:off
+contl w16:top u32:off {
+    SAVE_CONTEXT(top, IP + off);
+}
+
+// Return value
+ret r8:var
+retl r16:var {
+    if (chiToCont(SP[-1]) == &interpCont) {
+        instrumentLeave(proc, &interpPS->data, CURRFN, SP);
+        RESTORE_CONTEXT(var);
+        // Use SP-... since we have to skip the top most continuation frame
+        instrumentEnter(proc, &interpPS->data, CURRFN, SP - chiToUnboxed(SP[-2]), true);
+    } else {
+        INSN_LEAVE;
+        RET(var);
+    }
+}
+
+// Conditional return
+retif r8:scrut r8:var {
+    if (chiTrue(scrut))
+        %goto ret;
+}
+
+// Conditional return
+retifn r8:scrut r8:var {
+    if (!chiTrue(scrut))
+        %goto ret;
+}
+
+// Conditional branch
+if r8:scrut u8:off
+ifl r16:scrut u32:off {
+    if (!chiTrue(scrut))
+        IP += off;
+}
+
+// Jump to known function (arguments already in place)
+jmp r16:fn fnref {
+    instrumentLeave(proc, &interpPS->data, CURRFN, SP);
+    CURRFN = fn;
+    REG = SP;
+    IP = fnref;
+    instrumentEnter(proc, &interpPS->data, CURRFN, SP, true);
+}
+
+// Jump to known function
+jmp1 r8:fn r8:a0 fnref %n=1
+jmp2 r8:fn r8:a0 r8:a1 fnref %n=2
+jmp3 r8:fn r8:a0 r8:a1 r8:a2 fnref %n=3
+jmp4 r8:fn r8:a0 r8:a1 r8:a2 r8:a3 fnref %n=4
+jmp5 r8:fn r8:a0 r8:a1 r8:a2 r8:a3 r8:a4 fnref %n=5 {
+    SP[%i] = a%i;
+    %goto jmp;
+}
+
+// Apply unknown function (arguments already in place)
+app r8:fn u8:nargs {
+    if (chiFnArity(fn) == nargs && chiToCont(IDX(fn, 0)) == &interpFn) {
+        const CbyCode* fnref = chiToIP(chiToCbyFn(fn)->ip);
+        %goto jmp;
+    } else {
+        A(0) = fn;
+        for (uint32_t i = 0; i < nargs; ++i)
+            A(i + 1) = SP[i];
+        INSN_LEAVE;
+        APP(nargs);
+    }
+}
+
+// Apply unknown function
+appn r16:fn u8:nargs args[nargs](r16:a) {
+    if (chiFnArity(fn) == nargs && chiToCont(IDX(fn, 0)) == &interpFn) {
+        const CbyCode* fnref = chiToIP(chiToCbyFn(fn)->ip);
+        Chili tmp[CHI_AMAX];
+        for (uint32_t i = 0; i < nargs; ++i)
+            tmp[i] = REG[FETCH16];
+        for (uint32_t i = 0; i < nargs; ++i)
+            SP[i] = tmp[i];
+        %goto jmp;
+    } else {
+        A(0) = fn;
+        for (uint32_t i = 0; i < nargs; ++i)
+            A(i + 1) = REG[FETCH16];
+        INSN_LEAVE;
+        APP(nargs);
+    }
+}
+
+// Apply unknown function
+app1 r8:fn r8:a0 %n=1
+app2 r8:fn r8:a0 r8:a1 %n=2
+app3 r8:fn r8:a0 r8:a1 r8:a2 %n=3
+app4 r8:fn r8:a0 r8:a1 r8:a2 r8:a3 %n=4
+app5 r8:fn r8:a0 r8:a1 r8:a2 r8:a3 r8:a4 %n=5 {
+    if (chiFnArity(fn) == %n && chiToCont(IDX(fn, 0)) == &interpFn) {
+        const CbyCode* fnref = chiToIP(chiToCbyFn(fn)->ip);
+        %goto jmp%n;
+    } else {
+        A(0) = fn;
+        A(%i + 1) = a%i;
+        INSN_LEAVE;
+        APP(%n);
+    }
+}
+
+// Check limit and load closure with variable number of fields
+clos u8:nargs u16:limit u16:size {
+    CHI_ASSERT(chiFnOrThunkArity(CURRFN) == nargs);
+    _LIMITS_SAVE(({
+                INSN_LEAVE;
+                goto SAVE_FN;
+            }), .stack = limit);
+    const Chili* clos = chiToCbyFn(CURRFN)->clos;
+    for (uint32_t i = 0; i < size; ++i)
+        SP[nargs + i] = clos[i];
+}
+
+// Check limit and load closure with %n fields (safepoint!)
+clos0 u8:nargs u8:lim %n=0
+clos1 u8:nargs u8:lim %n=1
+clos2 u8:nargs u8:lim %n=2
+clos3 u8:nargs u8:lim %n=3
+clos4 u8:nargs u8:lim %n=4 {
+    CHI_ASSERT(chiFnOrThunkArity(CURRFN) == nargs);
+    _LIMITS_SAVE(({
+                INSN_LEAVE;
+                goto SAVE_FN;
+            }), .stack = lim);
+    const Chili* clos = chiToCbyFn(CURRFN)->clos;
+    CHI_NOWARN_UNUSED(clos);
+    SP[nargs + %i] = clos[%i];
+}
+
+// Enter continuation, shift register window
+enter u8:top u8:lim
+enterl u16:top u16:lim {
+    int32_t slim = lim - CBY_CONTEXT_SIZE - top;
+    _LIMITS_SAVE(({
+                INSN_LEAVE;
+                goto SAVE_CONT;
+            }), .stack = slim < 0 ? 0U : (uint32_t)slim);
+    REG = SP - CBY_CONTEXT_SIZE - top;
+    REG[top] = SP[0];
+    SP -= chiToUnboxed(SP[-2]);
+}
+
+// Get foreign variable
+ffiget w16:res ffiref {
+    const FFIType rtype = (FFIType)ffiref[8];
+    instrumentFFIBegin(proc, &interpPS->data, CURRFN, SP, ffiref);
+    *res = fromFFI(FFIDESC(ffiref)->fn, rtype);
+    instrumentFFIEnd(proc, &interpPS->data, CURRFN, SP, ffiref);
+}
+
+// Set foreign variable
+ffiset r16:var ffiref {
+    CbyFFI* ffi = FFIDESC(ffiref);
+    const FFIType atype = (FFIType)ffiref[10];
+    instrumentFFIBegin(proc, &interpPS->data, CURRFN, SP, ffiref);
+    toFFI(ffi->fn, var, atype);
+    instrumentFFIEnd(proc, &interpPS->data, CURRFN, SP, ffiref);
+}
+
+// Foreign call in tail position
+ffitail ffiref u8:nargs args[nargs](r16:a) {
+    CbyFFI* ffi = FFIDESC(ffiref);
+    instrumentFFITail(proc, &interpPS->data, CURRFN, SP, ffiref);
+    for (uint32_t i = 0; i < nargs; ++i)
+        A(i) = REG[FETCH16];
+    INSN_LEAVE;
+    JUMP((ChiCont)ffi->fn);
+}
+
+// Inline foreign call
+ffiinl w16:res ffiref u8:nargs args[nargs](r16:a) {
+    CbyFFI* ffi = FFIDESC(ffiref);
+    ffiArgs(&interpPS->ffi, ffiref, REG, nargs, IP);
+    IP += 2 * nargs;
+    instrumentFFIBegin(proc, &interpPS->data, CURRFN, SP, ffiref);
+    *res = ffiCall(&interpPS->ffi, ffiref, ffi);
+    instrumentFFIEnd(proc, &interpPS->data, CURRFN, SP, ffiref);
+}
+
+// Protected foreign call
+ffiprot ffiref u8:nargs args[nargs](r16:a) {
+    CbyFFI* ffi = FFIDESC(ffiref);
+    instrumentFFITail(proc, &interpPS->data, CURRFN, SP, ffiref);
+    ffiArgs(&interpPS->ffi, ffiref, REG, nargs, IP);
+    IP += 2 * nargs;
+    INSN_LEAVE;
+    PROTECT_BEGIN;
+    Chili res = ffiCall(&interpPS->ffi, ffiref, ffi);
+    PROTECT_END(res);
+}
