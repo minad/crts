@@ -3,10 +3,11 @@
 {{import Chili.Emit.Native.FFI-}}
 {{import Data.List (intercalate)-}}
 {{import Intro (fromString, convertString)-}}
+{{import qualified Chili.Emit.Native.Syntax as C-}}
 {{import qualified Chili.Pretty.Printer as Printer-}}
 
 {{-for_ bytecodePrimOps $ \op ->}}
-{{-if primTail op then-}}
+{{-if PrimTail `elem` primFlags op then-}}
 // Primitive in tail position
 {{=drop 5 $ show op}}{{-for_ [0..primArity op - 1] $ \i ->}} r8:a{{=i}}{{end}} {
     INSN_LEAVE;
@@ -15,7 +16,7 @@
 {{else-}}
 // Inline primitive
 {{=drop 5 $ show op}} w8:res{{-for_ [0..primArity op - 1] $ \i ->}} r8:a{{=i}}{{end}} {
-    *res = {{=convertString $ Printer.render $ Printer.pretty $ flip packFFI chiliType $ inlinePrim op (map (\i -> (fromString $ "a" <> show i, toNamedType FFI_Chili)) [0..primArity op - 1]) :: String}};
+    {{=convertString $ Printer.render $ Printer.pretty $ fst $ inlinePrim (C.Assign (C.UnOp C.Deref (fromString "res")) . flip packFFI chiliType) op (map (\i -> (fromString $ "a" <> show i, toNamedType FFI_Chili)) [0..primArity op - 1]) :: String}}
 }
 {{end-}}
 {{-end-}}

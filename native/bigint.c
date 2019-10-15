@@ -1,188 +1,163 @@
-#include "bigint.h"
+#include "error.h"
 #include "event.h"
 #include "runtime.h"
-#include "mem.h"
 
-#define BIGINT_HEADER 1
+#define Z_GMP       CHI_BIGINT_GMP
+#if CHI_ARCH_32BIT
+#  define Z_BITS    32
+#else
+#  define Z_BITS    64
+#endif
+#define Z_FREE(x)   ({})
+#define Z_SCRATCH   64
+#define Z_ASSERT(x) CHI_ASSERT(x)
+#define Z_ALLOC(s)                                                      \
+    ({                                                                  \
+        size_t _s = (s);                                                \
+        void* _r = 0;                                                   \
+        if (CHI_LIKELY(_s <= CHI_BIGINT_LIMIT)) {                       \
+            Chili _c = chiNewFlags(CHI_BIGINT_POS, CHI_BYTES_TO_WORDS(_s), CHI_NEW_TRY); \
+            _r = chiSuccess(_c) ? chiRawPayload(_c) : 0;                 \
+        }                                                               \
+        _r;                                                             \
+    })
+#include "bigint/z.h"
 
-static void* bigIntAlloc(size_t size) {
-    return (ChiWord*)chiRawPayload(chiNew(CHI_BIGINT, BIGINT_HEADER + CHI_BYTES_TO_WORDS(size))) + BIGINT_HEADER;
+static z_digit* chi_get_digit(Chili c) {
+    CHI_ASSERT(chiType(c) == CHI_BIGINT_POS || chiType(c) == CHI_BIGINT_NEG);
+    return (z_digit*)chiRawPayload(c);
 }
 
-static void* bigIntRealloc(void* p, size_t oldSize, size_t newSize) {
-    return newSize > oldSize ? memcpy(bigIntAlloc(newSize), p, oldSize) : p;
-}
+static Chili chi_try_from_z(z_int z) {
+    if (CHI_UNLIKELY(z.err)) {
+        chiEvent0(CHI_CURRENT_PROCESSOR, BIGINT_OVERFLOW);
+        return CHI_FAIL;
+    }
 
-static void bigIntFree(void* CHI_UNUSED(p), size_t CHI_UNUSED(s)) {
-    // Do nothing, memory is handled by the GC
-}
+    if (!z.size) // Zero
+        return CHI_BIGINT_UNBOXING ? CHI_FALSE : chiNewEmpty(CHI_BIGINT_POS);
 
-#include CHI_INCLUDE(bigint/CHI_BIGINT_BACKEND)
+    if (CHI_BIGINT_UNBOXING && z.size == 1 && !((uint64_t)z.d[0] >> 62))
+        return chiInt64Pack(z.neg ? -(int64_t)z.d[0] : (int64_t)z.d[0]);
 
-static Chili fromBigInt(const BigInt z) {
-    bool sign;
-    size_t size, alloc;
-    void* data;
-    bigIntUnpack(z, &sign, &size, &alloc, &data);
-
-    if (CHI_BIGINT_SMALLOPT && size < CHI_WORDSIZE)
-        return chiSmallBigIntPack((int64_t)bigIntToU(z));
-
-    if (!CHI_BIGINT_SMALLOPT && !size) // Zero
-        return chiNewEmpty(CHI_BIGINT);
-
-    ChiBigInt* bi = CHI_ALIGN_CAST32((ChiWord*)data - BIGINT_HEADER, ChiBigInt*);
-    bi->sign = sign;
-    bi->size = size & INT32_MAX;
-
-    size_t allocW = CHI_BYTES_TO_WORDS(alloc) + BIGINT_HEADER,
-        sizeW = CHI_BYTES_TO_WORDS(size) + BIGINT_HEADER;
+    size_t allocW = CHI_BYTES_TO_WORDS((size_t)z.alloc * sizeof (z_digit)),
+        sizeW = CHI_BYTES_TO_WORDS((size_t)z.size * sizeof (z_digit));
+    ChiType t = z.neg ? CHI_BIGINT_NEG : CHI_BIGINT_POS;
 
     if (allocW <= CHI_MAX_UNPINNED)
-        return chiWrap(bi, sizeW, CHI_BIGINT);
+        return chiWrap(z.d, sizeW, t, CHI_GEN_NURSERY);
 
-    Chili c = chiWrap(bi, _CHILI_PINNED, CHI_BIGINT);
+    Chili c = chiWrapLarge(z.d, sizeW, t);
     if (sizeW < allocW)
-        chiObjectShrink(chiObject(c), allocW, sizeW);
+        chiObjectSetSize(chiObject(c), sizeW);
     return c;
 }
 
-static Chili tryFromBigInt(const BigInt z) {
-    Chili c = fromBigInt(z);
-    if (CHI_LIKELY(chiUnboxed(c) || chiSize(c) * CHI_WORDSIZE < CHI_BIGINT_LIMIT))
-        return c;
-    CHI_EVENT0(CHI_CURRENT_PROCESSOR, BIGINT_OVERFLOW);
-    return CHI_FAIL;
+static Chili chi_from_z(z_int z) {
+    Chili c = chi_try_from_z(z);
+    if (!chiSuccess(c))
+        chiErr("BigInt operation failed");
+    return c;
 }
 
-static const BigIntStruct* toBigInt(Chili c, BigInt z) {
-    if (CHI_BIGINT_SMALLOPT && chiUnboxed64(c)) {
-        bigIntInitI(z, chiSmallBigIntUnpack(c));
-    } else if (!CHI_BIGINT_SMALLOPT && chiEmpty(c)) {
-        bigIntInit(z); // Zero
-    } else {
-        ChiBigInt* bi = chiToBigInt(c);
-        bigIntPack(z, bi->sign, bi->size, bi->data);
+static z_int chi_to_z(Chili c) {
+    if (CHI_BIGINT_UNBOXING && chiUnboxed63(c))
+        return z_from_i64(chiInt64Unpack(c));
+    if (!CHI_BIGINT_UNBOXING && chiEmpty(c))
+        return z_zero;
+
+    z_digit* digit = chi_get_digit(c);
+    z_size size = (z_size)(chiSize(c) * CHI_WORDSIZE / sizeof (z_digit));
+
+    /* Adjust size if top digits are unused.
+     * This happens only for 32 bit and smaller digits,
+     * since then multiple digits fit into one ChiWord.
+     */
+    if (sizeof (z_digit) < CHI_WORDSIZE) {
+        for (size_t i = 0; i < CHI_WORDSIZE / sizeof (z_digit)
+             && size && !digit[size - 1]; ++i, --size);
     }
-    return z;
+
+    return (z_int){.d = digit, .neg = chiType(c) == CHI_BIGINT_NEG,
+            .size = size, .alloc = size };
 }
 
 Chili chiStaticBigInt(const ChiStaticBytes* b) {
     return chiBigIntFromBytes(b->bytes, b->size);
 }
 
-Chili chiBigIntFromBytes(const uint8_t* s, size_t size) {
-    if (CHI_BIGINT_SMALLOPT) {
-        switch (size) {
-        case 1: return chiSmallBigIntPack(s[0]);
-        case 2: return chiSmallBigIntPack(((int64_t)s[0] <<  8) |  (int64_t)s[1]);
-        case 3: return chiSmallBigIntPack(((int64_t)s[0] << 16) | ((int64_t)s[1] << 8)  |  (int64_t)s[2]);
-        case 4: return chiSmallBigIntPack(((int64_t)s[0] << 24) | ((int64_t)s[1] << 16) | ((int64_t)s[2] <<  8) |  (int64_t)s[3]);
-        case 5: return chiSmallBigIntPack(((int64_t)s[0] << 32) | ((int64_t)s[1] << 24) | ((int64_t)s[2] << 16) | ((int64_t)s[3] <<  8) |  (int64_t)s[4]);
-        case 6: return chiSmallBigIntPack(((int64_t)s[0] << 40) | ((int64_t)s[1] << 32) | ((int64_t)s[2] << 24) | ((int64_t)s[3] << 16) | ((int64_t)s[4] <<  8) | (int64_t)s[5]);
-        case 7: return chiSmallBigIntPack(((int64_t)s[0] << 48) | ((int64_t)s[1] << 40) | ((int64_t)s[2] << 32) | ((int64_t)s[3] << 24) | ((int64_t)s[4] << 16) | ((int64_t)s[5] << 8) | (int64_t)s[6]);
-        }
+Chili chiBigIntFromBytes(const uint8_t* buf, uint32_t size) {
+    if (CHI_BIGINT_UNBOXING && size < 8) {
+        int64_t x = 0;
+        for (uint32_t i = 0; i < size; ++i)
+            x = (x << 8) | (int64_t)buf[i];
+        return chiInt64Pack(x);
     }
-    BigInt z;
-    bigIntInitB(z, s, size);
-    return fromBigInt(z);
+    return chi_from_z(z_from_b(buf, size));
 }
 
 Chili chiFloat64ToBigInt(double x) {
-    BigInt z;
-    bigIntInitF(z, x);
-    return fromBigInt(z);
+    return chi_from_z(z_from_d(x));
 }
 
 Chili chiSlowInt64ToBigInt(int64_t i) {
-    BigInt z;
-    bigIntInitI(z, i);
-    return fromBigInt(z);
+    return chi_from_z(z_from_i64(i));
 }
 
 Chili chiSlowUInt64ToBigInt(uint64_t i) {
-    BigInt z;
-    bigIntInitU(z, i);
-    return fromBigInt(z);
+    return chi_from_z(z_from_u64(i));
 }
 
 int32_t chiSlowBigIntCmp(Chili a, Chili b) {
-    BigInt ta, tb;
-    return bigIntCmp(toBigInt(a, ta), toBigInt(b, tb));
+    return z_cmp(chi_to_z(a), chi_to_z(b));
 }
 
 double chiSlowBigIntToFloat64(Chili c) {
-    BigInt t;
-    return bigIntToF(toBigInt(c, t));
+    return z_to_d(chi_to_z(c));
 }
 
 uint64_t chiSlowBigIntToUInt64(Chili c) {
-    BigInt t;
-    return bigIntToU(toBigInt(c, t));
+    return z_to_u64(chi_to_z(c));
 }
 
-Chili chiSlowBigIntShr(Chili a, uint16_t b) {
-    BigInt z, t;
-    bigIntInit(z);
-    bigIntShr(z, toBigInt(a, t), b);
-    return fromBigInt(z);
+Chili chiSlowBigIntTryShr(Chili a, uint16_t b) {
+    return chi_try_from_z(z_shr(chi_to_z(a), b));
 }
 
 Chili chiSlowBigIntTryShl(Chili a, uint16_t b) {
-    BigInt z, t;
-    bigIntInit(z);
-    bigIntShl(z, toBigInt(a, t), b);
-    return tryFromBigInt(z);
+    return chi_try_from_z(z_shl(chi_to_z(a), b));
 }
 
-const char* chiBigIntStr(Chili c, ChiBigIntBuf* buf) {
-    BigInt z;
-    toBigInt(c, z);
-    size_t n = bigIntStrSize(z);
-    if (buf->size < n) {
-        buf->buf = (char*)chiRealloc(buf->buf, n);
-        buf->size = n;
-    }
-    return bigIntStr(z, buf->buf);
+Chili _chiSlowBigIntTryNeg(Chili c) {
+    if (!CHI_BIGINT_UNBOXING && chiEmpty(c)) // zero
+        return c;
+    size_t size = chiSize(c);
+    /* TODO: Instead we could just change the type of `c`.
+     * However this would break object identity assumptions
+     * in the scavenger and also of chiIdentical.
+     */
+    Chili d = chiNewFlags(chiType(c) == CHI_BIGINT_POS ? CHI_BIGINT_NEG : CHI_BIGINT_POS, size, CHI_NEW_TRY);
+    if (chiSuccess(d))
+        memcpy(chi_get_digit(d), chi_get_digit(c), size * CHI_WORDSIZE);
+    return d;
 }
 
-#define CHI_BIGINT_BINOP(op)                                    \
-    Chili _chiSlowBigInt##op(Chili a, Chili b) {                \
-        BigInt z, ta, tb;                                       \
-        bigIntInit(z);                                          \
-        bigInt##op(z, toBigInt(a, ta), toBigInt(b, tb));        \
-        return fromBigInt(z);                                   \
+Chili _chiSlowBigIntTryNot(Chili a) {
+    return chi_try_from_z(z_not(chi_to_z(a)));
+}
+
+#define CHI_BIGINT_TRY_BINOP(Op, op)                                    \
+    Chili _chiSlowBigIntTry##Op(Chili a, Chili b) {                     \
+        return chi_try_from_z(op(chi_to_z(a), chi_to_z(b)));        \
     }
-
-#define CHI_BIGINT_UNOP(op)                     \
-    Chili _chiSlowBigInt##op(Chili a) {         \
-        BigInt z, t;                            \
-        bigIntInit(z);                          \
-        bigInt##op(z, toBigInt(a, t));          \
-        return fromBigInt(z);                   \
-    }
-
-#define CHI_BIGINT_TRY_BINOP(op)                                \
-    Chili _chiSlowBigIntTry##op(Chili a, Chili b) {             \
-        BigInt z, ta, tb;                                       \
-        bigIntInit(z);                                          \
-        bigInt##op(z, toBigInt(a, ta), toBigInt(b, tb));        \
-        return tryFromBigInt(z);                                \
-    }
-
-CHI_BIGINT_TRY_BINOP(Sub)
-CHI_BIGINT_TRY_BINOP(Add)
-CHI_BIGINT_TRY_BINOP(Mul)
-CHI_BIGINT_BINOP(Div)
-CHI_BIGINT_BINOP(Mod)
-CHI_BIGINT_BINOP(Quot)
-CHI_BIGINT_BINOP(And)
-CHI_BIGINT_BINOP(Or)
-CHI_BIGINT_BINOP(Xor)
-CHI_BIGINT_BINOP(Rem)
-CHI_BIGINT_UNOP(Not)
-CHI_BIGINT_UNOP(Neg)
-
+CHI_BIGINT_TRY_BINOP(Sub, z_sub)
+CHI_BIGINT_TRY_BINOP(Add, z_add)
+CHI_BIGINT_TRY_BINOP(Mul, z_mul)
+CHI_BIGINT_TRY_BINOP(Div, z_div)
+CHI_BIGINT_TRY_BINOP(Mod, z_mod)
+CHI_BIGINT_TRY_BINOP(Quo, z_quo)
+CHI_BIGINT_TRY_BINOP(And, z_and)
+CHI_BIGINT_TRY_BINOP(Or,  z_or)
+CHI_BIGINT_TRY_BINOP(Xor, z_xor)
+CHI_BIGINT_TRY_BINOP(Rem, z_rem)
 #undef CHI_BIGINT_TRY_BINOP
-#undef CHI_BIGINT_BINOP
-#undef CHI_BIGINT_UNOP

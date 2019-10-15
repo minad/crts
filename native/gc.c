@@ -1,687 +1,458 @@
-#include "runtime.h"
-#include "event.h"
-#include "mem.h"
-#include "heapcheck.h"
-#include "heapprof.h"
-#include "heapdump.h"
-#include "gc.h"
-#include "scavenger.h"
-#include "num.h"
-#include "sink.h"
+#include "barrier.h"
 #include "error.h"
-#include "mark.h"
-#include "trace.h"
+#include "event.h"
+#include "new.h"
+#include "sink.h"
 #include "timeout.h"
+#include "tracepoint.h"
 
-#define VEC_TYPE Chili
-#define VEC_PREFIX chiRootVec
-#define VEC ChiRootVec
-#define NOVEC
-#include "vector.h"
+static void markSlice(ChiWorker* worker, ChiGrayVec* gray, ChiColorState colorState, ChiTimeout* timeout) {
+    chiEvent0(worker, GC_MARK_SLICE_BEGIN);
 
-_Static_assert(!CHI_GC_CONC_ENABLED || CHI_SYSTEM_HAS_TASKS, "Concurrent GC requires task support!");
+    ChiScanStats stats;
+    const ChiRuntimeOption* opt = &worker->rt->option;
+    chiMarkSlice(gray, opt->heap.scanDepth, !opt->gc.major.noCollapse, colorState, &stats, timeout);
 
-#define WORKER_TRANSITION(w, a, b, doc) ({ CHI_ASSERT(w->state == WORKER_##a); w->state = WORKER_##b; ({}); })
+    CHI_TTW(worker, .name = "runtime;gc;mark");
+    chiEventStruct(worker, GC_MARK_SLICE_END, &stats);
+}
 
-/**
- * GC worker states
- *
- * @image html gc-statemachine.png
- */
+static void sweepSlice(ChiWorker* worker, ChiColorState colorState, ChiTimeout* timeout) {
+    chiEvent0(worker, GC_SWEEP_SLICE_BEGIN);
+    ChiSweepStats stats;
+    chiSweepSlice(&worker->rt->heap, &worker->rt->gc, colorState, &stats, timeout);
+    chiEventStruct(worker, GC_SWEEP_SLICE_END, &stats);
+    CHI_TTW(worker, .name = "runtime;gc;sweep");
+}
+
+static void gcSlice(ChiWorker* worker, ChiGrayVec* gray, ChiColorState colorState, ChiMicros slice) {
+    ChiTimeout timeout;
+    chiTimeoutStart(&timeout, slice);
+    if (chiTriggered(&worker->rt->gc.sweep.needed))
+        sweepSlice(worker, colorState, &timeout);
+    if (chiTimeoutTick(&timeout) && atomic_load_explicit(&worker->rt->gc.phase, memory_order_relaxed) == CHI_GC_ASYNC && !chiGrayNull(gray))
+        markSlice(worker, gray, colorState, &timeout);
+    chiTimeoutStop(&timeout);
+}
+
+#if CHI_GC_CONC_ENABLED
 typedef enum {
-    WORKER_INITIAL,
-    WORKER_FINAL,
     WORKER_WAIT,
+    WORKER_EPOCH,
     WORKER_RUN,
     WORKER_STOP,
-    WORKER_SUSPEND,
-} WorkerState;
+} GCWorkerStatus;
 
-typedef struct {
-    ChiRuntime* rt;
-    ChiTask     task;
-    ChiTimeout  timeout;
-    WorkerState state;
-} Worker;
-
-typedef struct {
-    ChiMutex mutex;
-    ChiCond  cond;
-    uint32_t numWorkers;
-    Worker   worker[0];
-} WorkerManager;
-
-struct ChiGCSweeper_ {
-    WorkerManager manager;
+struct ChiGCWorker_ {
+    ChiRuntime*    rt;
+    ChiTask        task;
+    ChiCond        cond;
+    ChiTimeout     timeout;
+    ChiGrayVec     gray;
+    GCWorkerStatus status;
+    ChiColorState  colorState;
 };
 
-struct ChiGCMarker_ {
-    ChiBlockVec grayList;
-    WorkerManager manager;
-};
+static bool gcWorkerSync(ChiGCWorker* w) {
+    ChiGC* gc = &w->rt->gc;
+    CHI_LOCK_MUTEX(&gc->mutex);
+    for (;;) {
+        while (w->status == WORKER_WAIT)
+            chiCondWait(&w->cond, &gc->mutex);
 
-CHI_INL bool hasMarker(ChiGC* gc) {
-    return CHI_GC_CONC_ENABLED && gc->conc->marker;
-}
+        if (w->status == WORKER_STOP)
+            return false;
 
-CHI_INL bool hasSweeper(ChiGC* gc) {
-    return CHI_GC_CONC_ENABLED && gc->conc->sweeper;
-}
+        if (w->status == WORKER_EPOCH) {
+            chiColorStateEpoch(&w->colorState);
+            w->status = WORKER_RUN;
+        }
 
-static void workerManagerSetup(WorkerManager* wm, ChiTaskRun run, uint32_t numWorkers, ChiRuntime* rt) {
-    chiMutexInit(&wm->mutex);
-    chiCondInit(&wm->cond);
-    wm->numWorkers = numWorkers;
-    for (uint32_t i = 0; i < numWorkers; ++i) {
-        Worker* w = wm->worker + i;
-        w->rt = rt;
-        WORKER_TRANSITION(w, INITIAL, WAIT, "t=MARKER/SWEEPER");
-        w->task = chiTaskCreate(run, w);
+        if (chiTriggered(&gc->sweep.needed))
+            return true;
+
+        if (!chiGrayNull(&gc->gray.vec)) {
+            chiGrayTake(&w->gray, &gc->gray.vec);
+            return true;
+        }
+
+        w->status = WORKER_WAIT;
     }
 }
 
-static void workerStop(WorkerManager* wm) {
-    CHI_LOCK(&wm->mutex);
-    for (Worker* w = wm->worker; w < wm->worker + wm->numWorkers; ++w) {
-        if (w->state == WORKER_WAIT)
-            WORKER_TRANSITION(w, WAIT, STOP, "t=MARKER/SWEEPER,e=stop");
-        else
-            WORKER_TRANSITION(w, RUN, STOP, "t=MARKER/SWEEPER,e=stop");
+CHI_TASK(gcWorkerRun, arg) {
+    ChiWorker worker = {};
+    ChiGCWorker* w = (ChiGCWorker*)arg;
+    chiWorkerBegin(&worker, w->rt, "gc");
+    while (gcWorkerSync(w)) {
+        CHI_TTW(&worker, .name = "runtime;suspend");
+        gcSlice(&worker, &w->gray, w->colorState, CHI_TIMEOUT_INFINITE);
+    }
+    chiWorkerEnd(&worker);
+    return 0;
+}
+
+static void gcWorkerStart(ChiRuntime* rt, ChiColorState colorState) {
+    ChiGC* gc = &rt->gc;
+    CHI_LOCK_MUTEX(&gc->mutex);
+    uint32_t numWorker = rt->option.gc.major.worker;
+    if (gc->firstWorker || !numWorker)
+        return;
+    gc->firstWorker = gc->lastWorker = chiZallocArr(ChiGCWorker, numWorker);
+    for (ChiGCWorker* w = gc->firstWorker; w < gc->firstWorker + numWorker; ++w) {
+        w->rt = rt;
+        chiCondInit(&w->cond);
+        chiGrayInit(&w->gray, &gc->gray.manager);
+        w->colorState = colorState;
+        w->task = chiTaskTryCreate(gcWorkerRun, w);
+        if (chiTaskNull(w->task))
+            break;
+        ++gc->lastWorker;
+    }
+}
+
+static void gcWorkerStop(ChiGC* gc) {
+    CHI_LOCK_MUTEX(&gc->mutex);
+    for (ChiGCWorker* w = gc->firstWorker; w < gc->lastWorker; ++w) {
+        w->status = WORKER_STOP;
+        chiCondSignal(&w->cond);
         chiTimeoutTrigger(&w->timeout, true);
     }
-    chiCondBroadcast(&wm->cond);
 }
 
-static void workerManagerDestroy(WorkerManager* wm) {
-    workerStop(wm);
-    for (uint32_t i = 0; i < wm->numWorkers; ++i)
-        chiTaskJoin(wm->worker[i].task);
-    chiCondDestroy(&wm->cond);
-    chiMutexDestroy(&wm->mutex);
+static void gcWorkerDestroy(ChiRuntime* rt) {
+    ChiGC* gc = &rt->gc;
+    gcWorkerStop(gc);
+    for (ChiGCWorker* w = gc->firstWorker; w < gc->lastWorker; ++w) {
+        chiTaskJoin(w->task);
+        chiCondDestroy(&w->cond);
+        chiGrayFree(&w->gray);
+    }
+    chiFree(gc->firstWorker);
 }
 
-static bool workerWaiting(WorkerManager* wm) {
-    for (Worker* w = wm->worker; w < wm->worker + wm->numWorkers; ++w) {
-        CHI_ASSERT(w->state != WORKER_STOP);
-        if (w->state != WORKER_WAIT)
+static void gcWorkerNotify(ChiGC* gc, GCWorkerStatus status) {
+    for (ChiGCWorker* w = gc->firstWorker; w < gc->lastWorker; ++w) {
+        if (w->status == WORKER_WAIT) {
+            w->status = status;
+            chiCondSignal(&w->cond);
+        }
+    }
+}
+
+static void gcWorkerEpochSync(ChiRuntime* rt) {
+    {
+        ChiGC* gc = &rt->gc;
+        CHI_LOCK_MUTEX(&gc->mutex);
+        gcWorkerNotify(gc, WORKER_EPOCH);
+    }
+    chiEvent0(rt, GC_NOTIFY);
+}
+
+static bool gcWorkerEpochAck(ChiRuntime* rt) {
+    ChiGC* gc = &rt->gc;
+    CHI_LOCK_MUTEX(&gc->mutex);
+    for (ChiGCWorker* w = gc->firstWorker; w < gc->lastWorker; ++w) {
+        if (w->status == WORKER_EPOCH)
             return false;
     }
     return true;
 }
 
-static bool workerSuspend(WorkerManager* wm) {
-    bool running = !workerWaiting(wm);
-    if (running) {
-        for (Worker* w = wm->worker; w < wm->worker + wm->numWorkers; ++w) {
-            if (w->state == WORKER_RUN) {
-                WORKER_TRANSITION(w, RUN, SUSPEND, "t=MARKER/SWEEPER,e=gc req");
-                chiTimeoutTrigger(&w->timeout, true);
-            } else {
-                CHI_ASSERT(w->state == WORKER_WAIT);
-            }
-        }
-        chiCondBroadcast(&wm->cond);
-        while (!workerWaiting(wm))
-            chiCondWait(&wm->cond, &wm->mutex);
-    }
-    return running;
-}
-
-static void workerNotify(WorkerManager* wm, bool strict) {
-    for (Worker* w = wm->worker; w < wm->worker + wm->numWorkers; ++w) {
-        if (strict || w->state == WORKER_WAIT) // strict state checking
-            WORKER_TRANSITION(w, WAIT, RUN, "t=MARKER/SWEEPER,e=gc notify");
-    }
-    chiCondBroadcast(&wm->cond);
-}
-
-static ChiGen computeGCGen(uint32_t* gcTrip, uint32_t heapGen, uint32_t multiplicity, bool fullScavenge) {
-    if (fullScavenge) {
-        *gcTrip = 0;
-        return (ChiGen)(heapGen - 1);
-    }
-    ++*gcTrip;
-    for (uint32_t n = heapGen; n --> 1;) {
-        if (*gcTrip % chiPow(multiplicity, n) == 0)
-            return (ChiGen)n;
-    }
-    return CHI_GEN_NURSERY;
-}
-
-static void heapCheck(ChiProcessor* proc, ChiHeapCheck mode) {
-    if (CHI_AND(CHI_HEAP_CHECK_ENABLED, proc->rt->option.heap.check)) {
-        CHI_EVENT0(proc, HEAP_CHECK_BEGIN);
-        chiHeapCheck(proc->rt, mode);
-        CHI_EVENT0(proc, HEAP_CHECK_END);
-        CHI_TT(&proc->worker, .name = "runtime;heap check");
-    }
-}
-
-static void sweepDirtyLists(ChiProcessor* proc) {
-    // All dirty lists are located on the current processor
-    ChiBlockVec newDirty, *dirty = proc->gcPS.dirty;
-    chiBlockVecInit(&newDirty, &proc->rt->tenure.manager);
-    Chili c;
-    while (chiBlockVecPop(dirty, &c)) {
-        CHI_ASSERT(chiMajor(c));
-        ChiObject* obj = chiObject(c);
-        ChiColor color = chiObjectColor(obj);
-        CHI_ASSERT(chiObjectDirty(obj));
-        CHI_ASSERT(color != CHI_GRAY);
-        if (color == CHI_BLACK)
-            chiBlockVecPush(&newDirty, c);
-    }
-    chiBlockVecJoin(dirty, &newDirty);
-}
-
-static void markerResume(ChiProcessor* proc, ChiGCMarker* marker) {
-    WorkerManager* wm = &marker->manager;
-    CHI_LOCK(&wm->mutex);
-    chiBlockVecJoin(&marker->grayList, &proc->gcPS.grayList);
-    workerNotify(wm, true);
-}
-
-static void markSlice(ChiWorker* worker, ChiBlockVec* grayList, ChiTimeout* timeout) {
-    CHI_EVENT0(worker, GC_MARK_SLICE_BEGIN);
-
-    ChiScanStats stats;
-    const ChiRuntimeOption* opt = &worker->rt->option;
-    chiScan(grayList, timeout, &stats, opt->heap.scanDepth, opt->gc.ms.noCollapse);
-
-    CHI_TT(worker, .name = "runtime;gc;mark");
-    CHI_EVENT_STRUCT(worker, GC_MARK_STATS, &stats);
-    CHI_EVENT0(worker, GC_MARK_SLICE_END);
-}
-
-static void sweepSlice(ChiWorker* worker, ChiTimeout* timeout) {
-    ChiRuntime* rt = worker->rt;
-    CHI_EVENT0(worker, GC_SWEEP_SLICE_BEGIN);
-    ChiSweepStats stats;
-    chiSweepSlice(&rt->heap, &stats, timeout);
-    CHI_EVENT_STRUCT(worker, GC_SWEEP_STATS, &stats);
-    CHI_EVENT0(worker, GC_SWEEP_SLICE_END);
-    CHI_TT(worker, .name = "runtime;gc;sweep");
-}
-
-static bool sweeperSync(Worker* w) {
-    ChiGCSweeper* sweeper = w->rt->gc.conc->sweeper;
-    CHI_LOCK(&sweeper->manager.mutex);
-    for (;;) {
-        if (w->state == WORKER_RUN)
-            WORKER_TRANSITION(w, RUN, WAIT, "t=SWEEPER,e=sw done");
-
-        while (w->state == WORKER_WAIT)
-            chiCondWait(&sweeper->manager.cond, &sweeper->manager.mutex);
-
-        if (w->state == WORKER_STOP) {
-            WORKER_TRANSITION(w, STOP, FINAL, "t=SWEEPER");
-            return false;
-        }
-
-        if (w->state == WORKER_SUSPEND) {
-            WORKER_TRANSITION(w, SUSPEND, WAIT, "t=SWEEPER,e=sw suspend");
-            chiTimeoutTrigger(&w->timeout, false);
-            chiCondBroadcast(&sweeper->manager.cond);
-            continue;
-        }
-
-        CHI_ASSERT(w->state == WORKER_RUN);
-        return true;
-    }
-}
-
-static void sweeperRun(void* arg) {
-    Worker* w = (Worker*)arg;
-    ChiWorker* worker = chiWorkerBegin(w->rt, "gc-sweep");
-    while (sweeperSync(w)) {
-        CHI_TT(worker, .name = "runtime;suspend");
-        sweepSlice(worker, &w->timeout);
-    }
-    chiWorkerEnd(worker);
-}
-
-static void sweeperNotify(ChiGCSweeper* sweeper) {
-    WorkerManager* wm = &sweeper->manager;
-    CHI_LOCK(&wm->mutex);
-    workerNotify(wm, false);
-}
-
-static void sweeperSuspend(ChiGCSweeper* sweeper) {
-    WorkerManager* wm = &sweeper->manager;
-    CHI_LOCK(&wm->mutex);
-    workerSuspend(wm);
-}
-
-static void sweeperSetup(ChiRuntime* rt) {
-    ChiRuntimeOption* opt = &rt->option;
-    if (CHI_AND(CHI_GC_CONC_ENABLED, opt->gc.mode == CHI_GC_CONC)
-        && !rt->gc.conc->sweeper && opt->gc.conc->sweepers) {
-        ChiGCSweeper* sweeper = rt->gc.conc->sweeper =
-            (ChiGCSweeper*)chiZalloc(sizeof (ChiGCSweeper) + opt->gc.conc->sweepers * sizeof (Worker));
-        workerManagerSetup(&sweeper->manager, sweeperRun, opt->gc.conc->sweepers, rt);
-    }
-}
-
-static void heapRelease(ChiProcessor* proc) {
-    ChiRuntime* rt = proc->rt;
-    ChiHeap* heap = &rt->heap;
-    bool notify = false;
-    {
-        CHI_LOCK(&heap->mutex);
-        CHI_FOREACH_PROCESSOR (p, rt)
-            notify = chiHeapHandleReleaseUnlocked(&p->heapHandle) || notify;
-        notify = notify && heap->sweep;
-    }
-    if (notify)
-        chiHeapSweepNotify(heap);
-}
-
-static void markPhase(ChiProcessor* proc, ChiTimeout* timeout, bool finishMark) {
-    ChiRuntime* rt = proc->rt;
+static bool gcWorkerGrayNull(ChiRuntime* rt) {
     ChiGC* gc = &rt->gc;
-
-    ChiBlockVec grayList;
-    chiBlockVecInit(&grayList, &rt->blockTemp);
-    CHI_FOREACH_PROCESSOR (p, rt)
-        chiBlockVecJoin(&grayList, &p->gcPS.grayList);
-
-    if (finishMark) {
-        for (size_t i = 0; i < gc->roots.used; ++i) {
-            Chili root = gc->roots.elem[i];
-            ChiObject* obj = chiObject(root);
-            if (chiRaw(chiType(root))) {
-                chiObjectSetColor(obj, CHI_BLACK);
-            } else if (chiObjectCasColor(obj, CHI_WHITE, CHI_GRAY)) {
-                chiBlockVecPush(&grayList, root);
-            }
-        }
-    }
-
-    if ((finishMark || !hasMarker(gc)) && chiTimeoutTick(timeout) && !chiBlockVecNull(&grayList))
-        markSlice(&proc->worker, &grayList, timeout);
-
-    chiBlockVecJoin(&proc->gcPS.grayList, &grayList);
-
-    if (finishMark && chiBlockVecNull(&proc->gcPS.grayList)) {
-        CHI_ASSERT(gc->msPhase == CHI_MS_PHASE_MARK);
-        heapCheck(proc, CHI_HEAPCHECK_PHASECHANGE);
-        sweeperSetup(rt);
-        gc->msPhase = CHI_MS_PHASE_SWEEP;
-        sweepDirtyLists(proc);
-        CHI_EVENT0(rt, GC_MARK_PHASE_END);
-        CHI_EVENT0(rt, GC_SWEEP_PHASE_BEGIN);
-
-        heapRelease(proc);
-        chiSweepBegin(&rt->heap);
-    }
-}
-
-static void sweeperDestroy(ChiGCSweeper* sweeper) {
-    workerManagerDestroy(&sweeper->manager);
-    chiFree(sweeper);
-}
-
-static bool markerSync(Worker* w, ChiBlockVec* grayList) {
-    ChiGCMarker* marker = w->rt->gc.conc->marker;
-
-    CHI_LOCK(&marker->manager.mutex);
-    for (;;) {
-        chiBlockVecJoin(&marker->grayList, grayList);
-
-        while (w->state == WORKER_WAIT)
-            chiCondWait(&marker->manager.cond, &marker->manager.mutex);
-
-        if (w->state == WORKER_STOP) {
-            WORKER_TRANSITION(w, STOP, FINAL, "t=MARKER");
+    CHI_LOCK_MUTEX(&gc->mutex);
+    for (ChiGCWorker* w = gc->firstWorker; w < gc->lastWorker; ++w) {
+        if (w->status != WORKER_WAIT || !chiGrayNull(&w->gray))
             return false;
-        }
-
-        if (w->state == WORKER_SUSPEND) {
-            WORKER_TRANSITION(w, SUSPEND, WAIT, "t=MARKER,e=mark suspend");
-            chiTimeoutTrigger(&w->timeout, false);
-            chiCondBroadcast(&marker->manager.cond);
-            continue;
-        }
-
-        CHI_ASSERT(w->state == WORKER_RUN);
-
-        if (chiBlockVecNull(&marker->grayList)) {
-            WORKER_TRANSITION(w, RUN, WAIT, "t=MARKER,e=mark done");
-            continue;
-        }
-
-        chiBlockVecMove(grayList, &marker->grayList);
-        return true;
     }
+    return true;
 }
 
-static void markerRun(void* arg) {
-    Worker* w = (Worker*)arg;
-    ChiRuntime* rt = w->rt;
-
-    ChiWorker* worker = chiWorkerBegin(rt, "gc-mark");
-
-    ChiBlockVec grayList;
-    chiBlockVecInit(&grayList, &rt->blockTemp);
-
-    while (markerSync(w, &grayList)) {
-        CHI_TT(worker, .name = "runtime;suspend");
-        markSlice(worker, &grayList, &w->timeout);
-    }
-
-    chiBlockVecFree(&grayList);
-    chiWorkerEnd(worker);
-}
-
-static void markerSetup(ChiRuntime* rt) {
-    ChiRuntimeOption* opt = &rt->option;
-    if (CHI_AND(CHI_GC_CONC_ENABLED, opt->gc.mode == CHI_GC_CONC)
-        && !rt->gc.conc->marker && opt->gc.conc->markers) {
-        ChiGCMarker* marker = rt->gc.conc->marker =
-            (ChiGCMarker*)chiZalloc(sizeof (ChiGCMarker) + opt->gc.conc->markers * sizeof (Worker));
-        chiBlockVecInit(&marker->grayList, &rt->blockTemp);
-        workerManagerSetup(&marker->manager, markerRun, opt->gc.conc->markers, rt);
-    }
-}
-
-static void markerDestroy(ChiGCMarker* marker) {
-    workerManagerDestroy(&marker->manager);
-    chiBlockVecFree(&marker->grayList);
-    chiFree(marker);
-}
-
-static void minorStats(ChiProcessor* proc, ChiMinorUsage* stats) {
-    ChiRuntime* rt = proc->rt;
-    const ChiRuntimeOption* opt = &proc->rt->option;
-    size_t
-        usedBlocks = rt->blockTemp.blocksUsed + rt->tenure.manager.blocksUsed,
-        freeBlocks = rt->blockTemp.free.count + rt->tenure.manager.free.count;
-
-    CHI_FOREACH_PROCESSOR (p, rt) {
-        usedBlocks += p->nursery.manager.blocksUsed;
-        freeBlocks += p->nursery.manager.free.count;
-    }
-
-    stats->usedWords = opt->block.size * usedBlocks / CHI_WORDSIZE;
-    stats->totalWords = opt->block.size * (usedBlocks + freeBlocks) / CHI_WORDSIZE;
-}
-
-static void heapStats(ChiProcessor* proc, ChiEventHeapUsage* stats) {
-    minorStats(proc, &stats->minor);
-    chiHeapUsage(&proc->rt->heap, &stats->major);
-    stats->totalWords = proc->rt->heapSize / CHI_WORDSIZE;
-}
-
-static void nurseryResize(ChiProcessor* proc, ChiNanos begin, ChiNanos end) {
-    ChiRuntime* rt = proc->rt;
-    const ChiRuntimeOption* opt = &rt->option;
-    if (!chiNanosZero(end)) {
-        size_t
-            oldLimit = proc->nursery.manager.blocksLimit,
-            newLimit = CHI_CLAMP((size_t)(oldLimit
-                                          * CHI_UN(Nanos, chiMicrosToNanos(opt->gc.scav.slice))
-                                          / CHI_UN(Nanos, chiNanosDelta(end, begin))),
-                                 2, opt->block.nursery);
-        if (oldLimit != newLimit) {
-            CHI_FOREACH_PROCESSOR(p, rt)
-                p->nursery.manager.blocksLimit = newLimit;
-            CHI_EVENT(proc, NURSERY_RESIZE, .newLimit = newLimit, .oldLimit = oldLimit);
-        }
-    }
-}
-
-static void scavenger(ChiProcessor* proc, ChiGen gcGen, bool snapshot) {
-    ChiRuntime* rt = proc->rt;
-    const ChiRuntimeOption* opt = &rt->option;
-
-    if (CHI_EVENT_P(proc, HEAP_BEFORE_SCAV)) {
-        ChiEventHeapUsage e;
-        heapStats(proc, &e);
-        CHI_EVENT_STRUCT(proc, HEAP_BEFORE_SCAV, &e);
-    }
-
-    ChiScavengerStats stats;
-    CHI_EVENT0(proc, GC_SCAVENGER_BEGIN);
-
-    ChiNanos begin = chiMicrosZero(opt->gc.scav.slice) || gcGen > CHI_GEN_NURSERY
-        ? (ChiNanos){0} : chiNanosDelta(chiClock(CHI_CLOCK_REAL_FINE), rt->timeRef.start.real);
-    chiScavenger(proc, gcGen, snapshot, &stats);
-    ChiNanos end = chiMicrosZero(opt->gc.scav.slice) || gcGen > CHI_GEN_NURSERY
-        ? (ChiNanos){0} : chiNanosDelta(chiClock(CHI_CLOCK_REAL_FINE), rt->timeRef.start.real);
-
-    CHI_EVENT_STRUCT(proc, GC_SCAVENGER_END, &stats);
-
-    if (CHI_EVENT_P(proc, HEAP_AFTER_SCAV)) {
-        ChiEventHeapUsage m;
-        heapStats(proc, &m);
-        CHI_EVENT_STRUCT(proc, HEAP_AFTER_SCAV, &m);
-    }
-
-    nurseryResize(proc, begin, end);
-}
-
-/*
- * Scavenger dirty scanning of major objects interacts
- * badly with the concurrent scanning of the marking
- * workers on 32 bit architectures.
- * It could happen that the scanning modifies the object,
- * while it is at the same time scanned by the concurrent
- * marking workers. On 32 bit this will lead to inconsistent
- * reads in the marking workers. Therefore marker threads will
- * be temporarily stopped.
- */
-static bool markerSuspend(ChiProcessor* proc, ChiGCMarker* marker) {
-    WorkerManager* wm = &marker->manager;
-    CHI_LOCK(&wm->mutex);
-    bool markerActive = workerSuspend(wm);
-    chiBlockVecJoin(&proc->gcPS.grayList, &marker->grayList);
-    return markerActive;
-}
-
-static void heapProf(ChiProcessor* proc) {
-    ChiHeapProf prof = {.box64={0,0}};
-    CHI_EVENT0(proc, HEAP_PROF_BEGIN);
-    chiHeapProf(proc->rt, &prof);
-    CHI_EVENT_STRUCT(proc, HEAP_PROF_END, &prof);
-    CHI_TT(&proc->worker, .name = "runtime;heap prof");
-}
-
-static void heapDump(ChiProcessor* proc) {
-    ChiRuntime* rt = proc->rt;
-    ChiGC* gc = &rt->gc;
-
-    char filebuf[64], *file = "4";
-    if (!CHI_DEFINED(CHI_STANDALONE_SANDBOX)) {
-        file = filebuf;
-        chiFmt(filebuf, sizeof (filebuf), "heap.%u-%u.json%s",
-               chiPid(), gc->dumpId++, chiSinkCompress());
-    }
-
-    CHI_AUTO_SINK(sink, chiSinkBufferNew(chiSinkFileTryNew(file, CHI_SINK_BINARY), 1024*1024));
-    if (!sink)
+static void gcWorkerGrayPush(ChiRuntime* rt, ChiGrayVec* gray) {
+    if (chiGrayNull(gray) || rt->option.gc.major.mode != CHI_GC_CONC)
         return;
-    CHI_EVENT0(proc, HEAP_DUMP_BEGIN);
-    chiHeapDump(proc->rt, sink);
-    CHI_EVENT(proc, HEAP_DUMP_END, .file = chiStringRef(file));
-
-    gc->dumpHeap = CHI_NODUMP;
-    CHI_TT(&proc->worker, .name = "runtime;heap dump");
+    {
+        ChiGC* gc = &rt->gc;
+        CHI_LOCK_MUTEX(&gc->mutex);
+        chiGrayJoin(&gc->gray.vec, gray);
+        gcWorkerNotify(gc, WORKER_RUN);
+    }
+    chiEvent0(rt, GC_NOTIFY);
 }
-
-static void markSweepSlice(ChiProcessor* proc, bool fullGC, bool finishMark) {
-    ChiRuntime* rt = proc->rt;
-    ChiGC* gc = &rt->gc;
-    const ChiRuntimeOption* opt = &rt->option;
-
-    CHI_ASSERT(gc->msPhase == CHI_MS_PHASE_SWEEP || CHI_MS_PHASE_MARK);
-
-    ChiTimeout timeout;
-    chiTimeoutStart(&timeout, fullGC ? CHI_TIMEOUT_INFINITE : opt->gc.ms.slice);
-
-    if (gc->msPhase == CHI_MS_PHASE_MARK)
-        markPhase(proc, &timeout, finishMark);
-    else
-        heapRelease(proc);
-
-    if (gc->msPhase == CHI_MS_PHASE_SWEEP && chiTimeoutTick(&timeout)) {
-        if (hasSweeper(gc) && fullGC)
-            sweeperSuspend(gc->conc->sweeper);
-        if (!hasSweeper(gc) || fullGC)
-            sweepSlice(&proc->worker, &timeout);
-    }
-
-    chiTimeoutStop(&timeout);
-
-    bool sweepDone = gc->msPhase == CHI_MS_PHASE_SWEEP && chiSweepEnd(&rt->heap);
-    heapCheck(proc, sweepDone ? CHI_HEAPCHECK_PHASECHANGE : CHI_HEAPCHECK_NORMAL);
-
-    if (sweepDone) {
-        gc->msPhase = CHI_MS_PHASE_IDLE;
-        CHI_EVENT0(rt, GC_SWEEP_PHASE_END);
-        CHI_EVENT0(rt, GC_MARKSWEEP_END);
-    }
-}
-
-void chiGCSlice(ChiProcessor* proc, ChiGCTrigger trigger) {
-    ChiRuntime* rt = proc->rt;
-    ChiGC* gc = &rt->gc;
-    const ChiRuntimeOption* opt = &rt->option;
-
-    CHI_ASSERT(trigger != CHI_GC_TRIGGER_INACTIVE);
-    CHI_EVENT0(proc, GC_SLICE_BEGIN);
-
-    const bool
-        fullGC = opt->gc.mode == CHI_GC_FULL || trigger == CHI_GC_TRIGGER_FULL,
-        initMark = gc->msPhase == CHI_MS_PHASE_IDLE && opt->gc.mode != CHI_GC_NOMS && (fullGC || trigger == CHI_GC_TRIGGER_MARKSWEEP);
-
-    bool finishMark;
-    ChiGen gcGen;
-    if (hasMarker(gc)) {
-        bool markerActive = gc->msPhase == CHI_MS_PHASE_MARK && markerSuspend(proc, gc->conc->marker);
-        finishMark = gc->msPhase == CHI_MS_PHASE_MARK && (fullGC || !markerActive);
-        gcGen = computeGCGen(&gc->scavTrip, opt->block.gen, opt->gc.scav.multiplicity, initMark || finishMark || fullGC);
-    } else {
-        gcGen = computeGCGen(&gc->scavTrip, opt->block.gen, opt->gc.scav.multiplicity, initMark || fullGC);
-        finishMark = gc->msPhase == CHI_MS_PHASE_MARK && (fullGC || gcGen == opt->block.gen - 1);
-    }
-
-    heapCheck(proc, initMark ? CHI_HEAPCHECK_PHASECHANGE : CHI_HEAPCHECK_NORMAL);
-
-    if (initMark) {
-        markerSetup(rt);
-        gc->msPhase = CHI_MS_PHASE_MARK;
-        CHI_EVENT0(rt, GC_MARKSWEEP_BEGIN);
-        CHI_EVENT0(rt, GC_MARK_PHASE_BEGIN);
-    }
-
-    scavenger(proc, gcGen, initMark || finishMark);
-    heapCheck(proc, CHI_HEAPCHECK_NORMAL);
-
-    if (gc->msPhase != CHI_MS_PHASE_IDLE)
-        markSweepSlice(proc, fullGC, finishMark);
-
-    if (CHI_AND(CHI_HEAP_PROF_ENABLED, gcGen >= opt->heap.prof && CHI_EVENT_P(proc->rt, HEAP_PROF_BEGIN)))
-        heapProf(proc);
-
-    if (CHI_HEAP_DUMP_ENABLED && gc->dumpHeap)
-        heapDump(proc);
-
-    CHI_EVENT(proc, GC_SLICE_END, .trigger = trigger);
-
-    if (gc->msPhase == CHI_MS_PHASE_MARK && hasMarker(gc))
-        markerResume(proc, gc->conc->marker);
-}
+#else
+static void gcWorkerStart(ChiRuntime* CHI_UNUSED(rt), ChiColorState CHI_UNUSED(colorState)) {}
+static void gcWorkerDestroy(ChiRuntime* CHI_UNUSED(rt)) {}
+static void gcWorkerEpochSync(ChiRuntime* CHI_UNUSED(rt)) {}
+static bool gcWorkerEpochAck(ChiRuntime* CHI_UNUSED(rt)) { return true; }
+static void gcWorkerGrayPush(ChiRuntime* CHI_UNUSED(rt), ChiGrayVec* CHI_UNUSED(gray)) {}
+static bool gcWorkerGrayNull(ChiRuntime* CHI_UNUSED(rt)) { return true; }
+#endif
 
 void chiGCSetup(ChiRuntime* rt) {
+    const ChiRuntimeOption* opt = &rt->option;
     ChiGC* gc = &rt->gc;
-    chiMutexInit(&gc->roots.mutex);
+    chiMutexInit(&gc->mutex);
+    chiBlockManagerSetup(&gc->gray.manager, opt->block.size, opt->block.chunk, true, rt);
+    chiGrayInit(&gc->gray.vec, &gc->gray.manager);
+    chiChunkListInit(&gc->sweep.largeList);
+    chiHeapSegmentListInit(&gc->sweep.segmentUnswept);
+    chiHeapSegmentListInit(&gc->sweep.segmentPartial);
 }
 
 void chiGCDestroy(ChiRuntime* rt) {
     ChiGC* gc = &rt->gc;
-    if (hasSweeper(gc))
-        sweeperDestroy(gc->conc->sweeper);
-    if (hasMarker(gc))
-        markerDestroy(gc->conc->marker);
-    chiMutexDestroy(&gc->roots.mutex);
-    chiRootVecFree(&gc->roots);
-    chiPoisonMem(gc, CHI_POISON_DESTROYED, sizeof (ChiGC));
+    gcWorkerDestroy(rt);
+    chiMutexDestroy(&gc->mutex);
+    chiGrayFree(&gc->gray.vec);
+    chiBlockManagerDestroy(&gc->gray.manager);
+    chiVecFree(&gc->root);
+    chiHeapSegmentListFree(&rt->heap, &gc->sweep.segmentPartial);
+    chiHeapSegmentListFree(&rt->heap, &gc->sweep.segmentUnswept);
+    chiHeapChunkListFree(&rt->heap, &gc->sweep.largeList);
+    CHI_POISON_STRUCT(gc, CHI_POISON_DESTROYED);
 }
 
-void chiGCProcStop(ChiProcessor* proc) {
-    const ChiRuntimeOption* opt = &proc->rt->option;
-    chiBlockVecFree(&proc->gcPS.grayList);
-    for (size_t gen = opt->block.gen; gen --> 0;)
-        chiBlockVecFree(proc->gcPS.dirty + gen);
-}
-
-void chiGCProcStart(ChiProcessor* proc) {
-    const ChiRuntimeOption* opt = &proc->rt->option;
-    chiBlockVecInit(&proc->gcPS.grayList, &proc->rt->blockTemp);
-    for (size_t gen = opt->block.gen; gen --> 0;)
-        chiBlockVecInit(proc->gcPS.dirty + gen, &proc->rt->tenure.manager);
-}
-
-void chiGCBlock(bool block) {
-    ChiProcessor* proc = CHI_CURRENT_PROCESSOR;
-    ChiGC* gc = &proc->rt->gc;
-    if (block) {
-        ++gc->blocked;
-        CHI_EVENT0(proc, GC_BLOCK);
-    } else {
-        if (--gc->blocked >= 0)
-            CHI_EVENT0(proc, GC_UNBLOCK);
-        else
-            chiWarn("GC is already unblocked");
-    }
-}
-
-void chiGCTrigger(ChiRuntime* rt, ChiGCRequestor requestor, ChiGCTrigger trigger, ChiDump dump) {
-    CHI_ASSERT(trigger != CHI_GC_TRIGGER_INACTIVE);
+void chiGCTrigger(ChiRuntime* rt) {
     ChiGC* gc = &rt->gc;
-    if (gc->blocked
-        || rt->option.gc.mode == CHI_GC_NONE
-        || (requestor == CHI_GC_REQUESTOR_HEAP && rt->option.gc.mode == CHI_GC_NOMS))
+    if (rt->option.gc.major.mode == CHI_GC_NONE)
         return;
-    for (;;) {
-        ChiDump oldDump = gc->dumpHeap;
-        if (dump <= oldDump || atomic_compare_exchange_weak(&gc->dumpHeap, &oldDump, dump))
-            break;
+    if (!chiTriggerExchange(&gc->trigger, true)) {
+        chiEvent0(rt, GC_TRIGGER);
+        chiProcessorRequestMain(rt, CHI_REQUEST_HANDSHAKE);
     }
-    for (;;) {
-        ChiGCTrigger oldTrigger = gc->trigger;
-        if (trigger <= oldTrigger)
-            break;
-        if (atomic_compare_exchange_weak(&gc->trigger, &oldTrigger, trigger)) {
-            chiProcessorInterrupt(rt);
-            CHI_EVENT(rt, GC_REQ, .requestor = requestor, .trigger = trigger);
+}
+
+void chiGCRoot(ChiRuntime* rt, Chili root) {
+    CHI_ASSERT(chiGen(root) == CHI_GEN_MAJOR);
+    ChiGC* gc = &rt->gc;
+    CHI_LOCK_MUTEX(&gc->mutex);
+    chiVecAppend(&gc->root, root);
+}
+
+void chiGCUnroot(ChiRuntime* rt, Chili root) {
+    ChiGC* gc = &rt->gc;
+    CHI_LOCK_MUTEX(&gc->mutex);
+    for (size_t i = 0; i < gc->root.used; ++i) {
+        if (chiIdentical(gc->root.elem[i], root)) {
+            chiVecDelete(&gc->root, i);
             break;
         }
     }
 }
 
-void chiHeapSweepNotify(ChiHeap* heap) {
-    ChiRuntime* rt = CHI_OUTER(ChiRuntime, heap, heap);
-    if (hasSweeper(&rt->gc)) {
-        sweeperNotify(rt->gc.conc->sweeper);
-        CHI_EVENT0(rt, GC_SWEEP_NOTIFY);
+static void gcLocalPhase(ChiProcessor* proc, ChiGCPhase phase) {
+    CHI_ASSERT(atomic_load_explicit(&proc->gc.phase, memory_order_relaxed) != phase);
+    atomic_store_explicit(&proc->gc.phase, phase, memory_order_relaxed);
+    chiEvent(proc, GC_PHASE_LOCAL, .phase = phase);
+}
+
+static void markRoots(ChiProcessor* proc) {
+    ChiLocalGC* lgc = &proc->gc;
+    // Global roots
+    if (chiProcessorMain(proc)) {
+        ChiGC* gc = &proc->rt->gc;
+        CHI_LOCK_MUTEX(&gc->mutex);
+        for (size_t i = 0; i < gc->root.used; ++i)
+            chiGrayMark(lgc, gc->root.elem[i]);
     }
+    // Local roots
+    chiGrayMarkUnboxed(lgc, proc->local); // unboxed, since it might be uninitialized
+    chiGrayMark(lgc, proc->thread);
 }
 
-Chili chiRoot(ChiRuntime* rt, Chili root) {
-    root = chiPin(root);
-    CHI_LOCK(&rt->gc.roots.mutex);
-    chiRootVecPush(&rt->gc.roots, root);
-    return root;
-}
-
-void chiUnroot(ChiRuntime* rt, Chili root) {
-    ChiRootVec* roots = &rt->gc.roots;
-    CHI_LOCK(&roots->mutex);
-    for (size_t i = 0; i < roots->used; ++i) {
-        if (chiIdentical(roots->elem[i], root)) {
-            chiRootVecRemove(roots, i);
-            break;
+static bool gcPoll(ChiProcessor* proc, ChiGCPhase phase) {
+    ChiRuntime* rt = proc->rt;
+    CHI_ASSERT(atomic_load_explicit(&rt->gc.phase, memory_order_relaxed) == phase);
+    bool done = true;
+    {
+        CHI_LOCK_MUTEX(&rt->proc.mutex);
+        CHI_FOREACH_PROCESSOR (p, rt) {
+            if (atomic_load_explicit(&p->gc.phase, memory_order_relaxed) != phase) {
+                done = false;
+                if (p != proc)
+                    chiProcessorRequest(p, CHI_REQUEST_HANDSHAKE);
+            }
         }
     }
+    return done;
+}
+
+static void gcGlobalPhase(ChiProcessor* proc, ChiGCPhase phase) {
+    CHI_ASSERT(atomic_load_explicit(&proc->rt->gc.phase, memory_order_relaxed) != phase);
+    atomic_store_explicit(&proc->rt->gc.phase, phase, memory_order_relaxed);
+    chiEvent(proc, GC_PHASE_GLOBAL, .phase = phase);
+}
+
+static bool gcGlobalTransition(ChiProcessor* proc, ChiGCPhase from, ChiGCPhase to) {
+    if (gcPoll(proc, from)) {
+        gcGlobalPhase(proc, to);
+        return true;
+    }
+    return false;
+}
+
+static bool markDone(ChiRuntime* rt) {
+    {
+        CHI_LOCK_MUTEX(&rt->proc.mutex);
+        CHI_FOREACH_PROCESSOR (p, rt) {
+            if (!chiGrayNull(&p->gc.gray))
+                return false;
+        }
+    }
+    return gcWorkerGrayNull(rt) && chiGrayNull(&rt->gc.gray.vec);
+}
+
+static void gcControl(ChiProcessor* proc) {
+    ChiRuntime* rt = proc->rt;
+    ChiGC* gc = &rt->gc;
+
+    if (chiEventEnabled(proc, HEAP_USAGE)) {
+        ChiHeapUsage usage = { .totalChunkWords = atomic_load_explicit(&proc->rt->totalHeapChunkSize,
+                                                                       memory_order_relaxed) / CHI_WORDSIZE };
+        chiHeapUsage(&rt->heap, &usage);
+        chiEventStruct(proc, HEAP_USAGE, &usage);
+    }
+
+    switch (atomic_load_explicit(&gc->phase, memory_order_relaxed)) {
+    case CHI_GC_IDLE:
+        if (chiTriggered(&gc->trigger) && gcWorkerEpochAck(rt))
+            gcGlobalTransition(proc, CHI_GC_IDLE, CHI_GC_SYNC1);
+        break;
+    case CHI_GC_SYNC1:
+        gcGlobalTransition(proc, CHI_GC_SYNC1, CHI_GC_SYNC2);
+        break;
+    case CHI_GC_SYNC2:
+        if (gcGlobalTransition(proc, CHI_GC_SYNC2, CHI_GC_ASYNC)) {
+            chiEvent0(rt, GC_MARK_PHASE_BEGIN);
+            gcWorkerStart(rt, proc->gc.colorState);
+        }
+        break;
+    case CHI_GC_ASYNC:
+        if (markDone(rt) && gcGlobalTransition(proc, CHI_GC_ASYNC, CHI_GC_IDLE)) {
+            chiEvent0(rt, GC_MARK_PHASE_END);
+            {
+                CHI_LOCK_MUTEX(&gc->mutex);
+                chiHeapSweepAcquire(&rt->heap, &gc->sweep.largeList, &gc->sweep.segmentUnswept);
+                chiTrigger(&gc->sweep.needed, true);
+            }
+            chiTrigger(&gc->trigger, false);
+            gcWorkerEpochSync(rt);
+        }
+        break;
+    }
+}
+
+static void minorStats(ChiProcessor* proc, ChiMinorHeapUsage* stats) {
+    const ChiRuntimeOption* opt = &proc->rt->option;
+    ChiBlockManager* bm = &proc->heap.manager;
+    stats->usedWords = opt->block.size * (bm->blocksCount - bm->freeList.length) / CHI_WORDSIZE;
+    stats->totalWords = opt->block.size * bm->blocksCount / CHI_WORDSIZE;
+}
+
+static void scavenger(ChiProcessor* proc, uint32_t aging, bool snapshot) {
+    ChiEventScavenger event = {};
+#if CHI_COUNT_ENABLED
+    event.promoted = proc->heap.promoted.stats;
+    CHI_ZERO_STRUCT(&proc->heap.promoted.stats);
+#endif
+
+    minorStats(proc, &event.minorHeapBefore);
+    chiEvent0(proc, GC_SCAVENGER_BEGIN);
+    chiScavenger(proc, aging, snapshot, &event.scavenger);
+    minorStats(proc, &event.minorHeapAfter);
+    chiEventStruct(proc, GC_SCAVENGER_END, &event);
+}
+
+static bool gcLocalTransition(ChiProcessor* proc, ChiGCPhase from, ChiGCPhase to) {
+    ChiGCPhase phase = atomic_load_explicit(&proc->gc.phase, memory_order_relaxed);
+    CHI_ASSERT(phase == from || phase == to);
+    if (phase == from) {
+        gcLocalPhase(proc, to);
+        return true;
+    }
+    return false;
+}
+
+static void gcIncSlice(ChiProcessor* proc) {
+    ChiRuntime* rt = proc->rt;
+    ChiLocalGC* lgc = &proc->gc;
+    if (chiProcessorMain(proc)) {
+        // Take over global gray list. It might be non-empty due to processor shutdown.
+        ChiGC* gc = &rt->gc;
+        CHI_LOCK_MUTEX(&gc->mutex);
+        chiGrayJoin(&lgc->gray, &gc->gray.vec);
+    }
+    gcSlice(proc->worker, &lgc->gray, lgc->colorState, rt->option.gc.major.slice);
+}
+
+static void gcHandshake(ChiProcessor* proc) {
+    ChiRuntime* rt = proc->rt;
+    ChiLocalGC* gc = &proc->gc;
+    bool snapshot = false;
+
+    switch (atomic_load_explicit(&rt->gc.phase, memory_order_relaxed)) {
+    case CHI_GC_SYNC1:
+        if (gcLocalTransition(proc, CHI_GC_IDLE, CHI_GC_SYNC1))
+            gc->barrier = CHI_BARRIER_SYNC;
+        break;
+    case CHI_GC_SYNC2:
+        gcLocalTransition(proc, CHI_GC_SYNC1, CHI_GC_SYNC2);
+        break;
+    case CHI_GC_ASYNC:
+        CHI_ASSERT(gc->phase == CHI_GC_SYNC2 || gc->phase == CHI_GC_ASYNC);
+        if (gc->phase == CHI_GC_SYNC2) {
+            snapshot = true;
+            proc->handle.allocColor = gc->colorState.black;
+            gc->barrier = CHI_BARRIER_ASYNC;
+            markRoots(proc);
+        }
+        break;
+    case CHI_GC_IDLE:
+        if (gcLocalTransition(proc, CHI_GC_ASYNC, CHI_GC_IDLE)) {
+            CHI_ASSERT(chiGrayNull(&gc->gray));
+            gc->barrier = CHI_BARRIER_NONE;
+            chiColorStateEpoch(&gc->colorState);
+            CHI_IF(CHI_POISON_ENABLED, _chiDebugData.colorState = gc->colorState;)
+        }
+        break;
+    }
+
+    if (chiTriggered(&proc->trigger.scavenge) || snapshot) {
+        uint32_t aging = rt->option.gc.scav.aging;
+        if (chiTriggered(&proc->trigger.migrate)) {
+            chiTrigger(&proc->trigger.migrate, false);
+            aging = 1; // promote everything to major heap
+        }
+
+        scavenger(proc, aging, snapshot);
+        chiTrigger(&proc->trigger.scavenge, false);
+
+        if (snapshot)
+            gcLocalPhase(proc, CHI_GC_ASYNC);
+
+        if (rt->option.gc.major.mode == CHI_GC_INC)
+            gcIncSlice(proc);
+    }
+
+    gcWorkerGrayPush(rt, &gc->gray);
+}
+
+void chiGCService(ChiProcessor* proc) {
+    if (chiProcessorMain(proc))
+        gcControl(proc);
+    gcHandshake(proc);
+}
+
+void chiLocalGCSetup(ChiLocalGC* lgc, ChiGC* gc) {
+    chiGrayInit(&lgc->gray, &gc->gray.manager);
+    chiColorStateInit(&lgc->colorState);
+}
+
+void chiLocalGCDestroy(ChiLocalGC* lgc, ChiGC* gc) {
+    {
+        CHI_LOCK_MUTEX(&gc->mutex);
+        chiGrayJoin(&gc->gray.vec, &lgc->gray);
+    }
+    CHI_POISON_STRUCT(lgc, CHI_POISON_DESTROYED);
 }

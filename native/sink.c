@@ -1,172 +1,177 @@
-#include "sink.h"
-#include "num.h"
-#include "mem.h"
-#include "strutil.h"
-#include "system.h"
+#include "debug.h"
 #include "error.h"
-#include "ascii.h"
-#include "system.h"
+#include "mem.h"
+#include "num.h"
+#include "sink.h"
+#include "strutil.h"
+
+typedef _ChiSinkFile SinkFile;
+typedef _ChiSinkProxy SinkProxy;
 
 typedef struct {
-    ChiSink  base;
-    ChiSink* sink;
-    size_t   capacity, used;
-    uint8_t  buf[0];
+    SinkProxy proxy;
+    size_t    capacity, used;
+    uint8_t   buf[0];
 } SinkBuffer;
 
 typedef struct {
-    ChiSink         base;
-    ChiSink*        sink;
-    ChiRWLock       lock;
+    SinkProxy       proxy;
+    ChiMutex        mutex;
     size_t          capacity;
     _Atomic(size_t) used;
     uint8_t         buf[0];
 } SinkLock;
 
-typedef struct {
-    ChiSink  base;
-    ChiSink* sink;
-} SinkColor;
-
-static void sinkBufferFlush(ChiSink* sink) {
-    SinkBuffer* s = (SinkBuffer*)sink;
-    if (s->used) {
-        chiSinkWrite(s->sink, s->buf, s->used);
-        s->used = 0;
-    }
+static void sinkCloseNoFlush(ChiSink* sink) {
+    sink->close(sink);
 }
 
-static void sinkBufferWrite(ChiSink* sink, const void* buf, size_t size) {
-    SinkBuffer* s = (SinkBuffer*)sink;
-
-    if (CHI_UNLIKELY(size >= s->capacity)) {
-        sinkBufferFlush(sink);
-        chiSinkWrite(s->sink, buf, size);
-        return;
-    }
-
-    if (s->used + size > s->capacity)
-        sinkBufferFlush(sink);
-
-    memcpy(s->buf + s->used, buf, size);
-    s->used += size;
+static CHI_WU bool sinkTryFlush(ChiSink* sink) {
+    return sink->flush(sink);
 }
 
-static void sinkBufferClose(ChiSink* sink) {
-    SinkBuffer* s = (SinkBuffer*)sink;
-    sinkBufferFlush(sink);
-    chiSinkClose(s->sink);
+static CHI_WU bool sinkTryWrite(ChiSink* sink, const void* buf, size_t size) {
+    return sink->write(sink, buf, size);
+}
+
+static CHI_WU bool sinkProxyWrite(ChiSink* sink, const void* buf, size_t size) {
+    return sinkTryWrite(((SinkProxy*)sink)->sink, buf, size);
+}
+
+static CHI_WU bool sinkProxyFlush(ChiSink* sink) {
+    return sinkTryFlush(((SinkProxy*)sink)->sink);
+}
+
+static void sinkProxyClose(ChiSink* sink) {
+    sinkCloseNoFlush(((SinkProxy*)sink)->sink);
     chiFree(sink);
 }
 
-static void _sinkLockFlush(SinkLock* s) {
+static CHI_WU bool sinkBufferFlush(ChiSink* sink) {
+    SinkBuffer* s = (SinkBuffer*)sink;
     if (s->used) {
-        chiSinkWrite(s->sink, s->buf, s->used);
+        if (!sinkProxyWrite(sink, s->buf, s->used))
+            return false;
         s->used = 0;
     }
+    return true;
 }
 
-static void sinkLockFlush(ChiSink* sink) {
-    SinkLock* s = (SinkLock*)sink;
-    CHI_LOCK_WRITE(&s->lock);
-    _sinkLockFlush(s);
+static CHI_WU bool sinkBufferWrite(ChiSink* sink, const void* buf, size_t size) {
+    SinkBuffer* s = (SinkBuffer*)sink;
+
+    if (size >= s->capacity)
+        return sinkBufferFlush(sink) && sinkProxyWrite(sink, buf, size);
+
+    if (s->used + size > s->capacity && !sinkBufferFlush(sink))
+        return false;
+
+    memcpy(s->buf + s->used, buf, size);
+    s->used += size;
+    return true;
 }
 
-static void sinkLockWrite(ChiSink* sink, const void* buf, size_t size) {
+static CHI_WU bool sinkLockFlush(ChiSink* sink) {
     SinkLock* s = (SinkLock*)sink;
-
-    if (CHI_UNLIKELY(size >= s->capacity)) {
-        CHI_LOCK_WRITE(&s->lock);
-        _sinkLockFlush(s);
-        chiSinkWrite(s->sink, buf, size);
-        return;
+    CHI_LOCK_MUTEX(&s->mutex);
+    size_t used = atomic_exchange_explicit(&s->used, s->capacity, memory_order_acq_rel);
+    if (used && !sinkProxyWrite(sink, s->buf, used)) {
+        atomic_store_explicit(&s->used, used, memory_order_release);
+        return false;
     }
+    atomic_store_explicit(&s->used, 0, memory_order_release);
+    return true;
+}
 
-    {
-        CHI_LOCK_READ(&s->lock);
-        for (;;) {
-            size_t oldUsed = s->used, newUsed = oldUsed + size;
-            if (newUsed > s->capacity)
-                break;
-            if (atomic_compare_exchange_weak(&s->used, &oldUsed, newUsed)) {
-                memcpy(s->buf + oldUsed, buf, size);
-                return;
-            }
+static CHI_WU bool sinkLockWrite(ChiSink* sink, const void* buf, size_t size) {
+    SinkLock* s = (SinkLock*)sink;
+
+    for (;;) {
+        size_t oldUsed = atomic_load_explicit(&s->used, memory_order_acquire), newUsed = oldUsed + size;
+        if (newUsed > s->capacity)
+            break;
+        if (atomic_compare_exchange_weak_explicit(&s->used, &oldUsed, newUsed,
+                                                  memory_order_acq_rel,
+                                                  memory_order_relaxed)) {
+            memcpy(s->buf + oldUsed, buf, size);
+            return true;
         }
     }
 
-    CHI_LOCK_WRITE(&s->lock);
-    if (s->used + size > s->capacity)
-        _sinkLockFlush(s);
-
-    memcpy(s->buf + s->used, buf, size);
-    s->used += size;
+    CHI_LOCK_MUTEX(&s->mutex);
+    size_t used = atomic_exchange_explicit(&s->used, s->capacity, memory_order_acq_rel);
+    if (size >= s->capacity) {
+        if (used && !sinkProxyWrite(sink, s->buf, used)) {
+            atomic_store_explicit(&s->used, used, memory_order_release);
+            return false;
+        }
+        if (!sinkProxyWrite(sink, buf, size))
+            return false;
+        atomic_store_explicit(&s->used, 0, memory_order_release);
+    } else if (used + size > s->capacity) {
+        if (used && !sinkProxyWrite(sink, s->buf, used)) {
+            atomic_store_explicit(&s->used, used, memory_order_release);
+            return false;
+        }
+        memcpy(s->buf, buf, size);
+        atomic_store_explicit(&s->used, size, memory_order_release);
+    } else {
+        memcpy(s->buf + used, buf, size);
+        atomic_store_explicit(&s->used, used + size, memory_order_release);
+    }
+    return true;
 }
 
 static void sinkLockClose(ChiSink* sink) {
-    SinkLock* s = (SinkLock*)sink;
-    sinkLockFlush(sink);
-    chiRWLockDestroy(&s->lock);
-    chiSinkClose(s->sink);
-    chiFree(sink);
+    chiMutexDestroy(&((SinkLock*)sink)->mutex);
+    sinkProxyClose(sink);
 }
 
-static void sinkNullWrite(ChiSink* CHI_UNUSED(sink), const void* CHI_UNUSED(buf), size_t CHI_UNUSED(size)) {
+static CHI_WU bool sinkNullWrite(ChiSink* CHI_UNUSED(sink), const void* CHI_UNUSED(buf), size_t CHI_UNUSED(size)) {
+    return true;
 }
 
-static void sinkNullNop(ChiSink* CHI_UNUSED(sink)) {
+static CHI_WU bool sinkNullFlush(ChiSink* CHI_UNUSED(sink)) {
+    return true;
+}
+
+static void sinkNullClose(ChiSink* CHI_UNUSED(sink)) {
 }
 
 static void sinkFree(ChiSink* sink) {
     chiFree(sink);
 }
 
-#if CHI_SYSTEM_HAS_STDIO
-typedef struct {
-    ChiSink base;
-    FILE*   fp;
-} SinkFile;
-
-static void sinkFileWrite(ChiSink* sink, const void* buf, size_t size) {
-    if (fwrite(buf, 1, size, ((SinkFile*)sink)->fp) != size)
-        chiSysErr("fwrite");
-}
-
-static void sinkFileFlush(ChiSink* sink) {
-    if (fflush(((SinkFile*)sink)->fp))
-        chiSysErr("fflush");
+static CHI_WU bool sinkFileWrite(ChiSink* sink, const void* buf, size_t size) {
+    return chiFileWrite(((SinkFile*)sink)->handle, buf, size);
 }
 
 static void sinkFileClose(ChiSink* sink) {
-    fclose(((SinkFile*)sink)->fp);
+    chiFileClose(((SinkFile*)sink)->handle);
     chiFree(sink);
 }
 
-static void sinkPipeClose(ChiSink* sink) {
-    pclose(((SinkFile*)sink)->fp);
-    chiFree(sink);
+static ChiSink* sinkFileNew(ChiFile handle, void (*close)(ChiSink*)) {
+    SinkFile* s = chiAllocObj(SinkFile);
+    s->handle = handle;
+    s->base.write = sinkFileWrite;
+    s->base.flush = sinkNullFlush;
+    s->base.close = close;
+    return &s->base;
 }
 
-static void sinkFileUncheckedFlush(ChiSink* sink) {
-    fflush(((SinkFile*)sink)->fp);
-}
-
-static void sinkFileUncheckedWrite(ChiSink* sink, const void* buf, size_t size) {
-    fwrite(buf, 1, size, ((SinkFile*)sink)->fp);
-}
-
-static void sinkColorWrite(ChiSink* sink, const void* buf, size_t size) {
-    ChiSink* out = ((SinkColor*)sink)->sink;
+static CHI_WU bool sinkColorWrite(ChiSink* sink, const void* buf, size_t size) {
+    char staticDst[512], *dst = size <= sizeof (staticDst) ? staticDst : (char*)chiAlloc(size), *t = dst;
     const char* q = (const char*)buf, *end = q + size;
     while (q < end) {
-        const char* p = (const char*)memchr(q, '\e', (size_t)(end - q));
+        char* p = (char*)memccpy(t, q, '\033', (size_t)(end - q));
         if (!p) {
-            chiSinkWrite(out, q, (size_t)(end - q));
+            t += (size_t)(end - q);
             break;
         }
 
-        chiSinkWrite(out, q, (size_t)(p - q));
-        q = p + 1;
+        q += (size_t)(p - t);
+        t = p - 1;
 
         if (q < end && *q == '[') { // ansi sequence
             ++q;
@@ -177,247 +182,135 @@ static void sinkColorWrite(ChiSink* sink, const void* buf, size_t size) {
             }
         }
     }
+    bool res = sinkTryWrite(((SinkProxy*)sink)->sink, dst, (size_t)(t - dst));
+    if (dst != staticDst)
+        chiFree(dst);
+    return res;
 }
 
-static void sinkColorClose(ChiSink* sink) {
-    chiSinkClose(((SinkColor*)sink)->sink);
-    chiFree(sink);
-}
-
-static void sinkColorFlush(ChiSink* sink) {
-    chiSinkFlush(((SinkColor*)sink)->sink);
-}
-
-static ChiSink* sinkColorNew(ChiSink* sink, int fd, ChiSinkColor color) {
+static ChiSink* sinkColorNew(ChiSink* sink, ChiFile handle, ChiSinkColor color) {
     if (!CHI_COLOR_ENABLED)
         return sink;
     if (color == CHI_SINK_COLOR_AUTO)
-        color = chiTerminal(fd) ? CHI_SINK_COLOR_ON : CHI_SINK_COLOR_OFF;
+        color = chiFileTerminal(handle) ? CHI_SINK_COLOR_ON : CHI_SINK_COLOR_OFF;
     if (color != CHI_SINK_COLOR_OFF)
         return sink;
-
-    SinkColor* s = chiAllocObj(SinkColor);
+    SinkProxy* s = chiAllocObj(SinkProxy);
     s->sink = sink;
     s->base.write = sinkColorWrite;
-    s->base.close = sinkColorClose;
-    s->base.flush = sinkColorFlush;
+    s->base.close = sinkProxyClose;
+    s->base.flush = sinkProxyFlush;
     return &s->base;
 }
 
-ChiSink* chiStderrColor(ChiSinkColor color) {
-    return sinkColorNew(chiStderr, STDERR_FILENO, color);
+static ChiSink* sinkLockNew(ChiSink* sink, size_t cap) {
+    SinkLock* s = (SinkLock*)chiAlloc(sizeof (SinkLock) + cap);
+    chiMutexInit(&s->mutex);
+    s->proxy.sink = sink;
+    s->proxy.base.write = sinkLockWrite;
+    s->proxy.base.close = sinkLockClose;
+    s->proxy.base.flush = sinkLockFlush;
+    atomic_store_explicit(&s->used, 0, memory_order_relaxed);
+    s->capacity = cap;
+    return &s->proxy.base;
 }
 
-ChiSink* chiStdoutColor(ChiSinkColor color) {
-    return sinkColorNew(chiStdout, STDOUT_FILENO, color);
+static ChiSink* sinkBufferNew(ChiSink* sink, size_t cap) {
+    SinkBuffer* s = (SinkBuffer*)chiAlloc(sizeof (SinkBuffer) + cap);
+    s->proxy.sink = sink;
+    s->proxy.base.write = sinkBufferWrite;
+    s->proxy.base.close = sinkProxyClose;
+    s->proxy.base.flush = sinkBufferFlush;
+    s->used = 0;
+    s->capacity = cap;
+    return &s->proxy.base;
 }
 
-const char* chiZstdPath(void) {
-    static const char* zstdPath = (const char*)-1;
-    if (zstdPath == (const char*)-1) {
-        const char* path = chiGetEnv("CHI_ZSTD");
-        if (!path)
-            path = CHI_ZSTD;
-        zstdPath = chiFilePerm(path, CHI_FILE_EXECUTABLE) ? path : 0;
-    }
-    return zstdPath;
-}
+ChiSink* chiSinkFileTryNew(const char* file, size_t buffer, bool locked, ChiSinkColor color) {
+    ChiFile handle;
+    bool close = true;
 
-static ChiSink* sinkFileTryNew(const char* file, ChiSinkColor color) {
-    FILE* fp = 0;
-    void (*close)(ChiSink*) = sinkFileClose;
-
-    if (CHI_SINK_FD_ENABLED && strstarts(file, "fd:") && chiDigit(file[3]) && !file[4]) {
-        fp = chiOpenFd(file[3] - '0');
-    } else if (CHI_SINK_ZSTD_ENABLED && strends(file, ".zst") && chiZstdPath()) {
-        CHI_STRING_SINK(cmd);
-        chiSinkFmt(cmd, "%s -q -1 -o %qs", chiZstdPath(), file);
-        fp = chiOpenPipe(chiSinkCString(cmd));
-        close = sinkPipeClose;
+    if (streq(file, "stdout")) {
+        handle = CHI_FILE_STDOUT;
+        close = false;
+    } else if (streq(file, "stderr")) {
+        handle = CHI_FILE_STDERR;
+        close = false;
+    } else if (strstarts(file, "fd:") && chiDigit(file[3]) && !file[4]) {
+        handle = chiFileOpenFd(file[3] - '0');
     } else {
-        fp = chiFileOpenWrite(file);
+        handle = chiFileOpen(file);
     }
-    if (!fp) {
+
+    if (chiFileNull(handle)) {
         chiWarn("Could not open file '%s' for writing: %m", file);
         return 0;
     }
 
-    SinkFile* s = chiAllocObj(SinkFile);
-    s->fp = fp;
-    s->base.write = sinkFileWrite;
-    s->base.flush = sinkFileFlush;
-    s->base.close = close;
-    return sinkColorNew(&s->base, fileno(fp), color);
-}
-
-static void lazySinkInit(SinkFile* sink, FILE* fp) {
-    sink->fp = fp;
-    sink->base.flush = sinkFileUncheckedFlush;
-    sink->base.write = sinkFileUncheckedWrite;
-}
-
-#define LAZY_SINK(Name, name)                                           \
-    static void name##_sinkFlush(ChiSink* sink) {                       \
-        lazySinkInit((SinkFile*)sink, name);                            \
-        chiSinkFlush(sink);                                             \
-    }                                                                   \
-    static void name##_sinkWrite(ChiSink* sink, const void* buf, size_t size) { \
-        lazySinkInit((SinkFile*)sink, name);                            \
-        chiSinkWrite(sink, buf, size);                                  \
-    }                                                                   \
-    static SinkFile name##_sink =                                       \
-        { .base = { .write = name##_sinkWrite,                          \
-                    .flush = name##_sinkFlush,                          \
-                    .close = sinkNullNop },                             \
-        };                                                              \
-    ChiSink *const Name = &name##_sink.base;
-
-LAZY_SINK(chiStderr, stderr)
-LAZY_SINK(chiStdout, stdout)
-#elif defined(CHI_STANDALONE_SANDBOX)
-typedef struct {
-    ChiSink  base;
-    uint32_t stream;
-} SinkStream;
-
-static void sinkStreamWrite(ChiSink* sink, const void* buf, size_t size) {
-    sb_stream_write_all(((SinkStream*)sink)->stream, buf, size);
-}
-
-static SinkStream sinkOut =
-    { .base = { .write = sinkStreamWrite,
-                .flush = sinkNullNop,
-                .close = sinkNullNop },
-      .stream = SB_STREAM_OUT,
-    };
-
-static SinkStream sinkErr =
-    { .base = { .write = sinkStreamWrite,
-                .flush = sinkNullNop,
-                .close = sinkNullNop },
-      .stream = SB_STREAM_ERR,
-    };
-
-static ChiSink* sinkFileTryNew(const char* file, ChiSinkColor CHI_UNUSED(color)) {
-    if (chiDigit(file[0]) && !file[1]) {
-        uint32_t id = (uint32_t)(file[0] - '0');
-        if (id < sb_info->stream_count && (sb_info->stream[id].mode & SB_MODE_WRITE)) {
-            SinkStream* s = chiAllocObj(SinkStream);
-            s->stream = id;
-            s->base.write = sinkStreamWrite;
-            s->base.flush = sinkNullNop;
-            s->base.close = sinkFree;
-            return &s->base;
-        }
-    }
-    chiWarn("Could not open file '%s' for writing", file);
-    return 0;
-}
-
-ChiSink* chiStderrColor(ChiSinkColor CHI_UNUSED(color)) {
-    return chiStderr;
-}
-
-ChiSink* chiStdoutColor(ChiSinkColor CHI_UNUSED(color)) {
-    return chiStdout;
-}
-
-ChiSink *const chiStdout = &sinkOut.base, *const chiStderr = &sinkErr.base;
-#elif defined(CHI_STANDALONE_WASM)
-typedef struct {
-    ChiSink  base;
-    uint32_t fd;
-} SinkWasm;
-
-static void sinkWasmWrite(ChiSink* sink, const void* buf, size_t size) {
-    wasm_sink_write_all(((SinkWasm*)sink)->fd, buf, size);
-}
-
-static void sinkWasmClose(ChiSink* sink) {
-    wasm_sink_close(((SinkWasm*)sink)->fd);
-    chiFree(sink);
-}
-
-static SinkWasm sinkOut =
-    { .base = { .write = sinkWasmWrite,
-                .flush = sinkNullNop,
-                .close = sinkNullNop },
-      .fd = 1,
-    };
-
-static SinkWasm sinkErr =
-    { .base = { .write = sinkWasmWrite,
-                .flush = sinkNullNop,
-                .close = sinkNullNop },
-      .fd = 2,
-    };
-
-static ChiSink* sinkFileTryNew(const char* file, ChiSinkColor CHI_UNUSED(color)) {
-    uint32_t fd = wasm_sink_open(file);
-    if (fd == (uint32_t)-1) {
-        chiWarn("Could not open file '%s' for writing", file);
+    if (chiFileTerminal(handle) && color == CHI_SINK_BINARY) {
+        chiWarn("Refusing to write binary data to '%s'", file);
+        if (close)
+            chiFileClose(handle);
         return 0;
     }
-    SinkWasm* s = chiAllocObj(SinkWasm);
-    s->fd = fd;
-    s->base.write = sinkWasmWrite;
-    s->base.flush = sinkNullNop;
-    s->base.close = sinkWasmClose;
-    return &s->base;
+
+    ChiSink* sink = sinkFileNew(handle, close ? sinkFileClose : sinkFree);
+    sink = locked ? sinkLockNew(sink, buffer) : sinkBufferNew(sink, buffer);
+    return sinkColorNew(sink, handle, color);
 }
 
-ChiSink* chiStderrColor(ChiSinkColor CHI_UNUSED(color)) {
-    return chiStderr;
+ChiSink* chiSinkColor(ChiSinkColor color) {
+    return sinkColorNew(&_chiStdout.base, CHI_FILE_STDOUT, color);
 }
 
-ChiSink* chiStdoutColor(ChiSinkColor CHI_UNUSED(color)) {
-    return chiStdout;
+static CHI_WU bool sinkStdoutInit(ChiSink* sink, const void* buf, size_t size) {
+    SinkProxy* s = (SinkProxy*)sink;
+    s->sink = sinkLockNew(sinkFileNew(CHI_FILE_STDOUT, sinkFree), CHI_KiB(8));
+    s->base.flush = sinkProxyFlush;
+    s->base.write = sinkProxyWrite;
+    return sinkProxyWrite(sink, buf, size);
 }
 
-ChiSink *const chiStdout = &sinkOut.base, *const chiStderr = &sinkErr.base;
-#endif
-
-ChiSink* chiSinkFileTryNew(const char* file, ChiSinkColor color) {
-    if (streq(file, "stdout") || streq(file, "stderr"))
-        return streq(file, "stderr") ? chiStderrColor(color) : chiStdoutColor(color);
-    return sinkFileTryNew(file, color);
+static CHI_WU bool sinkStderrWrite(ChiSink* sink, const void* buf, size_t size) {
+    CHI_IGNORE_RESULT(chiFileWrite(((SinkFile*)sink)->handle, buf, size));
+    return true;
 }
 
-ChiSink* chiSinkLockNew(ChiSink* sink, size_t cap) {
-    if (!sink)
-        return 0;
-    SinkLock* s = (SinkLock*)chiAlloc(sizeof (SinkLock) + cap);
-    chiRWLockInit(&s->lock);
-    s->sink = sink;
-    s->used = 0;
-    s->capacity = cap;
-    s->base.write = sinkLockWrite;
-    s->base.close = sinkLockClose;
-    s->base.flush = sinkLockFlush;
-    return &s->base;
+static CHI_WU bool sinkStderrInit(ChiSink* sink, const void* buf, size_t size) {
+    ((SinkFile*)sink)->handle = CHI_FILE_STDERR;
+    sink->write = sinkStderrWrite;
+    return sinkStderrWrite(sink, buf, size);
 }
 
-ChiSink* chiSinkBufferNew(ChiSink* sink, size_t cap) {
-    if (!cap || !sink)
-        return sink;
-    SinkBuffer* s = (SinkBuffer*)chiAlloc(sizeof (SinkBuffer) + cap);
-    s->sink = sink;
-    s->used = 0;
-    s->capacity = cap;
-    s->base.write = sinkBufferWrite;
-    s->base.close = sinkBufferClose;
-    s->base.flush = sinkBufferFlush;
-    return &s->base;
+CHI_INTERN ChiSink _chiSinkNull =
+    { .write = sinkNullWrite,
+      .flush = sinkNullFlush,
+      .close = sinkNullClose };
+CHI_INTERN SinkProxy _chiStdout =
+    { .base = { .write = sinkStdoutInit,
+                .flush = sinkNullFlush,
+                .close = sinkNullClose } };
+CHI_INTERN SinkFile _chiStderr =
+    { .base = { .write = sinkStderrInit,
+                .flush = sinkNullFlush,
+                .close = sinkNullClose }, };
+
+CHI_DESTRUCTOR(sink) {
+    if (_chiStdout.sink) {
+        chiSinkClose(&_chiStdout.base);
+        CHI_POISON_STRUCT(&_chiStdout, CHI_POISON_DESTROYED);
+    }
 }
 
-#define NOVEC
+#define VEC_NOSTRUCT
 #define VEC ChiByteVec
 #define VEC_TYPE uint8_t
 #define VEC_PREFIX byteVec
-#include "vector.h"
+#include "generic/vec.h"
 
-static void sinkStringWrite(ChiSink* sink, const void* buf, size_t size) {
-    byteVecAppend(&((ChiSinkString*)sink)->vec, (const uint8_t*)buf, size);
+static CHI_WU bool sinkStringWrite(ChiSink* sink, const void* buf, size_t size) {
+    byteVecAppendMany(&((ChiSinkString*)sink)->vec, (const uint8_t*)buf, size);
+    return true;
 }
 
 static void sinkStringClose(ChiSink* sink) {
@@ -443,10 +336,10 @@ const char* chiSinkCString(ChiSink* sink) {
 }
 
 ChiSink* chiSinkStringInit(ChiSinkString* s) {
-    CHI_CLEAR(&s->vec);
+    CHI_ZERO_STRUCT(&s->vec);
     s->base.write = sinkStringWrite;
     s->base.close = sinkStringClose;
-    s->base.flush = sinkNullNop;
+    s->base.flush = sinkNullFlush;
     return &s->base;
 }
 
@@ -457,35 +350,37 @@ ChiSink* chiSinkStringNew(void) {
     return &s->base;
 }
 
-static ChiSink sinkNull =
-    { .write = sinkNullWrite,
-      .flush = sinkNullNop,
-      .close = sinkNullNop
-    };
-ChiSink *const chiSinkNull = &sinkNull;
-
-static void sinkMemWrite(ChiSink* sink, const void* buf, size_t size) {
+static CHI_WU bool sinkMemWrite(ChiSink* sink, const void* buf, size_t size) {
     ChiSinkMem* s = (ChiSinkMem*)sink;
     size_t n = s->used + size < s->capacity ? size : (size_t)(s->capacity - s->used);
     memcpy(s->buf + s->used, buf, n);
     s->used += n;
+    return true;
 }
 
 ChiSink* chiSinkMemInit(ChiSinkMem* s, void* buf, size_t cap) {
     s->base.write = sinkMemWrite;
-    s->base.close = sinkNullNop;
-    s->base.flush = sinkNullNop;
+    s->base.close = sinkNullClose;
+    s->base.flush = sinkNullFlush;
     s->buf = (char*)buf;
     s->used = 0;
     s->capacity = cap;
     return &s->base;
 }
 
-ChiSink* chiSinkMemNew(void* buf, size_t cap) {
-    ChiSinkMem* s = chiAllocObj(ChiSinkMem);
-    chiSinkMemInit(s, buf, cap);
-    s->base.close = sinkFree;
-    return &s->base;
+void chiSinkFlush(ChiSink* sink) {
+    if (!sinkTryFlush(sink))
+        chiErr("Failed to flush sink: %m");
+}
+
+void chiSinkWrite(ChiSink* sink, const void* buf, size_t size) {
+    if (!sinkTryWrite(sink, buf, size))
+        chiErr("Failed to write to sink: %m");
+}
+
+void chiSinkClose(ChiSink* sink) {
+    CHI_IGNORE_RESULT(sinkTryFlush(sink));
+    sinkCloseNoFlush(sink);
 }
 
 /**
@@ -521,8 +416,8 @@ size_t chiSinkWriteq(ChiSink* sink, const uint8_t* bytes, size_t size) {
             } else {
                 out[n++] = '\\';
                 out[n++] = 'x';
-                out[n++] = chiHexDigit[(c / 16) & 15];
-                out[n++] = chiHexDigit[c & 15];
+                out[n++] = chiHexDigits[(c / 16) & 15];
+                out[n++] = chiHexDigits[c & 15];
             }
         }
     }
@@ -539,19 +434,12 @@ size_t chiSinkWriteh(ChiSink* sink, const void* buf, size_t size) {
             chiSinkWrite(sink, out, n);
             n = 0;
         }
-        out[n++] = chiHexDigit[(*p / 16) & 15];
-        out[n++] = chiHexDigit[*p & 15];
+        out[n++] = chiHexDigits[(*p / 16) & 15];
+        out[n++] = chiHexDigits[*p & 15];
     }
     out[n++] = '"';
     chiSinkWrite(sink, out, n);
     return 2 * size + 2;
-}
-
-size_t chiSinkPuti(ChiSink* sink, int64_t x) {
-    char buf[CHI_INT_BUFSIZE];
-    size_t n = (size_t)(chiShowInt(buf, x) - buf);
-    chiSinkWrite(sink, buf, n);
-    return n;
 }
 
 size_t chiSinkPutu(ChiSink* sink, uint64_t x) {
@@ -561,17 +449,15 @@ size_t chiSinkPutu(ChiSink* sink, uint64_t x) {
     return n;
 }
 
-size_t chiSinkPutx(ChiSink* sink, uint64_t x) {
-    char buf[CHI_INT_BUFSIZE];
-    size_t n = (size_t)(chiShowHexUInt(buf, x) - buf);
-    chiSinkWrite(sink, buf, n);
-    return n;
-}
-
 CHI_COLD void chiSinkWarnv(ChiSink* sink, const char* fmt, va_list ap) {
-    chiSinkPuts(sink, "Error: ");
-    chiSinkFmtv(sink, fmt, ap);
-    chiSinkPutc(sink, '\n');
+    char buf[256];
+    ChiSinkMem s;
+    chiSinkMemInit(&s, buf, sizeof (buf));
+    chiSinkPuts(&s.base, "Error: ");
+    chiSinkFmtv(&s.base, fmt, ap);
+    s.used = CHI_MIN(s.capacity - 1, s.used);
+    chiSinkPutc(&s.base, '\n');
+    chiSinkWrite(sink, s.buf, s.used);
 }
 
 CHI_COLD void chiSinkWarn(ChiSink* sink, const char* fmt, ...) {

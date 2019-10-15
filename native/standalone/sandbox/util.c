@@ -8,7 +8,7 @@ void sb_stream_write_all(uint32_t id, const void* buf, size_t size) {
         if (n)
             written += n;
         else
-            sb_yield(~0ULL, &(struct sb_mask){ .stream_write = 1U << id });
+            sb_yield(~UINT64_C(0), &(struct sb_mask){ .stream_write = 1U << id });
     }
 }
 
@@ -19,7 +19,7 @@ void sb_stream_read_all(uint32_t id, void* buf, size_t size) {
         if (n)
             read += n;
         else
-            sb_yield(~0ULL, &(struct sb_mask){ .stream_read = 1U << id });
+            sb_yield(~UINT64_C(0), &(struct sb_mask){ .stream_read = 1U << id });
     }
 }
 

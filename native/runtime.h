@@ -1,8 +1,7 @@
 #pragma once
 
+#include "gc.h"
 #include "processor.h"
-#include "heap.h"
-#include "rtoption.h"
 #include "stats.h"
 
 /**
@@ -10,27 +9,27 @@
  * The entry points are Chili closures.
  */
 typedef struct {
-    Chili exit;
+    Chili start;
     Chili unhandled;
-    Chili par;
-    Chili scheduler;
-    Chili interrupt;
+    Chili blackhole;
+    Chili timerInterrupt;
+    Chili userInterrupt;
 } ChiEntryPoint;
 
 /**
  * Runtime hooks
+ * Hooks with even id are executed in reverse order.
  */
 typedef enum {
-    CHI_HOOK_RUNTIME_DESTROY,
-    CHI_HOOK_PROC_START,
-    CHI_HOOK_PROC_STOP,
-    CHI_HOOK_WORKER_START,
-    CHI_HOOK_WORKER_STOP,
-    _CHI_HOOK_COUNT,
+    CHI_HOOK_PROC_START      = 0,
+    CHI_HOOK_PROC_STOP       = 1, // reverse
+    CHI_HOOK_PROC            = CHI_HOOK_PROC_STOP,
+    CHI_HOOK_WORKER_START    = 2,
+    CHI_HOOK_WORKER_STOP     = 3, // reverse
+    CHI_HOOK_COUNT           = 4,
 } ChiHookType;
 
-typedef void (*ChiHookFn)(ChiWorker*, ChiHookType);
-typedef struct ChiLocInfo_ ChiLocInfo;
+typedef void (*ChiHookFn)(ChiHookType, void*);
 typedef struct ChiEventState_ ChiEventState;
 typedef struct ChiProfiler_ ChiProfiler;
 typedef struct ChiModuleEntry_ ChiModuleEntry;
@@ -54,10 +53,11 @@ typedef struct {
 } ChiHookVec;
 
 typedef struct {
-    ChiSigHandler     sigHandler[_CHI_SIG_MAX + 1];
-    ChiTimer          timer;
-    _Atomic(uint32_t) userInterrupt;
-} ChiInterruptSupport;
+    ChiSigHandler sigHandler;
+    ChiTimer      timer;
+} ChiInterrupts;
+
+typedef void (*ChiExitHandler)(int);
 
 /**
  * Main runtime object. The whole global
@@ -69,50 +69,47 @@ typedef struct {
  * manager and the signal handlers.
  */
 typedef struct ChiRuntime_ {
-    int32_t              exitCode;
-    _Atomic(bool)        heapOverflow;
-    _Atomic(size_t)      heapSize;
     struct {
         ChiTime          start, end;
     } timeRef;
-    ChiInterruptSupport  interruptSupport[CHI_SYSTEM_HAS_INTERRUPT];
-    ChiHookVec           hooks[_CHI_HOOK_COUNT];
-    _Atomic(uint32_t)    nextTid, nextWid, threadCount;
+    struct {
+        ChiMutex         mutex;
+        ChiCond          cond;
+        CHI_CHOICE(CHI_SYSTEM_HAS_TASK, ChiProcessorList list, ChiProcessor single);
+    } proc;
+    CHI_IF(CHI_SYSTEM_HAS_TASK, _Atomic(uint32_t) nextWid;)
+    CHI_IF(CHI_SYSTEM_HAS_INTERRUPT, ChiInterrupts interrupts;)
+    CHI_IF(CHI_EVENT_ENABLED, ChiEventState* eventState;)
+    CHI_IF(CHI_PROF_ENABLED, ChiProfiler* profiler;)
+    CHI_IF(CHI_STATS_ENABLED, ChiStats stats;)
+    ChiHookVec           hooks[CHI_HOOK_COUNT];
     ChiGC                gc;
-    ChiEventState*       eventState;
-    ChiProfiler*         profiler;
-    ChiStats             stats;
     ChiEntryPoint        entryPoint;
-    Chili                blackhole, switchThreadClos, enterContClos;
-    ChiProcessorManager  procMan;
     ChiHeap              heap;
-    ChiTenure            tenure;
-    ChiBlockManager      blockTemp;
+    _Atomic(size_t)      totalHeapChunkSize;
     ChiModuleHash        moduleHash;
+    ChiRuntimeOption     option;
     char**               argv;
     uint32_t             argc;
-    ChiRuntimeOption     option;
+    int32_t              exitCode;
+    ChiExitHandler       exitHandler;
+    ChiTrigger           heapOverflow;
 } ChiRuntime;
 
-CHI_CONT_DECL(extern, chiStartupEndCont)
-CHI_CONT_DECL(extern, chiSetupEntryPointsCont)
-CHI_CONT_DECL(extern, chiRunMainCont)
-CHI_CONT_DECL(extern, chiBlackhole)
-CHI_CONT_DECL(extern, chiShowAsyncException)
-CHI_CONT_DECL(extern, chiIdentity)
-CHI_CONT_DECL(extern, chiSwitchThread)
-CHI_CONT_DECL(extern, chiEnterCont)
-CHI_CONT_DECL(extern, chiThunkThrow)
-CHI_CONT_DECL(extern, chiEntryPointExitDefault)
-CHI_CONT_DECL(extern, chiEntryPointUnhandledDefault)
-CHI_CONT_DECL(extern, chiJumpCont)
-CHI_CONT_DECL(extern, chiExitDefault)
+CHI_INTERN_CONT_DECL(chiEntryPointUnhandledDefault)
+CHI_INTERN_CONT_DECL(chiIdentity)
+CHI_INTERN_CONT_DECL(chiJumpCont)
+CHI_INTERN_CONT_DECL(chiRestoreCont)
+CHI_INTERN_CONT_DECL(chiRunMainCont)
+CHI_INTERN_CONT_DECL(chiSetupEntryPointsCont)
+CHI_INTERN_CONT_DECL(chiShowAsyncException)
+CHI_INTERN_CONT_DECL(chiStartupEndCont)
+CHI_INTERN_CONT_DECL(chiThunkBlackhole)
+CHI_INTERN_CONT_DECL(chiThunkForward)
 
-void chiHook(ChiRuntime*, ChiHookType, ChiHookFn);
-void chiHookRun(ChiWorker*, ChiHookType);
-void chiInit(ChiRuntime*);
-void chiDestroy(ChiRuntime*);
-_Noreturn void chiRun(ChiRuntime*, int, char**);
-_Noreturn void chiEnter(void);
-_Noreturn void chiWasmContinue(void);
-_Noreturn void chiRuntimeMain(ChiRuntime*, int, char**);
+CHI_INTERN void chiHook(ChiRuntime*, ChiHookType, ChiHookFn);
+CHI_INTERN void chiHookRun(ChiHookType, void*);
+CHI_INTERN _Noreturn void chiRuntimeMain(ChiRuntime*, int, char**, ChiExitHandler);
+CHI_INTERN _Noreturn void chiRuntimeEnter(ChiRuntime*, int, char**);
+CHI_INTERN void chiRuntimeInit(ChiRuntime*, ChiExitHandler);
+CHI_INTERN void chiRuntimeDestroy(ChiProcessor*);

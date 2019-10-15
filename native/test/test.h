@@ -1,10 +1,20 @@
 #pragma once
 
-#include "../sink.h"
 #include "../rand.h"
+#include "../sink.h"
 
-typedef void TestFn(ChiRandState, bool*);
-typedef void BenchFn(ChiRandState, uint32_t);
+typedef struct {
+    ChiRandState rand;
+    bool failed;
+} TestState;
+
+typedef struct {
+    ChiRandState rand;
+    uint32_t run;
+} BenchState;
+
+typedef void TestFn(TestState*);
+typedef void BenchFn(BenchState*);
 
 typedef struct {
     BenchFn*    fn;
@@ -12,20 +22,37 @@ typedef struct {
     uint32_t    runs;
 } Bench;
 
-#define RAND (chiRand(_randState))
+#define RAND (chiRand(_state->rand))
+
+#define BENCHRUN (_state->run)
 
 #define TEST(name)                                                      \
     static TestFn test_##name;                                          \
     static TestFn *_register_test_##name                                \
-    __attribute__ ((section("test_registry"), used)) = test_##name;     \
-    static void test_##name(ChiRandState _randState __attribute__ ((unused)), bool* _testFailed __attribute__ ((unused)))
+    __attribute__ ((section("chi_test_registry"), used)) = test_##name; \
+    static void test_##name(TestState* _state __attribute__ ((unused)))
 
 #define BENCH(name, runs)                                               \
     static BenchFn bench_##name;                                        \
     static Bench _bench_##name = { bench_##name, #name, runs };         \
     static Bench* _register_bench_##name                                \
-    __attribute__ ((section("bench_registry"), used)) = &_bench_##name; \
-    static void bench_##name(ChiRandState _randState __attribute__ ((unused)), uint32_t benchRun __attribute__ ((unused)))
+    __attribute__ ((section("chi_bench_registry"), used)) = &_bench_##name; \
+    static void bench_##name(BenchState* _state __attribute__ ((unused)))
+
+#define SUBTEST(name, ...)                                              \
+    static void subtest_##name(TestState* _state __attribute__ ((unused)), ##__VA_ARGS__)
+
+#define RUNSUBTEST(name, ...)                   \
+    ({                                          \
+        subtest_##name(_state, ##__VA_ARGS__);  \
+        if (_state->failed)                     \
+            return;                             \
+    })
+
+#define SUBBENCH(name, ...)                                             \
+    static void subbench_##name(BenchState* _state __attribute__ ((unused)), ##__VA_ARGS__)
+
+#define RUNSUBBENCH(name, ...) subbench_##name(_state, ##__VA_ARGS__)
 
 #define ASSERT(cond)                                                    \
     ({                                                                  \
@@ -33,7 +60,7 @@ typedef struct {
             chiSinkFmt(chiStderr,                                       \
                        "%s:%d: %s: Assertion `%s' failed.\n",           \
                        __FILE__, __LINE__, __func__, #cond);            \
-            *_testFailed = true;                                       \
+            _state->failed = true;                                      \
             return;                                                     \
         }                                                               \
     })
@@ -81,7 +108,7 @@ CHI_INL double   _promote_float(float x)     { return (double)x; }
                           _ASSERT_CMP(_ASSERT_PROMOTE(_a)),             \
                           __FILE__, __LINE__, __func__, #a, #cmp, #b,   \
                           _ASSERT_PROMOTE(_a), #cmp, _ASSERT_PROMOTE(_b)); \
-            *_testFailed = true;                                        \
+            _state->failed = true;                                      \
             return;                                                     \
         }                                                               \
     })

@@ -1,10 +1,15 @@
 #pragma once
 
-#include "list.h"
 #include "event/defs.h"
+#include "option.h"
 
-#define CHI_FOREACH_CHUNK(chunk, chunklist) CHI_LIST_FOREACH(ChiChunk, list, chunk, chunklist)
-#define CHI_FOREACH_CHUNK_NODELETE(chunk, chunklist) CHI_LIST_FOREACH_NODELETE(ChiChunk, list, chunk, chunklist)
+#define CHI_FOREACH_CHUNK(chunk, chunklist) CHI_LIST_FOREACH(ChiChunk, link, chunk, chunklist)
+#define CHI_FOREACH_CHUNK_NODELETE(chunk, chunklist) CHI_LIST_FOREACH_NODELETE(ChiChunk, link, chunk, chunklist)
+
+typedef struct ChiChunkLink_ ChiChunkLink;
+struct ChiChunkLink_ { ChiChunkLink *prev, *next; };
+typedef struct ChiChunkAddrLink_ ChiChunkAddrLink;
+struct ChiChunkAddrLink_ { ChiChunkAddrLink *prev, *next; };
 
 /**
  * The chunk allocator provides chunks with sizes between CHI_CHUNK_MIN_SIZE and CHI_CHUNK_MAX_SIZE.
@@ -20,28 +25,28 @@
  * and returned lazily in a background thread, since unmapping
  * can be slow. Huge pages are used if the operating system supports them.
  */
-typedef struct ChiChunk_ {
-    void*     start;
-    ChiList   list;
-    size_t    size;
-    ChiMillis _timeout;
-#if CHI_CHUNK_ARENA_ENABLED
-    bool      _used;
-    ChiList   _addrList;
-#endif
+typedef struct {
+    void*        start;
+    size_t       size;
+    ChiChunkLink link;
+    CHI_IF(CHI_UNMAP_TASK_ENABLED, ChiMillis _unmapTimeout;)
+    CHI_IF(CHI_CHUNK_ARENA_ENABLED, ChiChunkAddrLink addrLink; bool _used;)
 } ChiChunk;
 
+#define LIST_PREFIX chiChunkList
+#define LIST_ELEM   ChiChunk
+#include "generic/list.h"
+
 typedef struct {
-    uintptr_t arenaStart;
-    size_t arenaSize;
+    CHI_IF(CHI_CHUNK_ARENA_ENABLED, uintptr_t arenaStart; size_t arenaSize;)
+    CHI_IF(CHI_UNMAP_TASK_ENABLED, ChiMillis unmapTimeout;)
     bool smallPages;
     bool noUnmap;
-    ChiMillis unmapTimeout;
 } ChiChunkOption;
 
-void chiChunkSetup(const ChiChunkOption*);
-CHI_WU ChiChunk* chiChunkNew(size_t, size_t);
-void chiChunkFree(ChiChunk*);
+CHI_INTERN void chiChunkSetup(const ChiChunkOption*);
+CHI_INTERN CHI_WU ChiChunk* chiChunkNew(size_t, size_t);
+CHI_INTERN void chiChunkFree(ChiChunk*);
 
 CHI_INL CHI_WU bool chiChunkSizeValid(size_t size) {
     return size >= CHI_CHUNK_MIN_SIZE
@@ -49,14 +54,14 @@ CHI_INL CHI_WU bool chiChunkSizeValid(size_t size) {
         && !(size & (CHI_CHUNK_MIN_SIZE - 1));
 }
 
-CHI_INL ChiChunk* chiChunkPop(ChiList* list) {
-    return CHI_OUTER(ChiChunk, list, chiListPop(list));
-}
-
-#define CHI_DEFAULT_CHUNK_OPTION \
-    { \
-        .unmapTimeout  = (ChiMillis){1000}, \
-        .smallPages    = false, \
-        .arenaStart = CHI_CHUNK_START, \
-        .arenaSize = CHI_CHUNK_MAX_SIZE \
+#define CHI_DEFAULT_CHUNK_OPTION                    \
+    {                                               \
+        .smallPages = false,                        \
+        CHI_IF(CHI_UNMAP_TASK_ENABLED,              \
+               .unmapTimeout  = chiMillis(100),)    \
+        CHI_IF(CHI_CHUNK_ARENA_ENABLED,             \
+               .arenaStart = CHI_CHUNK_START,       \
+               .arenaSize = CHI_CHUNK_MAX_SIZE)     \
     }
+
+CHI_EXTERN const ChiOption chiChunkOptionList[];

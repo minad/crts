@@ -387,8 +387,8 @@ int32Or w8:res r8:a0 r8:a1 {
     *res = chiFromInt32(chi_Prim_int32Or(chiToInt32(a0), chiToInt32(a1)));
 }
 // Inline primitive
-int32Quot w8:res r8:a0 r8:a1 {
-    *res = chiFromInt32(chi_Prim_int32Quot(chiToInt32(a0), chiToInt32(a1)));
+int32Quo w8:res r8:a0 r8:a1 {
+    *res = chiFromInt32(chi_Prim_int32Quo(chiToInt32(a0), chiToInt32(a1)));
 }
 // Inline primitive
 int32Rem w8:res r8:a0 r8:a1 {
@@ -491,8 +491,8 @@ int64Or w8:res r8:a0 r8:a1 {
     *res = chiFromInt64(chi_Prim_int64Or(chiToInt64(a0), chiToInt64(a1)));
 }
 // Inline primitive
-int64Quot w8:res r8:a0 r8:a1 {
-    *res = chiFromInt64(chi_Prim_int64Quot(chiToInt64(a0), chiToInt64(a1)));
+int64Quo w8:res r8:a0 r8:a1 {
+    *res = chiFromInt64(chi_Prim_int64Quo(chiToInt64(a0), chiToInt64(a1)));
 }
 // Inline primitive
 int64Rem w8:res r8:a0 r8:a1 {
@@ -595,8 +595,8 @@ intOr w8:res r8:a0 r8:a1 {
     *res = chi_Prim_intOr(a0, a1);
 }
 // Inline primitive
-intQuot w8:res r8:a0 r8:a1 {
-    *res = chi_Prim_intQuot(a0, a1);
+intQuo w8:res r8:a0 r8:a1 {
+    *res = chi_Prim_intQuo(a0, a1);
 }
 // Inline primitive
 intRem w8:res r8:a0 r8:a1 {
@@ -659,6 +659,18 @@ stringCursorEq w8:res r8:a0 r8:a1 {
     *res = chiFromBool(chi_Prim_stringCursorEq(chiToUInt32(a0), chiToUInt32(a1)));
 }
 // Inline primitive
+stringCursorLe w8:res r8:a0 r8:a1 {
+    *res = chiFromBool(chi_Prim_stringCursorLe(chiToUInt32(a0), chiToUInt32(a1)));
+}
+// Inline primitive
+stringCursorLt w8:res r8:a0 r8:a1 {
+    *res = chiFromBool(chi_Prim_stringCursorLt(chiToUInt32(a0), chiToUInt32(a1)));
+}
+// Inline primitive
+stringCursorNe w8:res r8:a0 r8:a1 {
+    *res = chiFromBool(chi_Prim_stringCursorNe(chiToUInt32(a0), chiToUInt32(a1)));
+}
+// Inline primitive
 stringCursorGet w8:res r8:a0 r8:a1 {
     *res = chiFromChar(chi_Prim_stringCursorGet(a0, chiToUInt32(a1)));
 }
@@ -691,8 +703,8 @@ stringNull w8:res r8:a0 {
     *res = chiFromBool(chi_Prim_stringNull(a0));
 }
 // Inline primitive
-substring w8:res r8:a0 r8:a1 r8:a2 {
-    *res = chi_Prim_substring(a0, chiToUInt32(a1), chiToUInt32(a2));
+stringSlice w8:res r8:a0 r8:a1 r8:a2 {
+    *res = chi_Prim_stringSlice(a0, chiToUInt32(a1), chiToUInt32(a2));
 }
 // Inline primitive
 uint16ToUInt32 w8:res r8:a0 {
@@ -891,22 +903,9 @@ uint8ToUInt32 w8:res r8:a0 {
     *res = chiFromUInt32(chi_Prim_uint8ToUInt32(chiToUInt8(a0)));
 }
 // Primitive in tail position
-force r8:a0 {
+lazyForce r8:a0 {
     INSN_LEAVE;
-    chi_Prim_force(a0);
-}
-// Primitive in tail position
-par r8:a0 {
-    INSN_LEAVE;
-    chi_Prim_par(a0);
-}
-// Inline primitive
-boolFalse w8:res {
-    *res = chiFromBool(chi_Prim_boolFalse());
-}
-// Inline primitive
-boolTrue w8:res {
-    *res = chiFromBool(chi_Prim_boolTrue());
+    chi_Prim_lazyForce(a0);
 }
 // Inline primitive
 stringBuilderNew w8:res r8:a0 {
@@ -918,7 +917,7 @@ stringBuilderChar w8:res r8:a0 r8:a1 {
 }
 // Inline primitive
 stringBuilderString w8:res r8:a0 r8:a1 {
-    *res = chi_Prim_stringBuilderString(a0, a1);
+    *res = chi_Prim_stringBuilderString(chiStringRef(&a0), a1);
 }
 // Inline primitive
 stringBuilderBuild w8:res r8:a0 {
@@ -942,10 +941,8 @@ arrayClone w8:res r8:a0 r8:a1 r8:a2 {
 }
 // Inline primitive
 arrayCopy w8:res r8:a0 r8:a1 r8:a2 r8:a3 r8:a4 {
-    *res = ({
- chi_Prim_arrayCopy(a0, chiToUInt32(a1), a2, chiToUInt32(a3), chiToUInt32(a4));
- CHI_FALSE;
-});
+    chi_Prim_arrayCopy(a0, chiToUInt32(a1), a2, chiToUInt32(a3), chiToUInt32(a4));
+*res = CHI_FALSE;
 }
 // Inline primitive
 arrayNew w8:res r8:a0 r8:a1 {
@@ -957,10 +954,8 @@ arrayRead w8:res r8:a0 r8:a1 {
 }
 // Inline primitive
 arrayWrite w8:res r8:a0 r8:a1 r8:a2 {
-    *res = ({
- chi_Prim_arrayWrite(a0, chiToUInt32(a1), a2);
- CHI_FALSE;
-});
+    chi_Prim_arrayWrite(a0, chiToUInt32(a1), a2);
+*res = CHI_FALSE;
 }
 // Inline primitive
 bufferClone w8:res r8:a0 r8:a1 r8:a2 {
@@ -969,24 +964,20 @@ bufferClone w8:res r8:a0 r8:a1 r8:a2 {
 // Inline primitive
 bufferCmp w8:res r8:a0 r8:a1 r8:a2 r8:a3 r8:a4 {
     *res = chiFromInt32(chi_Prim_bufferCmp( a0
-                               , chiToUInt32(a1)
-                               , a2
-                               , chiToUInt32(a3)
-                               , chiToUInt32(a4) ));
+                                      , chiToUInt32(a1)
+                                      , a2
+                                      , chiToUInt32(a3)
+                                      , chiToUInt32(a4) ));
 }
 // Inline primitive
 bufferCopy w8:res r8:a0 r8:a1 r8:a2 r8:a3 r8:a4 {
-    *res = ({
- chi_Prim_bufferCopy(a0, chiToUInt32(a1), a2, chiToUInt32(a3), chiToUInt32(a4));
- CHI_FALSE;
-});
+    chi_Prim_bufferCopy(a0, chiToUInt32(a1), a2, chiToUInt32(a3), chiToUInt32(a4));
+*res = CHI_FALSE;
 }
 // Inline primitive
 bufferFill w8:res r8:a0 r8:a1 r8:a2 r8:a3 {
-    *res = ({
- chi_Prim_bufferFill(a0, chiToUInt8(a1), chiToUInt32(a2), chiToUInt32(a3));
- CHI_FALSE;
-});
+    chi_Prim_bufferFill(a0, chiToUInt8(a1), chiToUInt32(a2), chiToUInt32(a3));
+*res = CHI_FALSE;
 }
 // Inline primitive
 bufferNew w8:res r8:a0 {
@@ -1018,55 +1009,33 @@ bufferReadUInt8 w8:res r8:a0 r8:a1 {
 }
 // Inline primitive
 bufferWriteFloat32 w8:res r8:a0 r8:a1 r8:a2 {
-    *res = ({
- chi_Prim_bufferWriteFloat32(a0, chiToUInt32(a1), chiToFloat32(a2));
- CHI_FALSE;
-});
+    chi_Prim_bufferWriteFloat32(a0, chiToUInt32(a1), chiToFloat32(a2));
+*res = CHI_FALSE;
 }
 // Inline primitive
 bufferWriteFloat64 w8:res r8:a0 r8:a1 r8:a2 {
-    *res = ({
- chi_Prim_bufferWriteFloat64(a0, chiToUInt32(a1), chiToFloat64(a2));
- CHI_FALSE;
-});
+    chi_Prim_bufferWriteFloat64(a0, chiToUInt32(a1), chiToFloat64(a2));
+*res = CHI_FALSE;
 }
 // Inline primitive
 bufferWriteUInt16 w8:res r8:a0 r8:a1 r8:a2 {
-    *res = ({
- chi_Prim_bufferWriteUInt16(a0, chiToUInt32(a1), chiToUInt16(a2));
- CHI_FALSE;
-});
+    chi_Prim_bufferWriteUInt16(a0, chiToUInt32(a1), chiToUInt16(a2));
+*res = CHI_FALSE;
 }
 // Inline primitive
 bufferWriteUInt32 w8:res r8:a0 r8:a1 r8:a2 {
-    *res = ({
- chi_Prim_bufferWriteUInt32(a0, chiToUInt32(a1), chiToUInt32(a2));
- CHI_FALSE;
-});
+    chi_Prim_bufferWriteUInt32(a0, chiToUInt32(a1), chiToUInt32(a2));
+*res = CHI_FALSE;
 }
 // Inline primitive
 bufferWriteUInt64 w8:res r8:a0 r8:a1 r8:a2 {
-    *res = ({
- chi_Prim_bufferWriteUInt64(a0, chiToUInt32(a1), chiToUInt64(a2));
- CHI_FALSE;
-});
+    chi_Prim_bufferWriteUInt64(a0, chiToUInt32(a1), chiToUInt64(a2));
+*res = CHI_FALSE;
 }
 // Inline primitive
 bufferWriteUInt8 w8:res r8:a0 r8:a1 r8:a2 {
-    *res = ({
- chi_Prim_bufferWriteUInt8(a0, chiToUInt32(a1), chiToUInt8(a2));
- CHI_FALSE;
-});
-}
-// Primitive in tail position
-catch r8:a0 r8:a1 {
-    INSN_LEAVE;
-    chi_Prim_catch(a0, a1);
-}
-// Primitive in tail position
-throw r8:a0 {
-    INSN_LEAVE;
-    chi_Prim_throw(a0);
+    chi_Prim_bufferWriteUInt8(a0, chiToUInt32(a1), chiToUInt8(a2));
+*res = CHI_FALSE;
 }
 // Inline primitive
 identical w8:res r8:a0 r8:a1 {

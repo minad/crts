@@ -3,7 +3,7 @@
 
 #define S_ELEM       int
 #define S_LESS(a, b) (*(a) < *(b))
-#include "../sort.h"
+#include "../generic/sort.h"
 
 TEST(sort) {
     for (size_t n = 0; n < 1000; ++n) {

@@ -1,35 +1,33 @@
-#include "adt.h"
 #include "barrier.h"
+#include "error.h"
 #include "event.h"
 #include "location.h"
+#include "new.h"
 #include "sink.h"
-#include "runtime.h"
 #include "stack.h"
-#include "thread.h"
-#include "asm.h"
-#include <chili/object/array.h>
-#include <chili/object/thunk.h>
+#include "tracepoint.h"
 
-CHI_COLD static uint32_t stackDepth(const ChiStack* stack, uint32_t max) {
-    uint32_t depth = 0;
-    for (const Chili* p = stack->sp - 1; p >= stack->base && depth < max; p -= chiFrameSize(p))
-        ++depth;
-    return depth;
+static void stackInitCanary(Chili c) {
+    if (CHI_POISON_STACK_CANARY_SIZE) {
+        Chili* sl = chiPayload(c) + chiSize(c);
+        for (size_t i = 0; i < CHI_MAX(1U, CHI_POISON_STACK_CANARY_SIZE); ++i)
+            *(--sl) = (Chili){ CHI_POISON_STACK_CANARY };
+    }
 }
 
-CHI_COLD static Chili stackTraceElement(const ChiLocInfo* loc) {
-    return chiNewTuple(chiStringNew(loc->file),
-                         chiStringNew(loc->fn),
-                         chiFromUnboxed(loc->line),
-                         chiStringNew(loc->module));
+CHI_COLD static Chili stackTraceElement(ChiProcessor* proc, const ChiLocInfo* loc) {
+    return chiNewTuple(proc,
+                       chiStringNew(proc, loc->file),
+                       chiStringNew(proc, loc->fn),
+                       chiFromUnboxed(loc->line));
 }
 
 Chili chiStackNew(ChiProcessor* proc) {
     // Stacks are always pinned for better cpu caching, since they are heavily mutated.
     // Furthermore we don't have to modify the stack pointer during gc when the stack would be moved.
     const ChiRuntimeOption* opt = &proc->rt->option;
-    Chili c = chiNewPin(CHI_STACK, opt->stack.init);
-    chiStackInitCanary(c);
+    Chili c = chiNewInl(proc, CHI_STACK, opt->stack.init + CHI_STACK_OVERHEAD, CHI_NEW_LOCAL | CHI_NEW_CLEAN);
+    stackInitCanary(c);
     ChiStack* stack = chiToStack(c);
     stack->sp = stack->base;
     return c;
@@ -62,11 +60,13 @@ static size_t computeStackSize(ChiProcessor* proc, size_t oldSize, size_t reqSiz
 Chili chiStackTryResize(ChiProcessor* proc, Chili* sp, Chili* newLimit) {
     Chili oldStackObj = chiThreadStack(proc->thread);
     ChiStack* oldStack = chiToStack(oldStackObj);
+    CHI_ASSERT(sp <= chiStackLimit(oldStackObj));
+    CHI_ASSERT(sp >= oldStack->base);
     oldStack->sp = sp;
 
-    const size_t oldSize = chiSize(oldStackObj);
-    const size_t usedSize = (size_t)(oldStack->sp + CHI_STACK_CONT_SIZE + CHI_STACK_CANARY_SIZE - (const Chili*)oldStack);
-    const size_t reqSize = (size_t)(newLimit + CHI_STACK_CONT_SIZE + CHI_STACK_CANARY_SIZE - (const Chili*)oldStack);
+    const size_t oldSize = chiSize(oldStackObj) - CHI_STACK_OVERHEAD;
+    const size_t usedSize = (size_t)(oldStack->sp + CHI_STACK_CONT_SIZE - oldStack->base);
+    const size_t reqSize = (size_t)(newLimit + CHI_STACK_CONT_SIZE - oldStack->base);
     CHI_ASSERT(usedSize <= oldSize);
     CHI_ASSERT(usedSize <= reqSize);
 
@@ -74,55 +74,53 @@ Chili chiStackTryResize(ChiProcessor* proc, Chili* sp, Chili* newLimit) {
     if (newSize == oldSize)
         return oldStackObj;
 
-    if (newSize < oldSize) {
-        CHI_EVENT(proc, STACK_SHRINK,
-                  .oldSize = oldSize,
-                  .newSize = newSize,
-                  .reqSize = reqSize,
-                  .usedSize = usedSize);
-        chiObjectShrink(chiObject(oldStackObj), oldSize, newSize);
-        chiStackInitCanary(oldStackObj);
-        return oldStackObj;
+    Chili newStackObj = chiNewInl(proc, CHI_STACK, newSize + CHI_STACK_OVERHEAD,
+                                  CHI_NEW_TRY | CHI_NEW_LOCAL | CHI_NEW_CLEAN);
+    if (!chiSuccess(newStackObj)) {
+        if (newSize < oldSize)
+            return oldStackObj;
+        return CHI_FAIL;
     }
 
-    CHI_EVENT(proc, STACK_GROW,
-              .oldSize = oldSize,
-              .newSize = newSize,
-              .reqSize = reqSize,
-              .usedSize = usedSize);
+    chiEvent(proc, STACK_RESIZE,
+             .oldStack = chiAddress(oldStackObj),
+             .newStack = chiAddress(newStackObj),
+             .oldSize = oldSize,
+             .newSize = newSize,
+             .reqSize = reqSize,
+             .usedSize = usedSize);
 
-    Chili newStackObj = chiNewFlags(CHI_STACK, newSize, CHI_NEW_PIN | CHI_NEW_TRY);
-    if (!chiSuccess(newStackObj))
-        return CHI_FAIL;
-
-    chiStackInitCanary(newStackObj);
+    stackInitCanary(newStackObj);
     ChiStack* newStack = chiToStack(newStackObj);
     newStack->sp = newStack->base + (oldStack->sp - oldStack->base);
-    memcpy(newStack->base, oldStack->base, CHI_WORDSIZE * (size_t)(oldStack->sp - oldStack->base + CHI_STACK_CONT_SIZE));
+    memcpy(newStack->base, oldStack->base, CHI_WORDSIZE * usedSize);
     return newStackObj;
 }
 
-CHI_COLD void chiStackDump(ChiSink* sink, ChiProcessor* proc) {
-    chiSinkFmt(sink, "[%s]", proc->worker.name);
+CHI_COLD void chiStackDump(ChiSink* sink, ChiProcessor* proc, Chili* sp) {
+    const ChiRuntimeOption* opt = &proc->rt->option;
+    ChiStack* stack = chiToStack(chiThreadStack(proc->thread));
+    ChiStackWalk w = chiStackWalkInit(stack, sp, opt->stack.trace, opt->stack.traceCycles);
+    while (chiStackWalk(&w)) {
+        ChiLocResolve resolve;
+        chiLocResolve(&resolve, chiLocateFrame(w.frame), opt->stack.traceMangled);
+        chiSinkFmt(sink, "%L;", &resolve.loc);
+    }
+    if (w.frame >= stack->base)
+        chiSinkPuts(sink, "-;");
 
     Chili name = chiThreadName(proc->thread);
-    ChiWord tid = chiToUnboxed(chiToThread(proc->thread)->tid);
+    uint32_t tid = chiThreadId(proc->thread);
     if (chiTrue(name))
-        chiSinkFmt(sink, ";[thread %ju %S]", tid, chiStringRef(&name));
+        chiSinkFmt(sink, "[thread %u %S];[%s]", tid, chiStringRef(&name), proc->worker->name);
     else
-        chiSinkFmt(sink, ";[unnamed thread %ju]", tid);
+        chiSinkFmt(sink, "[unnamed thread %u];[%s]", tid, proc->worker->name);
+}
 
-    const ChiStack* stack = chiToStack(chiThreadStack(proc->thread));
-    const Chili* p = stack->sp - 1, *last = 0;
-    const uint32_t count = proc->rt->option.stack.trace;
-    for (uint32_t n = 0; n < count && p >= stack->base; ++n, p -= chiFrameSize(p)) {
-        if (!chiFrameIdentical(p, last)) {
-            ChiLocLookup lookup;
-            chiLocLookup(&lookup, chiLocateFrame(p));
-            chiSinkFmt(sink, ";%L", &lookup.loc);
-            last = p;
-        }
-    }
+static uint32_t stackDepth(ChiStack* stack, Chili* sp, uint32_t max, bool cycles) {
+    ChiStackWalk w = chiStackWalkInit(stack, sp, max, cycles);
+    while (chiStackWalk(&w));
+    return w.depth;
 }
 
 CHI_COLD Chili chiStackGetTrace(ChiProcessor* proc, Chili* sp) {
@@ -131,94 +129,154 @@ CHI_COLD Chili chiStackGetTrace(ChiProcessor* proc, Chili* sp) {
         return CHI_FALSE;
 
     ChiStack* stack = chiToStack(chiThreadStack(proc->thread));
-    stack->sp = sp; // update stack pointer, before stack walking
-
-    uint32_t depth = stackDepth(stack, opt->stack.trace);
+    uint32_t depth = stackDepth(stack, sp, opt->stack.trace, opt->stack.traceCycles);
     if (!depth)
         return CHI_FALSE;
 
-    Chili trace = chiArrayNewFlags(depth, CHI_FALSE, CHI_NEW_UNINITIALIZED | CHI_NEW_TRY);
+    Chili trace = chiArrayNewUninitialized(proc, depth, CHI_NEW_TRY);
     if (!chiSuccess(trace))
         return CHI_FALSE;
 
-    const Chili* p = stack->sp - 1;
-    for (uint32_t n = 0; n < depth && p >= stack->base; ++n, p -= chiFrameSize(p)) {
-        ChiLocLookup lookup;
-        chiLocLookup(&lookup, chiLocateFrame(p));
-        chiAtomicInit(chiArrayField(trace, n), stackTraceElement(&lookup.loc));
+    ChiStackWalk w = chiStackWalkInit(stack, sp, opt->stack.trace, opt->stack.traceCycles);
+    while (chiStackWalk(&w)) {
+        ChiLocResolve resolve;
+        chiLocResolve(&resolve, chiLocateFrame(w.frame), opt->stack.traceMangled);
+        chiArrayInit(trace, w.depth - 1, stackTraceElement(proc, &resolve.loc));
     }
 
-    return chiNewJust(trace);
+    return chiNewJust(proc, trace);
 }
 
-Chili* chiStackUnwind(ChiProcessor* proc, Chili except) {
-    Chili thrower = CHI_FALSE, clos;
-    const Chili bh = proc->rt->blackhole;
+Chili* chiStackUnwind(ChiProcessor* proc, Chili* sp) {
     const ChiStack* stack = chiToStack(chiThreadStack(proc->thread));
-    for (Chili* p = stack->sp - 1; p >= stack->base; p -= chiFrameSize(p)) {
+    for (Chili* p = sp - 1; p >= stack->base; p -= chiFrameSize(p)) {
         ChiFrame t = chiFrame(p);
         if (t == CHI_FRAME_CATCH)
             return p - 1;
-        if (t == CHI_FRAME_UPDATE && !chiThunkForced(p[-1], &clos) && chiIdentical(clos, bh)) {
-            if (!chiTrue(thrower))
-                thrower = chiNewVariadic(CHI_THUNKFN, chiFromCont(&chiThunkThrow), except);
-            chiThunkCas(proc, p[-1], bh, thrower);
-        }
+        Chili clos;
+        if (t == CHI_FRAME_UPDATE &&
+            !chiThunkForced(p[-1], &clos) &&
+            chiToCont(chiIdx(clos, 0)) == &chiThunkBlackhole)
+            chiInit(clos, chiPayload(clos), p[-2]); // Reset thunk entry to non-blackholed
     }
     return 0;
 }
 
-void chiStackBlackhole(ChiProcessor* proc) {
-    const ChiRuntimeOption* opt = &proc->rt->option;
-    if (opt->blackhole == CHI_BH_NONE)
+#if CHI_POISON_ENABLED
+enum { MIGRATE_MAX_DEPTH = 64 };
+
+typedef struct {
+    uint8_t oldOwner;
+    uint32_t depth;
+    Chili chain[MIGRATE_MAX_DEPTH];
+    ChiBlockVec stack;
+} MigrateState;
+
+static void migrate(MigrateState*, Chili);
+
+static void migrateLoop(MigrateState* state, Chili* p, Chili* end, Chili src) {
+    state->chain[state->depth++] = src;
+    for (; p < end; ++p)
+        migrate(state, *p);
+    --state->depth;
+}
+
+static void migrateRecursive(MigrateState* state, Chili c) {
+    Chili* p = chiPayload(c);
+    migrateLoop(state, p, p + chiSize(c), c);
+}
+
+static void migrate(MigrateState* state, Chili c) {
+    if (chiUnboxed(c))
         return;
-    const ChiStack* stack = chiToStack(chiThreadStack(proc->thread));
-    size_t count = 0;
-    for (const Chili* p = stack->sp - 1; p >= stack->base; p -= chiFrameSize(p)) {
-        if (chiFrame(p) == CHI_FRAME_UPDATE) {
-            Chili thunk = p[-1], clos;
-            if (!chiThunkForced(thunk, &clos) && chiThunkCas(proc, thunk, clos, proc->rt->blackhole))
-                ++count;
-        }
+
+    ChiType type = chiType(c);
+    if (chiRaw(type) || type == CHI_STACK)
+        return;
+
+    if (chiGen(c) != CHI_GEN_MAJOR) {
+        char buf[256];
+        ChiSinkMem s;
+        chiSinkMemInit(&s, buf, sizeof (buf));
+        for (uint32_t i = 0; i < state->depth; ++i)
+            chiSinkFmt(&s.base, "%s%C", i ? " -> " : "", state->chain[i]);
+        chiErr("Processor %u: Found minor object %C in migrated transitive closure, referenced by %b",
+               _chiDebugData.wid, c, (uint32_t)s.used, s.buf);
     }
-    if (count != 0)
-        CHI_EVENT(proc, STACK_BLACKHOLE, .count = count);
+
+    ChiObject* obj = chiObjectUnchecked(c);
+    if (chiObjectShared(obj) || chiObjectOwner(obj) == chiExpectedObjectOwner())
+        return;
+
+    if (chiObjectOwner(obj) != state->oldOwner)
+        chiErr("Processor %u: Migrated object %C not owned by %u",
+               _chiDebugData.wid, c, state->oldOwner - 1);
+
+    chiObjectSetOwner(obj, chiExpectedObjectOwner());
+
+    if (state->depth < MIGRATE_MAX_DEPTH)
+        migrateRecursive(state, c);
+    else
+        chiBlockVecPush(&state->stack, c);
+}
+
+static void migrateStack(ChiProcessor* proc, Chili stack) {
+    ChiObject* obj = chiObjectUnchecked(stack);
+    uint8_t oldOwner = chiObjectOwner(obj);
+    if (oldOwner == chiExpectedObjectOwner())
+        return;
+    chiObjectSetOwner(obj, chiExpectedObjectOwner());
+    MigrateState state = { .oldOwner = oldOwner };
+    chiBlockVecInit(&state.stack, &proc->heap.manager);
+    ChiStack* s = chiToStack(stack);
+    migrateLoop(&state, s->base, s->sp, stack);
+    Chili c;
+    while (chiBlockVecPop(&state.stack, &c))
+        migrateRecursive(&state, c);
+}
+#else
+static void migrateStack(ChiProcessor* CHI_UNUSED(proc), Chili CHI_UNUSED(stack)) {}
+#endif
+
+static bool scanActivatedStack(ChiLocalGC* gc, ChiObject* obj) {
+    if (gc->phase != CHI_GC_ASYNC ||
+        chiColorEq(chiObjectColor(obj), gc->colorState.black))
+        return false;
+    chiObjectSetColor(obj, gc->colorState.black);
+    ChiStack* stack = (ChiStack*)obj->payload;
+    for (Chili* p = stack->base; p < stack->sp; ++p)
+        chiGrayMarkUnboxed(gc, *p);
+    return true;
 }
 
 void chiStackActivate(ChiProcessor* proc) {
-    ChiObject* obj = chiObject(chiThreadStackUnchecked(proc->thread));
-    // Busy looping until stack is available
-    CHI_BUSY_WHILE(!chiObjectCasActive(obj, false, true));
+    Chili stack = chiThreadStackUnchecked(proc->thread);
+    ChiObject* obj = chiObjectUnchecked(stack);
+    chiObjectLock(obj);
+    CHI_ASSERT(!chiObjectShared(obj));
+    migrateStack(proc, stack);
+    bool scanned = scanActivatedStack(&proc->gc, obj);
+    chiEvent(proc, STACK_ACTIVATE, .stack = chiAddress(stack), .scanned = scanned);
 }
 
 void chiStackDeactivate(ChiProcessor* proc, Chili* sp) {
     Chili stack = chiThreadStackUnchecked(proc->thread);
-    chiToStack(stack)->sp = sp;
     ChiObject* obj = chiObject(stack);
-    bool wasActive = chiObjectCasActive(obj, true, false);
-    CHI_ASSERT(wasActive);
-
-    const ChiRuntimeOption* opt = &proc->rt->option;
-    if (CHI_UNLIKELY(opt->gc.mode == CHI_GC_NONE))
-        return;
-
-    if (chiObjectCasDirty(obj, false, true))
-        chiBlockVecPush(proc->gcPS.dirty, stack);
-
-    // Steele barrier
-    if (proc->rt->gc.msPhase == CHI_MS_PHASE_MARK
-        && chiObjectCasColor(obj, CHI_BLACK, CHI_GRAY))
-        chiBlockVecPush(&proc->gcPS.grayList, stack);
-}
-
-void chiStackDeactivateReset(ChiProcessor* proc) {
-    Chili stack = chiThreadStackUnchecked(proc->thread);
     ChiStack* s = chiToStack(stack);
-    s->sp = s->base;
-    bool wasActive = chiObjectCasActive(chiObject(stack), true, false);
-    CHI_ASSERT(wasActive);
-}
 
-bool chiBlackholeEvaporated(Chili bh) {
-    return !chiIdentical(bh, CHI_CURRENT_RUNTIME->blackhole);
+    CHI_ASSERT(!chiObjectShared(obj));
+    CHI_ASSERT(!sp || sp <= chiStackLimit(stack));
+    CHI_ASSERT(!sp || sp >= s->base);
+
+    s->sp = sp ? sp : s->base;
+
+    // Mark dirty such that stack is scanned in scavenger,
+    // since it can reference minor objects.
+    if (sp && !chiObjectDirty(obj)) {
+        chiObjectSetDirty(obj, true);
+        chiBlockVecPush(&proc->heap.majorDirty, stack);
+    }
+
+    chiEvent(proc, STACK_DEACTIVATE, .stack = chiAddress(stack));
+    chiObjectUnlock(obj);
 }

@@ -1,13 +1,10 @@
 #pragma once
 
 #include <stdlib.h>
-#include "list.h"
-#include "event/utils.h"
+#include "event/time.h"
 
 typedef struct ChiTimer_ ChiTimer;
 typedef struct ChiSigHandler_ ChiSigHandler;
-typedef void (*ChiDestructor)(void*);
-typedef void (*ChiTaskRun)(void*);
 
 enum {
     CHI_EXIT_SUCCESS = 0,
@@ -33,33 +30,14 @@ struct ChiTimer_ {
 };
 
 enum {
-    CHI_MEMMAP_HUGE      = 1,
-    CHI_MEMMAP_NOHUGE    = 2,
-    CHI_MEMMAP_NORESERVE = 4,
-};
-
-enum {
     CHI_FILE_READABLE   = 1,
     CHI_FILE_EXECUTABLE = 2,
 };
 
-void chiTimerInstall(ChiTimer*);
-void chiTimerRemove(ChiTimer*);
-void chiSigInstall(ChiSigHandler*);
-void chiSigRemove(ChiSigHandler*);
-CHI_WU void* chiTaskLocal(size_t, ChiDestructor);
-bool chiErrorString(char*, size_t);
-
 #if CHI_ENV_ENABLED
-char* chiGetEnv(const char*);
+CHI_INTERN char* chiGetEnv(const char*);
 #else
 CHI_INL char* chiGetEnv(const char* CHI_UNUSED(v)) { return 0; }
-#endif
-
-#if CHI_PAGER_ENABLED
-void chiPager(void);
-#else
-CHI_INL void chiPager(void) {}
 #endif
 
 #if defined(CHI_STANDALONE_SANDBOX)
@@ -74,32 +52,15 @@ CHI_INL void chiPager(void) {}
 #  error Unsupported operation system
 #endif
 
+typedef struct ChiSigHandlerLink_ ChiSigHandlerLink;
+struct ChiSigHandlerLink_ { ChiSigHandlerLink *prev, *next; };
 struct ChiSigHandler_ {
-    void    (*handler)(ChiSigHandler*);
-    ChiList _list;
-    ChiSig  sig;
+    void (*handler)(ChiSigHandler*, ChiSig);
+    ChiSigHandlerLink _link;
 };
 
-#define CHI_DEFINE_AUTO_LOCK(t, n, lock, unlock)        \
-    CHI_NEWTYPE(Lock##t##n, t*)                         \
-    CHI_INL ChiLock##t##n _chiLock##t##n(t* x) {        \
-        lock(x);                                        \
-        return (ChiLock##t##n){ x };                    \
-    }                                                   \
-    CHI_INL void chi_auto_unlock##t##n(ChiLock##t##n* l) { \
-        unlock(CHI_UN(Lock##t##n, *l));                 \
-    }
-
-#define _CHI_AUTO_LOCK(l, t, n, x) CHI_AUTO(l, _chiLock##t##n(x), unlock##t##n); CHI_NOWARN_UNUSED(l);
-#define CHI_AUTO_LOCK(t, n, m)     _CHI_AUTO_LOCK(CHI_GENSYM, t, n, m)
-
-CHI_DEFINE_AUTO_LOCK(ChiMutex, , chiMutexLock, chiMutexUnlock)
-CHI_DEFINE_AUTO_LOCK(ChiRWLock, r, chiRWLockRead, chiRWUnlockRead)
-CHI_DEFINE_AUTO_LOCK(ChiRWLock, w, chiRWLockWrite, chiRWUnlockWrite)
-
-#define CHI_LOCK(m) CHI_AUTO_LOCK(ChiMutex, , m)
-#define CHI_LOCK_READ(m) CHI_AUTO_LOCK(ChiRWLock, r, m)
-#define CHI_LOCK_WRITE(m) CHI_AUTO_LOCK(ChiRWLock, w, m)
+CHI_DEFINE_AUTO_LOCK(ChiMutex, chiMutexLock, chiMutexUnlock)
+#define CHI_LOCK_MUTEX(m) CHI_AUTO_LOCK(ChiMutex, m)
 
 CHI_INL ChiTime chiTime(void) {
     return (ChiTime){ .real = chiClock(CHI_CLOCK_REAL_FINE), .cpu = chiClock(CHI_CLOCK_CPU) };
@@ -110,4 +71,21 @@ CHI_INL ChiTime chiTimeDelta(ChiTime a, ChiTime b) {
         .real = chiNanosDelta(a.real, b.real),
         .cpu  = chiNanosDelta(a.cpu, b.cpu),
     };
+}
+
+CHI_NEWTYPE(Trigger, _Atomic(bool))
+
+CHI_INL void chiTrigger(ChiTrigger* t, bool set) {
+    // Explicitly relaxed since we do not want any memory ordering constraints for triggers
+    atomic_store_explicit(CHI_UNP(Trigger, t), set, memory_order_relaxed);
+}
+
+CHI_INL CHI_WU bool chiTriggered(ChiTrigger* t) {
+    // Explicitly relaxed since we do not want any memory ordering constraints for triggers
+    return atomic_load_explicit(CHI_UNP(Trigger, t), memory_order_relaxed);
+}
+
+CHI_INL CHI_WU bool chiTriggerExchange(ChiTrigger* t, bool set) {
+    // Explicitly relaxed since we do not want any memory ordering constraints for triggers
+    return atomic_exchange_explicit(CHI_UNP(Trigger, t), set, memory_order_relaxed);
 }

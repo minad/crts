@@ -7,8 +7,8 @@
  * since they are operate on legacy c strings and
  * do not play a significant role in the Chili runtime.
  */
-#include <string.h>
 #include <stdint.h>
+#include <string.h>
 
 typedef uintptr_t word_t;
 #define WSIZE        (sizeof (word_t))
@@ -20,8 +20,6 @@ typedef uintptr_t word_t;
 #  pragma GCC push_options
 #  pragma GCC optimize("O3,no-tree-loop-distribute-patterns")
 #endif
-
-#include "bits/string_undef.h"
 
 void* memset(void* dst, int x, size_t n) {
     char c = (char)x;
@@ -55,11 +53,44 @@ void* memset(void* dst, int x, size_t n) {
     return dst;
 }
 
-static void* memcpy_forward(void* dst, const void* src, size_t n) {
-#include "bits/memcpy.h"
+static inline void* memcpy_forward(void* dst, const void* src, size_t n) {
+    char* d = (char*)dst;
+    const char* s = (const char*)src;
+
+    while (!WALIGNED(d) && n) {
+        *d++ = *s++;
+        --n;
+    }
+
+    if (WALIGNED(s)) {
+        while (n >= 4 * WSIZE) {
+            word_t* dw = (word_t*)(void*)d;
+            const word_t* sw = (const word_t*)(const void*)s;
+            dw[0] = sw[0]; dw[1] = sw[1]; dw[2] = sw[2]; dw[3] = sw[3];
+            d += 4 * WSIZE;
+            s += 4 * WSIZE;
+            n -= 4 * WSIZE;
+        }
+
+        while (n >= WSIZE) {
+            word_t* dw = (word_t*)(void*)d;
+            const word_t* sw = (const word_t*)(const void*)s;
+            dw[0] = sw[0];
+            d += WSIZE;
+            s += WSIZE;
+            n -= WSIZE;
+        }
+    }
+
+    while (n) {
+        *d++ = *s++;
+        --n;
+    }
+
+    return dst;
 }
 
-static void* memcpy_backward(void* dst, const void* src, size_t n) {
+static inline void* memcpy_backward(void* dst, const void* src, size_t n) {
     char* d = (char*)dst + n;
     const char* s = (const char*)src + n;
 
@@ -97,7 +128,7 @@ static void* memcpy_backward(void* dst, const void* src, size_t n) {
 }
 
 void* memcpy(void* restrict dst, const void* restrict src, size_t n) {
-#include "bits/memcpy.h"
+    return memcpy_forward(dst, src, n);
 }
 
 void* memmove(void* dst, const void* src, size_t n) {
@@ -194,7 +225,16 @@ void* memchr(const void* mem, int c, size_t n) {
     return 0;
 }
 
-#include "bits/string_def.h"
+void* memccpy(void* restrict dst, const void* restrict src, int c, size_t n) {
+    char* d = (char*)dst;
+    const char* s = (const char*)src;
+    while (n--) {
+        *d++ = *s;
+        if (*s++ == c)
+            return d;
+    }
+    return 0;
+}
 
 #ifndef __clang__
 #  pragma GCC pop_options

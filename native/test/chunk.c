@@ -1,5 +1,5 @@
-#include "test.h"
 #include "../chunk.h"
+#include "test.h"
 
 TEST(chunkStress) {
     ChiChunk* chunk[100] = {};
@@ -10,8 +10,14 @@ TEST(chunkStress) {
                 do {
                     s = (size_t)RAND % 10;
                 } while (!s);
-                size_t t = RAND % 10;
-                chunk[j] = chiChunkNew(s * CHI_CHUNK_MIN_SIZE, t ? 1ULL << (t + CHI_CHUNK_MIN_SHIFT) : 0);
+                s *= CHI_CHUNK_MIN_SIZE;
+                size_t a = RAND % 10;
+                if (a) {
+                    a = UINT64_C(1) << (a + CHI_CHUNK_MIN_SHIFT);
+                    while (a > s)
+                        a >>= 1;
+                }
+                chunk[j] = chiChunkNew(s, a);
             }
         }
         for (size_t j = 0; j < CHI_DIM(chunk); ++j) {

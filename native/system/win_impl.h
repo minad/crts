@@ -9,30 +9,30 @@
  * is not yet supported by mingw64. Thread local variables
  * are accessed via a call to __emutls_get_address.
  */
-#include <io.h>
+
 #include <process.h>
 #include <psapi.h>
 #include <sysinfoapi.h>
+#include "../mem.h"
 #include "../sink.h"
 #include "interrupt.h"
-#include "tasklocal.h"
 
 static HANDLE timer;
 
 // We use the user defined bit to encode windows errors in errno
 #define CHI_WIN_ERROR (1 << 29)
 
-void chiWinErr(const char* call) {
-    chiWinSetErr();
-    chiSysErr(call);
-}
-
-void chiWinSetErr(void) {
+static void winSetErr(void) {
     errno = CHI_WIN_ERROR | (int)GetLastError();
 }
 
+static void winErr(const char* call) {
+    winSetErr();
+    chiSysErr(call);
+}
+
 static ChiNanos filetimeToNanos(FILETIME f) {
-    return (ChiNanos){ (((uint64_t)f.dwHighDateTime << 32) | f.dwLowDateTime) * 100 };
+    return chiNanos((((uint64_t)f.dwHighDateTime << 32) | f.dwLowDateTime) * 100);
 }
 
 ChiNanos chiClock(ChiClock c) {
@@ -40,101 +40,34 @@ ChiNanos chiClock(ChiClock c) {
         FILETIME creation, exit, system, user;
         if (!GetProcessTimes(GetCurrentProcess(), &creation, &exit,
                              &system, &user))
-            chiWinErr("GetProcessTimes");
+            winErr("GetProcessTimes");
         return chiNanosAdd(filetimeToNanos(system), filetimeToNanos(user));
     }
     static LARGE_INTEGER freq = { .QuadPart = 0 };
     if (!freq.QuadPart) {
         if (!QueryPerformanceFrequency(&freq))
-            chiWinErr("QueryPerformanceFrequency");
+            winErr("QueryPerformanceFrequency");
     }
     LARGE_INTEGER counter;
     if (!QueryPerformanceCounter(&counter))
-        chiWinErr("QueryPerformanceCounter");
-    return (ChiNanos){ (uint64_t)counter.QuadPart * (1000000000ULL / (uint64_t)freq.QuadPart) };
+        winErr("QueryPerformanceCounter");
+    return chiNanos((uint64_t)counter.QuadPart * (UINT64_C(1000000000) / (uint64_t)freq.QuadPart));
 }
 
 ChiNanos chiCondTimedWait(ChiCond* c, ChiMutex* m, ChiNanos ns) {
     ChiNanos begin = chiClock(CHI_CLOCK_REAL_FINE);
-    if (!SleepConditionVariableCS(CHI_UNP(Cond, c), CHI_UNP(Mutex, m), (DWORD)CHI_UN(Millis, chiNanosToMillis(ns)))
+    if (!SleepConditionVariableSRW(CHI_UNP(Cond, c), CHI_UNP(Mutex, m), (DWORD)CHI_UN(Millis, chiNanosToMillis(ns)), 0)
         && GetLastError() != ERROR_TIMEOUT)
-        chiWinErr("SleepConditionVariableCS");
+        winErr("SleepConditionVariableCS");
     return chiNanosDelta(chiClock(CHI_CLOCK_REAL_FINE), begin);
 }
 
-typedef struct {
-    ChiTaskRun run;
-    void* arg;
-} TaskArg;
-
-static WINAPI unsigned taskRun(void* arg) {
-    TaskArg ta = *(TaskArg*)arg;
-    chiFree(arg);
-    ta.run(ta.arg);
-    return 0;
-}
-
-ChiTask chiTaskTryCreate(ChiTaskRun run, void* arg) {
-    TaskArg* ta = chiAllocObj(TaskArg);
-    ta->run = run;
-    ta->arg = arg;
-    HANDLE h = (HANDLE)_beginthreadex(0,                      // default security attributes
-                                      0,                      // use default stack size
-                                      taskRun,                // thread function name
-                                      ta,                     // argument to thread function
-                                      0,                      // use default creation flags
-                                      0);                     // returns the thread identifier
-    if (!h)
-        chiFree(ta);
-    return (ChiTask){ h };
-}
-
-ChiTask chiTaskCreate(ChiTaskRun run, void* arg) {
-    ChiTask t = chiTaskTryCreate(run, arg);
-    if (chiTaskNull(t))
-        chiSysErr("_beginthreadex");
-    return t;
-}
-
-static DWORD taskLocalKey = 0;
-
-void* chiTaskLocal(size_t size, ChiDestructor destructor) {
-    TaskLocal* oldLocal = (TaskLocal*)FlsGetValue(taskLocalKey);
-    TaskLocal* newLocal = (TaskLocal*)chiAlloc(sizeof (TaskLocal) + size);
-    newLocal->destructor = destructor;
-    newLocal->next = oldLocal;
-    if (!FlsSetValue(taskLocalKey, newLocal))
-        chiWinErr("FlsSetValue");
-    return newLocal->data;
-}
-
 static WINAPI BOOL ctrlHandler(DWORD type) {
-    if (type == CTRL_C_EVENT || type == CTRL_BREAK_EVENT) {
-        dispatchSig(type == CTRL_C_EVENT ? CHI_SIG_INTERRUPT : CHI_SIG_DUMPHEAP);
+    if (type == CTRL_C_EVENT) {
+        dispatchSig(type == CTRL_C_EVENT ? CHI_SIG_USERINTERRUPT : CHI_SIG_DUMPSTACK);
         return TRUE;
     }
     return FALSE;
-}
-
-static WINAPI void destroyTaskLocal_(void* data) {
-    destroyTaskLocal(data);
-}
-
-static void redirectOutput(void) {
-    int fdout = _fileno(stdout), fderr = _fileno(stderr);
-    if (fdout >= 0 && fderr >= 0 && _get_osfhandle(fdout) >= 0 && _get_osfhandle(fderr) >= 0)
-        return;
-    if (!AttachConsole(ATTACH_PARENT_PROCESS))
-        return;
-    if (_wfreopen(L"CONOUT$", L"w", stdout))
-        setvbuf(stdout, 0, _IONBF, 0);
-    if (_wfreopen(L"CONOUT$", L"w", stderr))
-        setvbuf(stderr, 0, _IONBF, 0);
-}
-
-static bool drinkingWine(void) {
-    HMODULE h;
-    return (h = GetModuleHandleW(L"ntdll.dll")) && !!GetProcAddress(h, "wine_get_version");
 }
 
 static void enableColor(DWORD fd) {
@@ -144,11 +77,18 @@ static void enableColor(DWORD fd) {
     SetConsoleMode(h, mode | 4);
 }
 
+static void consoleSetup(void) {
+    AttachConsole(ATTACH_PARENT_PROCESS);
+    SetConsoleOutputCP(CP_UTF8);
+    enableColor(STD_OUTPUT_HANDLE);
+    enableColor(STD_ERROR_HANDLE);
+}
+
 static void dispatcherNotify(void) {
     ChiMicros timeout = dispatchTimers();
     DWORD due = chiMicrosZero(timeout) ? INFINITE : CHI_MAX((DWORD)CHI_UN(Millis, chiMicrosToMillis(timeout)), 1);
     if (!ChangeTimerQueueTimer(0, timer, 0, due))
-        chiWinErr("ChangeTimerQueueTimer");
+        winErr("ChangeTimerQueueTimer");
 }
 
 static void WINAPI timerCallback(void* CHI_UNUSED(param), BOOLEAN CHI_UNUSED(fired)) {
@@ -156,37 +96,24 @@ static void WINAPI timerCallback(void* CHI_UNUSED(param), BOOLEAN CHI_UNUSED(fir
 }
 
 void chiSystemSetup(void) {
-    interruptSetup();
-    if (!drinkingWine()) {
-        redirectOutput();
-        SetConsoleOutputCP(CP_UTF8);
-        enableColor(STD_OUTPUT_HANDLE);
-        enableColor(STD_ERROR_HANDLE);
-    }
-    taskLocalKey = FlsAlloc(destroyTaskLocal_);
-    if (!taskLocalKey)
-        chiWinErr("FlsAlloc");
+    CHI_ASSERT_ONCE;
+    consoleSetup();
      if (!CreateTimerQueueTimer(&timer, 0, timerCallback, 0, 0, INFINITE, WT_EXECUTEINTIMERTHREAD))
-        chiWinErr("CreateTimerQueueTimer");
+        winErr("CreateTimerQueueTimer");
     if (!SetConsoleCtrlHandler(ctrlHandler, TRUE))
-        chiWinErr("SetConsoleCtrlHandler");
+        winErr("SetConsoleCtrlHandler");
 }
 
 ChiTask chiTaskCurrent(void) {
     HANDLE h;
     if (!DuplicateHandle(GetCurrentProcess(), GetCurrentThread(),
                          GetCurrentProcess(), &h, 0, FALSE, DUPLICATE_SAME_ACCESS))
-        chiWinErr("DuplicateHandle");
-    return (ChiTask){ h };
+        winErr("DuplicateHandle");
+    return CHI_WRAP(Task, h);
 }
 
 _Noreturn void chiTaskExit(void) {
     _endthreadex(0);
-}
-
-void chiTaskYield(void) {
-    if (!SwitchToThread())
-        chiWinErr("SwitchToThread");
 }
 
 void chiTaskJoin(ChiTask t) {
@@ -195,40 +122,46 @@ void chiTaskJoin(ChiTask t) {
     CloseHandle(h);
 }
 
-void chiTaskCancel(ChiTask t) {
-    CancelSynchronousIo(CHI_UN(Task, t));
-}
-
-void chiTaskClose(ChiTask t) {
-    CloseHandle(CHI_UN(Task, t));
-}
-
-bool chiTaskEqual(ChiTask a, ChiTask b) {
-    return CHI_UN(Task, a) == CHI_UN(Task, b);
-}
-
-bool chiTaskNull(ChiTask a) {
-    return !CHI_UN(Task, a);
-}
-
-void chiTaskName(const char* CHI_UNUSED(name)) {
-    // TODO: SetThreadDescription is only available on Windows 10
-}
-
-void* chiVirtAlloc(void* ptr, size_t size, int32_t CHI_UNUSED(flags)) {
-    void* p = VirtualAlloc(ptr, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+static void* virtAlloc(void* ptr, size_t size, DWORD type, DWORD access) {
+    void* p = VirtualAlloc(ptr, size, type, access);
     if (!p)
-        chiWinSetErr();
-    if (p && ptr && p != ptr)
-        chiErr("Invalid memory address %p, but expected %p", p, ptr);
+        winSetErr();
     return p;
 }
 
-void chiVirtFree(void* p, size_t CHI_UNUSED(s)) {
-    if (!VirtualFree(p, 0, MEM_RELEASE))
-        chiWinErr("VirtualFree");
+static void virtFree(void* ptr, size_t size, DWORD type) {
+    if (!VirtualFree(ptr, size, type))
+        winErr("VirtualFree");
 }
 
+bool chiVirtReserve(ChiVirtMem* CHI_UNUSED(mem), void* ptr, size_t size) {
+    void* res = virtAlloc(ptr, size, MEM_RESERVE, PAGE_NOACCESS);
+    if (!res)
+        return false;
+    if (res != ptr)
+        chiErr("Could not reserve memory %p - %p", ptr, (uint8_t*)ptr + size);
+    return true;
+}
+
+bool chiVirtCommit(ChiVirtMem* CHI_UNUSED(mem), void* ptr, size_t size, bool CHI_UNUSED(huge)) {
+    CHI_ASSERT(ptr);
+    CHI_ASSERT(size);
+    return !!virtAlloc(ptr, size, MEM_COMMIT, PAGE_READWRITE);
+}
+
+void chiVirtDecommit(ChiVirtMem* CHI_UNUSED(mem), void* ptr, size_t size) {
+    CHI_ASSERT(ptr);
+    CHI_ASSERT(size);
+    virtFree(ptr, size, MEM_DECOMMIT);
+}
+
+void* chiVirtAlloc(void* ptr, size_t size, bool CHI_UNUSED(huge)) {
+    return virtAlloc(ptr, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+}
+
+void chiVirtFree(void* ptr, size_t CHI_UNUSED(s)) {
+    virtFree(ptr, 0, MEM_RELEASE);
+}
 
 uint32_t chiPhysProcessors(void) {
     static uint32_t cachedProcessors = 0;
@@ -245,7 +178,7 @@ uint64_t chiPhysMemory(void) {
     if (!physMemory) {
         MEMORYSTATUSEX mem = { .dwLength = sizeof (mem) };
         if (!GlobalMemoryStatusEx(&mem))
-            chiWinErr("GlobalMemoryStatusEx");
+            winErr("GlobalMemoryStatusEx");
         physMemory = mem.ullTotalPhys / CHI_MiB(1) * CHI_MiB(1);
     }
     return physMemory;
@@ -253,56 +186,89 @@ uint64_t chiPhysMemory(void) {
 
 bool chiFilePerm(const char* file, int32_t CHI_UNUSED(perm)) {
     CHI_AUTO_FREE(fileW, chiAllocUtf8To16(file));
-    return !_waccess(fileW, 4);
+    DWORD attrs = GetFileAttributesW(fileW);
+    if (attrs) {
+        winSetErr();
+        return false;
+    }
+    return true;
 }
 
-void chiActivity(ChiActivity* a) {
-    CHI_CLEAR(a);
+void chiSystemStats(ChiSystemStats* a) {
+    CHI_ZERO_STRUCT(a);
 
     PROCESS_MEMORY_COUNTERS mem;
     if (!GetProcessMemoryInfo(GetCurrentProcess(), &mem, sizeof(mem)))
-        chiWinErr("GetProcessMemoryInfo");
+        winErr("GetProcessMemoryInfo");
 
     FILETIME creation, exit, system, user;
     if (!GetProcessTimes(GetCurrentProcess(), &creation, &exit,
                          &system, &user))
-        chiWinErr("GetProcessTimes");
+        winErr("GetProcessTimes");
 
     a->cpuTimeUser = filetimeToNanos(user);
     a->cpuTimeSystem = filetimeToNanos(system);
     a->pageFault = mem.PageFaultCount;
-    a->residentSize = mem.PeakWorkingSetSize;
+    a->residentSize = mem.PeakWorkingSetSize; // TODO: Current RSS!
 }
 
-uint32_t chiPid(void) {
-    return GetCurrentProcessId();
-}
-
-bool chiTerminal(int fd) {
-    return !!_isatty(fd);
-}
-
-FILE* chiFileOpenWrite(const char* file) {
-    CHI_AUTO_FREE(fileW, chiAllocUtf8To16(file));
-    FILE* fp = _wfopen(fileW, L"abN");
-    if (!fp)
-        return 0;
-    off_t off = ftello(fp);
-    if (off) {
-        int err = off > 0 ? EEXIST : errno;
-        fclose(fp);
-        errno = err;
-        return 0;
+bool chiFileRead(ChiFile file, void* buf, size_t size, size_t* nread) {
+    DWORD dwRead;
+    if (!ReadFile(CHI_UN(File, file), buf, (DWORD)size, &dwRead, 0)) {
+        winSetErr();
+        return false;
     }
-    return fp;
+    *nread = dwRead;
+    return true;
 }
 
-FILE* chiFileOpenRead(const char* file) {
+bool chiFileWrite(ChiFile file, const void* buf, size_t size) {
+    DWORD dwWrite;
+    if (!WriteFile(CHI_UN(File, file), buf, (DWORD)size, &dwWrite, 0) || size != (size_t)dwWrite) {
+        winSetErr();
+        return false;
+    }
+    return true;
+}
+
+bool chiFileReadOff(ChiFile file, void* buf, size_t size, uint64_t off) {
+    DWORD dwRead;
+    OVERLAPPED overlapped = { .Offset = (DWORD)(off & UINT32_MAX), .OffsetHigh = (DWORD)(off >> 32) };
+    if (!ReadFile(CHI_UN(File, file), buf, (DWORD)size, &dwRead, &overlapped) || (size_t)dwRead != size) {
+        winSetErr();
+        return false;
+    }
+    return true;
+}
+
+ChiFile chiFileOpen(const char* file) {
     CHI_AUTO_FREE(fileW, chiAllocUtf8To16(file));
-    return _wfopen(fileW, L"rbN");
+    HANDLE h = CreateFileW(fileW, GENERIC_WRITE, 0, 0, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, 0);
+    if (h == INVALID_HANDLE_VALUE) {
+        winSetErr();
+        return CHI_WRAP(File, 0);
+    }
+    return CHI_WRAP(File, h);
 }
 
-bool chiWinErrorString(uint32_t err, char* buf, size_t bufsiz) {
+ChiFile chiFileOpenRead(const char* file) {
+    CHI_AUTO_FREE(fileW, chiAllocUtf8To16(file));
+    HANDLE h = CreateFileW(fileW, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+    if (h == INVALID_HANDLE_VALUE) {
+        winSetErr();
+        return CHI_WRAP(File, 0);
+    }
+    return CHI_WRAP(File, h);
+}
+
+uint64_t chiFileSize(ChiFile file) {
+    LARGE_INTEGER size;
+    if (!GetFileSizeEx(CHI_UN(File, file), &size))
+        winSetErr();
+    return (uint64_t)size.QuadPart;
+}
+
+bool chiWinErrorString(DWORD err, char* buf, size_t bufsiz) {
     wchar_t bufW[256];
     if (!FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
                         0,                      // message source
@@ -319,23 +285,60 @@ bool chiWinErrorString(uint32_t err, char* buf, size_t bufsiz) {
     return true;
 }
 
-bool chiErrorString(char* buf, size_t bufsiz) {
+bool chiErrnoString(char* buf, size_t bufsiz) {
     int err = errno;
     return err & CHI_WIN_ERROR
-        ? chiWinErrorString((uint32_t)(err & ~CHI_WIN_ERROR), buf, bufsiz)
+        ? chiWinErrorString((DWORD)(err & ~CHI_WIN_ERROR), buf, bufsiz)
         : !strerror_s(buf, bufsiz, err);
 }
 
-FILE* chiOpenPipe(const char* cmd) {
-    CHI_AUTO_FREE(cmdW, chiAllocUtf8To16(cmd));
-    return _wpopen(cmdW, L"wb");
+ChiDir chiDirOpen(const char* path) {
+    CHI_AUTO_FREE(pathW, chiAllocUtf8To16(path));
+    WIN32_FIND_DATAW data;
+    HANDLE h = FindFirstFileW(pathW, &data);
+    if (h == INVALID_HANDLE_VALUE) {
+        winSetErr();
+        return 0;
+    }
+    ChiDir dir = chiAllocObj(ChiDirStruct);
+    dir->handle = h;
+    dir->current = 0;
+    dir->next = chiAllocUtf16To8(data.cFileName);
+    return dir;
+}
+
+const char* chiDirEntry(ChiDir dir) {
+    WIN32_FIND_DATAW data;
+    if (dir->current)
+        chiFree(dir->current);
+    dir->current = dir->next;
+    dir->next = FindNextFile(dir->handle, &data) ? chiAllocUtf16To8(data.cFileName) : 0;
+    return dir->current;
+}
+
+void chiDirClose(ChiDir dir) {
+    if (dir->current)
+        chiFree(dir->current);
+    if (dir->next)
+        chiFree(dir->next);
+    FindClose(dir->handle);
+    chiFree(dir);
 }
 
 #if CHI_ENV_ENABLED
 char* chiGetEnv(const char* var) {
     CHI_AUTO_FREE(varW, chiAllocUtf8To16(var));
-    wchar_t* val = _wgetenv(varW);
-    return val ? chiAllocUtf16To8(val) : 0;
+    DWORD n = GetEnvironmentVariableW(varW, 0, 0);
+    if (!n) {
+        winSetErr();
+        return 0;
+    }
+    CHI_AUTO_ALLOC(WCHAR, buf, n + 1);
+    if (!GetEnvironmentVariableW(varW, buf, n + 1)) {
+        winSetErr();
+        return 0;
+    }
+    return chiAllocUtf16To8(buf);
 }
 #endif
 

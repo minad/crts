@@ -1,6 +1,6 @@
 /* -*- mode: text -*- */
 #define CHI_FOREACH_FFI_TYPE(SEP, TYPE)                                                                                                                \
-    TYPE(Void,    void,    CHI_NOWARN_UNUSED(f),                    ({dcCallVoid(v,f);(ChiVoid){0};}),      ChiVoid)        SEP \
+    TYPE(Void,    void,    CHI_NOWARN_UNUSED(f),                    ({dcCallVoid(v,f);(ChiVoid){};}),       ChiVoid)        SEP \
     TYPE(Int8,    sint8,   dcArgChar(v,f),                          dcCallChar(v,f),                        int8_t)         SEP \
     TYPE(UInt8,   uint8,   dcArgChar(v,(char)f),                    (uint8_t)dcCallChar(v,f),               uint8_t)        SEP \
     TYPE(Int16,   sint16,  dcArgShort(v,f),                         dcCallShort(v,f),                       int16_t)        SEP \

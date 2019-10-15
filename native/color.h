@@ -2,7 +2,7 @@
 
 #include "runtime.h"
 
-#define _CHI_COLOR_CSI(x)   CHI_IFELSE(CHI_COLOR_ENABLED, "\e[" x "m", "")
+#define _CHI_COLOR_CSI(x)   CHI_CHOICE(CHI_COLOR_ENABLED, "\033[" x "m", "")
 #define _CHI_COLOR_FG(x)    _CHI_COLOR_CSI("3" #x)
 #define _CHI_COLOR_BG(x)    _CHI_COLOR_CSI("4" #x)
 

@@ -1,1 +1,1 @@
-#define CHI_VERSION_INFO "Version:  0.0.0\nTag:      unreleased\nDate:     unreleased\nCommits:  0\nHash:     unreleased"
+#define CHI_VERSION_INFO "Version:  0.0.0\nTag:      unreleased\nDate:     unreleased\nCommits:  unreleased\nHash:     unreleased"

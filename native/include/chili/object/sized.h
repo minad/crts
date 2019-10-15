@@ -1,12 +1,8 @@
-#pragma once
-
-#include "../../chili.h"
-
 #define CHI_SIZED(bits, Type, type)                                     \
-    CHI_API_INL CHI_WU Chili chiFrom##Type##bits(type##bits##_t v) {    \
+    CHI_INL CHI_WU Chili chiFrom##Type##bits(type##bits##_t v) {        \
         return chiFromUInt32((uint32_t)(type##32##_t)v);                \
     }                                                                   \
-    CHI_API_INL CHI_WU type##bits##_t chiTo##Type##bits(Chili c) {      \
+    CHI_INL CHI_WU type##bits##_t chiTo##Type##bits(Chili c) {          \
         return (type##bits##_t)chiToUInt32(c);                          \
     }
 CHI_SIZED(8,  Int,  int)

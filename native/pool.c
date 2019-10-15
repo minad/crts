@@ -1,41 +1,46 @@
 #include "pool.h"
 
 static ChiPoolObject* poolAlloc(ChiPool* pool) {
-    CHI_ASSERT((uint8_t*)pool->next + pool->object <= (uint8_t*)pool->end);
+    if ((uint8_t*)pool->next + pool->object > (uint8_t*)pool->end)
+        return 0;
     void* obj = pool->next;
     pool->next = (uint8_t*)obj + pool->object;
     return (ChiPoolObject*)obj;
 }
 
-static void poolInsert(ChiPool* pool, ChiPoolObject* po) {
+void chiPoolPut(ChiPool* pool, void* obj) {
+    ChiPoolObject* po = (ChiPoolObject*)obj;
     po->next = pool->free;
     pool->free = po;
 }
 
 void chiPoolGrow(ChiPool* pool, void* start, size_t size) {
     while ((uint8_t*)pool->next + pool->object <= (uint8_t*)pool->end)
-        poolInsert(pool, poolAlloc(pool));
+        chiPoolPut(pool, poolAlloc(pool));
     pool->next = start;
     pool->end = (uint8_t*)start + size;
-    pool->avail += size / pool->object;
 }
 
 void* chiPoolGet(ChiPool* pool) {
-    CHI_ASSERT(pool->avail > 0);
-    --pool->avail;
-    if (!pool->free)
+    if (CHI_UNLIKELY(!pool->free))
         return poolAlloc(pool);
     ChiPoolObject* obj = pool->free;
     pool->free = obj->next;
     return obj;
 }
 
-void chiPoolPut(ChiPool* pool, void* obj) {
-    poolInsert(pool, (ChiPoolObject*)obj);
-    ++pool->avail;
+bool chiPoolAvail(ChiPool* pool, size_t n) {
+    size_t avail = (size_t)((uint8_t*)pool->end - (uint8_t*)pool->next) / pool->object;
+    if (n <= avail)
+        return true;
+    n -= avail;
+    ChiPoolObject* obj = pool->free;
+    while (obj && n --> 0)
+        obj = obj->next;
+    return !!obj;
 }
 
 void chiPoolInit(ChiPool* pool, size_t object) {
-    memset(pool, 0, sizeof (ChiPool));
+    CHI_ZERO_STRUCT(pool);
     pool->object = object;
 }

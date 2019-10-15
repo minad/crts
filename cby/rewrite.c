@@ -1,37 +1,36 @@
-#include "cby.h"
-#include "error.h"
-#include "ffisupport.h"
-#include "sink.h"
-#include "bytecode/opcodes.h"
 #include "bytecode/decode.h"
+#include "bytecode/opcodes.h"
+#include "cby.h"
+#include "ffisupport.h"
+#include "native/sink.h"
 
 typedef struct {
-    uint32_t op;
-    size_t   start;
-    size_t   size;
+    uintptr_t start;
+    uint32_t  size;
+    uint32_t  op;
 } DispatchInfo;
 
 #define S_ELEM DispatchInfo
 #define S_SUFFIX DispatchInfoByStart
 #define S_LESS(a, b) ((a)->start < (b)->start)
-#include "sort.h"
+#include "native/generic/sort.h"
 
 #define S_ELEM DispatchInfo
 #define S_SUFFIX DispatchInfoBySize
 #define S_LESS(a, b) ((a)->size < (b)->size)
-#include "sort.h"
+#include "native/generic/sort.h"
 
 static void dumpDispatchInfo(ChiSink* sink, const char* name, uint8_t** start) {
     DispatchInfo info[OPCODE_COUNT];
     for (uint32_t i = 0; i < OPCODE_COUNT; ++i) {
         info[i].op = i;
-        info[i].start = (size_t)start[i];
+        info[i].start = (uintptr_t)start[i];
         info[i].size = 0;
     }
     sortDispatchInfoByStart(info, OPCODE_COUNT);
 
     for (uint32_t i = 0; i < OPCODE_COUNT - 1; ++i)
-        info[i].size = (size_t)(info[i + 1].start - info[i].start);
+        info[i].size = (uint32_t)(info[i + 1].start - info[i].start);
 
     sortDispatchInfoBySize(info, OPCODE_COUNT);
 

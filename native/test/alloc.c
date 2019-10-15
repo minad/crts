@@ -1,5 +1,5 @@
-#include "test.h"
 #include "../mem.h"
+#include "test.h"
 
 TEST(chiAlloc) {
     //ASSERT(!chiAlloc(0));

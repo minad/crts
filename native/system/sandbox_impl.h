@@ -1,14 +1,9 @@
-#include "../mem.h"
+#include <libc.h>
 #include "../chunk.h"
-#include <bits/ctors.h>
-
-void* chiTaskLocal(size_t size, ChiDestructor CHI_UNUSED(destructor)) {
-    return chiAlloc(size);
-}
 
 int sb_main(int argc, char** argv) {
     chiChunkSetup(&(ChiChunkOption){.arenaStart = sb_info->heap.start, .arenaSize = sb_info->heap.size });
-    __call_ctors();
+    __libc_call_ctors();
     chiMain(argc, argv);
 }
 

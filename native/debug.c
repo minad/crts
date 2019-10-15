@@ -1,8 +1,7 @@
-#include "debug.h"
-#include "sink.h"
-#include "error.h"
-#include <stdarg.h>
 #include <stdlib.h>
+#include "debug.h"
+#include "error.h"
+#include "sink.h"
 #if CHI_VALGRIND_ENABLED
 #  include <valgrind/memcheck.h>
 #else
@@ -19,32 +18,49 @@ CHI_NOINL void chiPoisonMem(void* x, uint8_t p, size_t n) {
 }
 #endif
 
-#if CHI_POISON_BLOCK_ENABLED
-CHI_NOINL void chiPoisonBlock(void* x, uint8_t p, size_t n) {
-    memset(x, p, n);
-    VALGRIND_MAKE_MEM_UNDEFINED(x, n);
-}
-#endif
-
 #if CHI_POISON_OBJECT_ENABLED
 CHI_NOINL void chiPoisonObject(void* p, size_t n) {
     for (size_t i = 0; i < n; ++i)
-        i[(Chili*)p] = chiWrapUnchecked((void*)CHI_CHUNK_START, 0, CHI_POISON_OBJECT);
+        i[(Chili*)p] = _CHILI_POISON;
 }
 #endif
 
 #ifndef NDEBUG
-_Noreturn void chiAssert(const char* file, uint32_t line, const char* func, const char* cond) {
-    chiBug(file, line, func, "Assertion `%s' failed", cond);
+static CHI_COLD void debugMsgv(const char* prefix, const char* file, uint32_t line, const char* func, const char* fmt, va_list ap) {
+    char buf[512];
+    ChiSinkMem s;
+    chiSinkMemInit(&s, buf, sizeof (buf));
+    chiSinkFmt(&s.base, "%s: %s:%u: %s: ", prefix, file, line, func);
+    chiSinkFmtv(&s.base, fmt, ap);
+    s.used = CHI_MIN(s.capacity - 1, s.used);
+    chiSinkPutc(&s.base, '\n');
+    chiSinkWrite(chiStderr, s.buf, s.used);
 }
 
-_Noreturn void chiBug(const char* file, uint32_t line, const char* func, const char* fmt, ...) {
-    chiSinkFmt(chiStderr, "Error: %s:%u: %s: ", file, line, func);
+static CHI_COLD void debugMsg(const char* prefix, const char* file, uint32_t line, const char* func, const char* fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
-    chiSinkFmtv(chiStderr, fmt, ap);
+    debugMsgv(prefix, file, line, func, fmt, ap);
     va_end(ap);
-    chiSinkPutc(chiStderr, '\n');
-    chiAbort("Abort!");
+}
+
+CHI_COLD void chiDebugMsg(const char* file, uint32_t line, const char* func, const char* fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    debugMsgv("Debug", file, line, func, fmt, ap);
+    va_end(ap);
+}
+
+CHI_COLD void chiDebugBug(const char* file, uint32_t line, const char* func, const char* fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    debugMsgv("Bug", file, line, func, fmt, ap);
+    va_end(ap);
+    __builtin_trap();
+}
+
+CHI_COLD void chiDebugAssert(const char* file, uint32_t line, const char* func, const char* cond) {
+    debugMsg("Assert", file, line, func, "`%s' failed", cond);
+    __builtin_trap();
 }
 #endif

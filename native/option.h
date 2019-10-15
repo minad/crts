@@ -3,15 +3,14 @@
 #include "private.h"
 
 typedef enum {
-    CHI_OPT_END,
-    CHI_OPT_TITLE,
-    CHI_OPT_FLAG,
-    CHI_OPT_SET,
-    CHI_OPT_UINT32,
-    CHI_OPT_UINT64,
-    CHI_OPT_SIZE,
-    CHI_OPT_STRING,
-    CHI_OPT_CHOICE,
+    CHI_OPTTYPE_END,
+    CHI_OPTTYPE_TITLE,
+    CHI_OPTTYPE_FLAG,
+    CHI_OPTTYPE_UINT32,
+    CHI_OPTTYPE_UINT64,
+    CHI_OPTTYPE_SIZE,
+    CHI_OPTTYPE_STRING,
+    CHI_OPTTYPE_CHOICE,
 } ChiOptionType;
 
 typedef enum {
@@ -22,24 +21,24 @@ typedef enum {
 } ChiOptionResult;
 
 #define CHI_OPT_FIELD(ft, f)                                          \
-    (CHI_STATIC_FAIL(__builtin_types_compatible_p(CHI_FIELD_TYPE(CHI_OPT_TARGET, f), ft)) + \
-     offsetof(CHI_OPT_TARGET, f))
-#define CHI_OPT_DESC(t, ...) { .type = CHI_OPT_##t, ##__VA_ARGS__ },
-#define CHI_OPT_DESC_TITLE(n) CHI_OPT_DESC(TITLE, .name = CHI_MUST_BE_STRING(n))
-#define CHI_OPT_DESC_END      CHI_OPT_DESC(END)
-#define CHI_OPT_DESC_FLAG(f, n, d)                                      \
-    CHI_OPT_DESC(FLAG, .field = CHI_OPT_FIELD(bool, f), .name = CHI_MUST_BE_STRING(n) "\0" CHI_MUST_BE_STRING(d))
-#define CHI_OPT_DESC_UINT32(f, a, b, n, d)                              \
-    CHI_OPT_DESC(UINT32, .field = CHI_OPT_FIELD(uint32_t, f), .uint32Range = { a, b }, .name = CHI_MUST_BE_STRING(n) "\0" CHI_MUST_BE_STRING(d))
-#define CHI_OPT_DESC_CHOICE(f, n, d, c)                                 \
-    CHI_OPT_DESC(CHOICE, .field = CHI_OPT_FIELD(uint32_t, f), .name = CHI_MUST_BE_STRING(n) "\0" CHI_MUST_BE_STRING(d), .choice = CHI_MUST_BE_STRING(c))
-#define CHI_OPT_DESC_UINT64(f, a, b, n, d)                              \
-    CHI_OPT_DESC(UINT64, .field = CHI_OPT_FIELD(uint64_t, f), .uint64Range = { a, b }, .name = CHI_MUST_BE_STRING(n) "\0" CHI_MUST_BE_STRING(d))
-#define CHI_OPT_DESC_SIZE(f, a, b, n, d)                                \
-    CHI_OPT_DESC(SIZE, .field = CHI_OPT_FIELD(size_t, f), .sizeRange = { a, b }, .name = CHI_MUST_BE_STRING(n) "\0" CHI_MUST_BE_STRING(d))
-#define CHI_OPT_DESC_STRING(f, n, d)                                    \
-    CHI_OPT_DESC(STRING, .field = CHI_OPT_FIELD(char[], f), .string.size = CHI_FIELD_SIZE(CHI_OPT_TARGET, f), .name = CHI_MUST_BE_STRING(n) "\0" CHI_MUST_BE_STRING(d))
-#define CHI_OPT_DESC_CB(t, f, n, d) CHI_OPT_DESC(t, .cb = true, .cbFn = f, .name = CHI_MUST_BE_STRING(n) "\0" CHI_MUST_BE_STRING(d))
+    (CHI_STATIC_FAIL(__builtin_types_compatible_p(CHI_FIELD_TYPE(CHI_OPT_STRUCT, f), ft)) + \
+     offsetof(CHI_OPT_STRUCT, f))
+#define _CHI_OPT(t, ...) { .type = CHI_OPTTYPE_##t, ##__VA_ARGS__ },
+#define CHI_OPT_TITLE(n) _CHI_OPT(TITLE, .name = CHI_MUST_BE_STRING(n))
+#define CHI_OPT_END      _CHI_OPT(END)
+#define CHI_OPT_FLAG(f, n, d)                                      \
+    _CHI_OPT(FLAG, .field = CHI_OPT_FIELD(bool, f), .name = CHI_MUST_BE_STRING(n) "\0" CHI_MUST_BE_STRING(d))
+#define CHI_OPT_UINT32(f, a, b, n, d)                              \
+    _CHI_OPT(UINT32, .field = CHI_OPT_FIELD(uint32_t, f), .uint32Range = { a, b }, .name = CHI_MUST_BE_STRING(n) "\0" CHI_MUST_BE_STRING(d))
+#define CHI_OPT_CHOICE(f, n, d, c)                                 \
+    _CHI_OPT(CHOICE, .field = CHI_OPT_FIELD(uint32_t, f), .name = CHI_MUST_BE_STRING(n) "\0" CHI_MUST_BE_STRING(d), .choice = CHI_MUST_BE_STRING(c))
+#define CHI_OPT_UINT64(f, a, b, n, d)                              \
+    _CHI_OPT(UINT64, .field = CHI_OPT_FIELD(uint64_t, f), .uint64Range = { a, b }, .name = CHI_MUST_BE_STRING(n) "\0" CHI_MUST_BE_STRING(d))
+#define CHI_OPT_SIZE(f, a, b, n, d)                                \
+    _CHI_OPT(SIZE, .field = CHI_OPT_FIELD(size_t, f), .sizeRange = { a, b }, .name = CHI_MUST_BE_STRING(n) "\0" CHI_MUST_BE_STRING(d))
+#define CHI_OPT_STRING(f, n, d)                                    \
+    _CHI_OPT(STRING, .field = CHI_OPT_FIELD(char[], f), .string.size = CHI_FIELD_SIZE(CHI_OPT_STRUCT, f), .name = CHI_MUST_BE_STRING(n) "\0" CHI_MUST_BE_STRING(d))
+#define CHI_OPT_CB(t, f, n, d) _CHI_OPT(t, .cb = true, .cbFn = f, .name = CHI_MUST_BE_STRING(n) "\0" CHI_MUST_BE_STRING(d))
 
 typedef struct ChiSink_ ChiSink;
 typedef const struct ChiOption_ ChiOption;
@@ -56,12 +55,11 @@ struct CHI_PACKED ChiOption_ {
         ChiOptionCallback cbFn;
     };
     union {
-        const char*                           choice;      ///< CHI_OPT_CHOICE,  List of choices separated by comma
-        struct { size_t size;               } string;      ///< CHI_OPT_STRING
-        struct { uint64_t val; size_t size; } set;         ///< CHI_OPT_SET
-        struct { uint32_t min, max;         } uint32Range; ///< CHI_OPT_UINT32
-        struct { uint64_t min, max;         } uint64Range; ///< CHI_OPT_UINT64
-        struct { size_t   min, max;         } sizeRange;   ///< CHI_OPT_SIZE
+        const char*                 choice;        ///< CHI_OPTTYPE_CHOICE,  List of choices separated by comma
+        struct { size_t size;       } string;      ///< CHI_OPTTYPE_STRING
+        struct { uint32_t min, max; } uint32Range; ///< CHI_OPTTYPE_UINT32
+        struct { uint64_t min, max; } uint64Range; ///< CHI_OPTTYPE_UINT64
+        struct { size_t   min, max; } sizeRange;   ///< CHI_OPTTYPE_SIZE
     };
 };
 
@@ -71,14 +69,14 @@ struct ChiOptionList_ {
 };
 
 struct ChiOptionParser_ {
-    ChiSink *out, *err;
+    ChiSink *help, *usage;
     const ChiOptionList* list;
 };
 
 #if CHI_OPTION_ENABLED
-void chiOptionHelp(const ChiOptionParser*);
-CHI_WU ChiOptionResult chiOptionArgs(const ChiOptionParser*, int*, char**);
-CHI_WU ChiOptionResult chiOptionEnv(const ChiOptionParser*, const char*);
+CHI_INTERN void chiOptionHelp(const ChiOptionParser*);
+CHI_INTERN CHI_WU ChiOptionResult chiOptionArgs(const ChiOptionParser*, int*, char**);
+CHI_INTERN CHI_WU ChiOptionResult chiOptionEnv(const ChiOptionParser*, const char*);
 #else
 void chiOptionHelp(const ChiOptionParser* CHI_UNUSED(p)) {}
 CHI_INL CHI_WU ChiOptionResult chiOptionArgs(const ChiOptionParser* CHI_UNUSED(p), int* CHI_UNUSED(argc), char** CHI_UNUSED(argv)) {

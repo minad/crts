@@ -1,10 +1,5 @@
-#include "system.h"
-#include "../error.h"
-#include "../sink.h"
-
-#if CHI_SYSTEM_HAS_STDIO
-#  include "system/stdio_quirks.h"
-#endif
+#include "error.h"
+#include "sink.h"
 
 #if defined(CHI_STANDALONE_SANDBOX)
 #  include "system/sandbox_impl.h"

@@ -1,43 +1,48 @@
 #include <chili/cont.h>
-#include "runtime.h"
-#include "stack.h"
+#include "barrier.h"
 #include "event.h"
 #include "location.h"
-#include "mem.h"
+#include "stack.h"
 
 struct ChiModuleEntry_ {
     ChiCont init;
     Chili   val;
 };
 
-#define NOHASH
-#define HASH       ChiModuleHash
-#define ENTRY      ChiModuleEntry
-#define PREFIX     moduleHash
-#define KEY(e)     e->init
-#include "../hashtable.h"
+#define HT_NOSTRUCT
+#define HT_HASH       ChiModuleHash
+#define HT_ENTRY      ChiModuleEntry
+#define HT_PREFIX     moduleHash
+#define HT_KEY(e)     e->init
+#include "generic/hashtable.h"
 
-CHI_CONT_DECL(static, initModuleCont)
-CHI_CONT_DECL(static, initImportCont)
-CHI_CONT_DECL(static, initImport)
+CHI_STATIC_CONT_DECL(initModuleCont)
+CHI_STATIC_CONT_DECL(initImportCont)
+CHI_STATIC_CONT_DECL(initImport)
 
-STATIC_CONT(initModuleCont,, .size = 2) {
+STATIC_CONT(initModuleCont, .size = 2) {
     PROLOGUE(initModuleCont);
     SP -= 2;
     ChiCont init = chiToCont(SP[0]);
     ChiProcessor* proc = CHI_CURRENT_PROCESSOR;
-    ChiModuleEntry* e = moduleHashInsert(&proc->rt->moduleHash, moduleHashIndex(init));
+    ChiRuntime* rt = proc->rt;
+    ChiModuleEntry* e = moduleHashInsert(&rt->moduleHash, moduleHashFn(init));
     e->init = init;
-    e->val = chiRoot(proc->rt, A(0));
-    if (CHI_EVENT_P(proc, MODULE_INIT)) {
-        ChiLocLookup lookup;
-        chiLocLookup(&lookup, (ChiLoc){ .native.type = CHI_LOC_NATIVE, .native.cont = init });
-        CHI_EVENT(proc, MODULE_INIT, .module = lookup.loc.module);
+    e->val = A(0);
+
+    if (chiEventEnabled(proc, MODULE_INIT)) {
+        ChiLocResolve resolve;
+        chiLocResolve(&resolve, (ChiLoc){ .type = CHI_LOC_NATIVE, .cont = init },
+                     rt->option.stack.traceMangled);
+        chiEventStruct(proc, MODULE_INIT, &resolve.loc);
     }
-    RET(A(0));
+
+    chiPromoteLocal(proc, &e->val);
+    chiGCRoot(rt, e->val);
+    RET(e->val);
 }
 
-STATIC_CONT(initImportCont,, .size = 3) {
+STATIC_CONT(initImportCont, .size = 3) {
     PROLOGUE(initImportCont);
     SP -= 3;
     Chili ret = A(0);
@@ -49,7 +54,7 @@ STATIC_CONT(initImportCont,, .size = 3) {
     KNOWN_JUMP(initImport);
 }
 
-STATIC_CONT(initImport,, .na = 1) {
+STATIC_CONT(initImport, .na = 1) {
     PROLOGUE(initImport);
     LIMITS(.stack = 3);
 
@@ -64,10 +69,10 @@ STATIC_CONT(initImport,, .na = 1) {
     SP[2] = chiFromCont(&initImportCont);
     SP += 3;
 
-    JUMP(chiToCont(SP[(int32_t)idx + 1 - (int32_t)nimports - 2 - 3]));
+    JUMP_FN(SP[(int32_t)idx + 1 - (int32_t)nimports - 2 - 3]);
 }
 
-CONT(chiInitModule,, .na = 2) {
+CONT(chiInitModule, .na = 2) {
     PROLOGUE(chiInitModule);
 
     ChiCont init = chiToCont(A(0));

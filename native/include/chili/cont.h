@@ -1,206 +1,217 @@
 #pragma once
 
-#define IDX(c, i)             CHI_IDX(c, i)
-#define STATIC_BIGINT(s)      CHI_STATIC_BIGINT(s)
-#define STATIC_BUFFER(s)      CHI_STATIC_BUFFER(s)
-#define STATIC_STRING(s)      CHI_STATIC_STRING(s)
 #define RET(r)                ({ A(0) = (r); JUMP_FN(SP[-1]); })
-#define THROW(e)              ({ A(0) = (e); KNOWN_JUMP(_chiThrow); })
-#define PAR(t)                ({ A(0) = (t); KNOWN_JUMP(_chiPar); })
-#define CATCH(f, h)           ({ A(0) = (f); A(1) = (h); KNOWN_JUMP(_chiCatch); })
-#define JUMP_FN(c)            JUMP(chiToCont(c))
-#define JUMP_FN0              JUMP_FN(IDX(A(0), 0))
-#define FIRST_JUMP(c)         _CALLCONV_FIRST_JUMP(CHI_IFELSE(CHI_CONTINFO_PREFIX, (c), (c)->fn))
-#define KNOWN_JUMP_NOTRACE(f) _CALLCONV_JUMP(CHI_IFELSE(CHI_CONTINFO_PREFIX, f, CHI_CAT(f, _fn)))
-#define JUMP_NOTRACE(c)       _CALLCONV_JUMP(CHI_IFELSE(CHI_CONTINFO_PREFIX, (c), (c)->fn))
-#define JUMP(c)               ({ TRACE_TIME; JUMP_NOTRACE(c); })
-#define KNOWN_JUMP(f)         ({ TRACE_TIME; KNOWN_JUMP_NOTRACE(f); })
+#define JUMP_FN(c)            JUMP(_chiContFn(c))
+#define JUMP_FN0              JUMP_FN(chiIdx(A(0), 0))
+#define KNOWN_JUMP(n)         JUMP(CHI_CONT_FN(n))
 
 // read only registers, since we want to track writes in the code explicitly
-#define NA                 ((const uint8_t)NARW)
-#define SL                 ((Chili* const)SLRW)
-#define HL                 ((ChiWord* const)HLRW)
+#define HLRW                (_chiReg->hl)
+#define AUX                 (_chiReg->aux)
+#define NA                  ((const uint8_t)NARW)
+#define SL                  ((Chili* const)SLRW)
+#define HL                  ((ChiWord* const)HLRW)
 
-#define TRACE_TIME          ({ if (CHI_TRACEPOINTS_ENABLED && CHI_UNLIKELY(AUX.TP > 0)) _chiTraceTime(_chiCurrentCont, SP); })
-#define TRACE_TIME_NAME(n)  ({ if (CHI_TRACEPOINTS_ENABLED && CHI_UNLIKELY(AUX.TP > 0)) _chiTraceTimeName(_chiCurrentCont, SP, (n)); })
-#define TRACE_ALLOC(n)      ({ if (CHI_TRACEPOINTS_ENABLED && CHI_UNLIKELY(AUX.TP < 0)) _chiTraceAlloc(_chiCurrentCont, SP, (n)); })
+#define _CHI_TRACE_TRIGGER  CHI_AND(CHI_TRACEPOINTS_CONT_ENABLED, atomic_load_explicit(&AUX.TRACEPOINT, memory_order_relaxed))
+#define TRACE_TIME          ({ if (CHI_UNLIKELY(_CHI_TRACE_TRIGGER > 0)) _chiTraceContTime(_chiCurrentCont, SP); })
+#define TRACE_TIME_NAME(n)  ({ if (CHI_UNLIKELY(_CHI_TRACE_TRIGGER > 0)) _chiTraceContTimeName(_chiCurrentCont, SP, (n)); })
+#define TRACE_ALLOC(n)      ({ if (CHI_UNLIKELY(_CHI_TRACE_TRIGGER < 0)) _chiTraceContAlloc(_chiCurrentCont, SP, (n)); })
 #define TRACE_FFI(n)        TRACE_TIME_NAME("ffi " #n)
 
-#define PROTECT_BEGIN       _chiProtectBegin(SP, HP)
-#define PROTECT_END(ret)    ({ A(0) = (ret); KNOWN_JUMP_NOTRACE(_chiProtectEnd); })
+#define PROTECT(a)          ({ _chiProtectBegin(SP); A(0) = (a); KNOWN_JUMP(_chiProtectEnd); })
+#define PROTECT_VOID(a)     PROTECT(({ (a); CHI_FALSE; }))
 
 #ifndef CHI_GUID
 #  error CHI_GUID must be defined
 #endif
 
-#define _CHI_CONT_SECTION(n, i) __attribute__ ((aligned(CHI_CONTINFO_ALIGN), section(".text$" CHI_STRINGIZE(CHI_GUID) "." #n "." #i)))
+// Use prefix data attribute
+#define _CHI_CONT_PREFIX_INFO0(n)   __attribute__ ((aligned(CHI_CONT_PREFIX_ALIGN), used))
+#define _CHI_CONT_PREFIX_FN0(n)     __prefix_data__(CHI_CAT(n, _info)) __attribute__ ((aligned(CHI_CONT_PREFIX_ALIGN)))
 
-#ifdef NDEBUG
-#define _CHI_CONT_CHECK(n)
-#else
-#define _CHI_CONT_CHECK(n)                                              \
-    static const _CHI_CONT_SECTION(n, 0)                                \
-    __attribute__ ((used)) void* CHI_CAT(n, _linkcheck) = &CHI_CAT(n, _linkcheck);
-#endif
+// Use prefix data sections
+#define _CHI_CONT_PREFIX_INFO1(n)   __attribute__ ((aligned(CHI_CONT_PREFIX_ALIGN), section(".text$" CHI_STRINGIZE(CHI_GUID) "." #n ".0"), used))
+#define _CHI_CONT_PREFIX_FN1(n)     __attribute__ ((aligned(CHI_CONT_PREFIX_ALIGN), section(".text$" CHI_STRINGIZE(CHI_GUID) "." #n ".1")))
 
-#define _CHI_CONT1(static_cont, attr_fn, n, f, ...)                     \
-    _CHI_CONT_CHECK(n)                                                  \
+// check prefix data
+#define _CHI_CONT_PREFIX_VALID0(n)  true
+#define _CHI_CONT_PREFIX_VALID1(n)  ({ __volatile__ bool valid = CHI_CHOICE(CHI_CONT_PREFIX_SECTION, ((const uint8_t*)&CHI_CAT(n, _info) == ((const uint8_t*)n - CHI_CONT_PREFIX_ALIGN)), true); valid; })
+
+// Use prefix data
+#define _CHI_CONT1(n, static_cont, attr_fn, ...)                        \
     CHI_IF(CHI_LOC_ENABLED,                                             \
-    static const _ChiContInfoLoc CHI_CAT(n, _loc) = {                   \
-        .file = __FILE__ "\0" f, .name = #n,                            \
+    static _ChiContInfoLoc CHI_CAT(n, _loc) = {                         \
+        .file = __FILE__, .name = #n, .line = __LINE__                  \
     };)                                                                 \
-    _CHI_CONT_SECTION(n, 1) __attribute__ ((used))                      \
-    static const ChiContInfo CHI_CAT(n, _info) = {                      \
+    CHI_CAT(_CHI_CONT_PREFIX_INFO, CHI_CONT_PREFIX_SECTION)(n) static ChiContInfo CHI_CAT(n, _info) = { \
         CHI_IF(CHI_LOC_ENABLED, .loc = &CHI_CAT(n, _loc),)              \
-        .lineMangled = CHI_LOC_ENABLED ? __LINE__ : 0,                  \
-        ##__VA_ARGS__                                                   \
+        .trap = CHI_ARCH_TRAP_OP, ##__VA_ARGS__                         \
     };                                                                  \
-    static_cont attr_fn _CHI_CONT_SECTION(n, 2) CHI_CONT_FN(n)
+    CHI_CAT(_CHI_CONT_PREFIX_FN, CHI_CONT_PREFIX_SECTION)(n) static_cont attr_fn CHI_CONT_PROTO(n)
+#define _CHI_CONT_INFO1(n) CHI_CAT(n, _info)
 
-#define _CHI_CONT0(static_cont, attr_fn, n, f, ...)                     \
-    static_cont attr_fn CHI_CONT_FN(CHI_CAT(n, _fn));                   \
-    __attribute__ ((used))                                              \
-    static_cont const ChiContInfo n = {                                 \
-        CHI_IF(CHI_LOC_ENABLED, .file = __FILE__ "\0" f, .name = #n,)   \
-        .fn = CHI_CAT(n, _fn),                                          \
-        .lineMangled = CHI_LOC_ENABLED ? __LINE__ : 0,                  \
-        ##__VA_ARGS__                                                   \
+// Use indirection
+#define _CHI_CONT0(n, static_cont, attr_fn, ...)                        \
+    static_cont attr_fn CHI_CONT_PROTO(CHI_CAT(n, _fn));                \
+    CHI_WARN_OFF(c++-compat, redundant-decls)                           \
+    static_cont ChiContInfo n = {                                       \
+        CHI_IF(CHI_LOC_ENABLED, .file = __FILE__, .name = #n, .line = __LINE__,) \
+        .fn = CHI_CAT(n, _fn), ##__VA_ARGS__                            \
     };                                                                  \
-    static_cont attr_fn CHI_CONT_FN(CHI_CAT(n, _fn))
+    CHI_WARN_ON                                                         \
+    static_cont attr_fn CHI_CONT_PROTO(CHI_CAT(n, _fn))
+#define _CHI_CONT_INFO0(n) n
 
-#define _CHI_CONT(x, ...) x(__VA_ARGS__)
-#define _CONT(...)        _CHI_CONT(CHI_CAT(_CHI_CONT, CHI_CONTINFO_PREFIX), __VA_ARGS__)
+#define CONT(n, ...)        ATTR_CONT(n,,, __VA_ARGS__)
+#define STATIC_CONT(n, ...) ATTR_CONT(n, static,, __VA_ARGS__)
+#define INTERN_CONT(n, ...) ATTR_CONT(n, CHI_INTERN,, __VA_ARGS__)
+#define ATTR_CONT(...)      CHI_CAT(_CHI_CONT, CHI_CONT_PREFIX)(__VA_ARGS__)
 
-#define CONT(n, ...)        _CONT(,, n, ""__VA_ARGS__)
-#define STATIC_CONT(n, ...) _CONT(static,, n, ""__VA_ARGS__)
-
-#define PROLOGUE(c)                                                 \
-    CHI_ASSERT(!strcmp(CHI_STRINGIZE(c)                             \
-                       CHI_IFELSE(CHI_CONTINFO_PREFIX, "", "_fn"),  \
-                       __func__));                                  \
-    _PROLOGUE;                                                      \
-    const ChiCont _chiCurrentCont = &c;                             \
-    if (CHI_DIM(AUX.CH))                                            \
-        AUX.CH[AUX.CN++ & (CHI_DIM(AUX.CH) - 1)] = _chiCurrentCont; \
+#define PROLOGUE(c)                                                     \
+    CHI_ASSERT(!strcmp(CHI_STRINGIZE(CHI_CONT_FN(c)), __func__));       \
+    CHI_ASSERT(CHI_CAT(_CHI_CONT_PREFIX_VALID, CHI_CONT_PREFIX)(c));    \
+    _PROLOGUE(CHI_CAT(_CHI_CONT_INFO, CHI_CONT_PREFIX)(c).na);          \
+    CHI_IF(CHI_POISON_ENABLED,                                          \
+           for (uint32_t i = CHI_CAT(_CHI_CONT_INFO, CHI_CONT_PREFIX)(c).na + 1; i < CHI_AMAX; ++i) \
+               A(i) = _CHILI_POISON;)                                   \
+    const ChiCont _chiCurrentCont = &c;                                 \
+    CHI_IF(CHI_FNLOG_ENABLED, if (AUX.FNLOG) chiFnLog(_chiCurrentCont);); \
     TRACE_TIME
 
-#define NEW(t, s)                               \
-    ({                                          \
-        const size_t _s = (s);                  \
-        CHI_ASSERT(_s <= CHI_MAX_UNPINNED);     \
-        Chili _c = _chiWrap(HP, _s, (t));       \
-        HP += _s;                               \
-        _c;                                     \
-    })
+#define NEW_PAYLOAD(type, var) ((type*)_chiNewPayload##var)
 
-#define _LIMITS_SAVE(save, limit, ...)                                  \
+#define NEW_LARGE(var, type, size)                      \
+    Chili var = chiNew((type), (size));                 \
+    void *_chiNewPayload##var = _chiPayload(var);       \
+    ({})
+
+#define _CHI_NEW(s, var, type, size)                                    \
+    Chili var;                                                          \
+    void *_chiNewPayload##var;                                          \
     ({                                                                  \
-        const struct { size_t stack, heap; } _limits = { limit, ##__VA_ARGS__ }; \
-        CHI_ASSERT(_limits.heap <= CHI_BLOCK_MINLIMIT);                 \
-        if (_limits.heap) TRACE_ALLOC(_limits.heap);                    \
-        Chili* _newSP = SP + _limits.stack;                             \
-        ChiWord* _newHP = HP + _limits.heap;                            \
-        if (CHI_UNLIKELY((CHI_SYSTEM_HAS_INTERRUPT ? (!_limits.heap && !HL) : !AUX.EN--) \
-                         || (_limits.stack && _newSP > SL)              \
-                         || (_limits.heap && _newHP > HL))) {           \
-            if (_limits.stack) SLRW = _newSP;                           \
-            if (_limits.heap) HLRW = _newHP;                            \
+        const size_t s = (size);                                        \
+        CHI_ASSERT(s <= CHI_MAX_UNPINNED);                              \
+        var = _chiWrap(_chiNewPayload##var = HP, s, (type), CHI_GEN_NURSERY); \
+        HP += s;                                                        \
+        ({});                                                           \
+    })
+#define NEW(var, type, size) _CHI_NEW(CHI_GENSYM, var, (type), (size))
+
+#define NEW_INIT(var, idx, x)  _chiInit(var, NEW_PAYLOAD(Chili, var) + (idx), (x))
+#define NEW_INIT_THUNK(var, x) _chiFieldInit(&NEW_PAYLOAD(ChiThunk, var)->val, (x));
+
+#define _CHI_LIMITS_SAVE(sl, hl, params, save, param1, ...)             \
+    ({                                                                  \
+        const struct { size_t stack, heap; } params = { param1, ##__VA_ARGS__ }; \
+        CHI_ASSERT(params.heap <= CHI_BLOCK_MINLIMIT);                  \
+        if (params.heap) TRACE_ALLOC(params.heap);                      \
+        Chili* sl = SP + params.stack;                                  \
+        ChiWord* hl = HP + params.heap;                                 \
+        if (CHI_UNLIKELY((params.stack && sl > SL) || (params.heap && hl > HL))) { \
+            if (params.stack) SLRW = sl;                                \
+            if (params.heap) HLRW = hl;                                 \
             save;                                                       \
         }                                                               \
-    })                                                                  \
-
-#define LIMITS(...)                                                     \
-    _LIMITS_SAVE(({ *SP = chiFromCont(_chiCurrentCont);                 \
-                     KNOWN_JUMP(_chiInterrupt); }),                     \
-                 __VA_ARGS__)
+    })
+#define LIMITS_SAVE(...) _CHI_LIMITS_SAVE(CHI_GENSYM, CHI_GENSYM, CHI_GENSYM, __VA_ARGS__)
+#define LIMITS(...)      _CHI_LIMITS_SAVE(CHI_GENSYM, CHI_GENSYM, CHI_GENSYM, ({ *SP = chiFromCont(_chiCurrentCont); KNOWN_JUMP(_chiInterrupt); }), __VA_ARGS__)
 
 /* Grow heap. Does update HL to ensure that we do not have have HP > HL afterwards.
  * It might be that HL=0 after GROW_HEAP when an interrupt is pending,
  * but it will be guaranteed that enough memory is available.
  */
-#define GROW_HEAP(n)                            \
+#define _CHI_GROW_HEAP(hl, n)                   \
     ({                                          \
-        ChiWord* _hl = HP + (n);                \
-        if (CHI_UNLIKELY(_hl > HL))             \
-            HP = _chiGrowHeap(HP, _hl);         \
+        ChiWord* hl = HP + (n);                 \
+        if (CHI_UNLIKELY(hl > HL))              \
+            HP = _chiGrowHeap(HP, hl);          \
     })
+#define GROW_HEAP(n) _CHI_GROW_HEAP(CHI_GENSYM, (n))
 
-#define FORCE(t)                                \
+#define _CHI_FORCE(thk, val, thk_val)           \
     ({                                          \
-        A(0) = (t);                             \
-        Chili _val;                             \
-        if (_chiThunkForced(A(0), &_val))       \
-            RET(_val);                       \
-        A(1) = _val;                            \
-        KNOWN_JUMP(_chiForce);                       \
+        Chili thk = (thk_val), val;             \
+        if (_chiThunkForced(thk, &val))         \
+            RET(val);                           \
+        A(0) = val;                             \
+        A(1) = thk;                             \
+        KNOWN_JUMP(_chiThunkForce);             \
     })
+#define FORCE(t) _CHI_FORCE(CHI_GENSYM, CHI_GENSYM, (t))
 
-#define APP(args)                                                       \
+#define _CHI_APP(args, args_val)                                \
+    ({                                                          \
+        const size_t args = (args_val);                         \
+        CHI_ASSERT(args < CHI_AMAX);                            \
+        if (args == _chiFnArity(A(0)))                          \
+            JUMP_FN0;                                           \
+        switch (__builtin_constant_p(args_val) ? args : 0) {    \
+        case 1: KNOWN_JUMP(_chiApp1);                           \
+        case 2: KNOWN_JUMP(_chiApp2);                           \
+        case 3: KNOWN_JUMP(_chiApp3);                           \
+        case 4: KNOWN_JUMP(_chiApp4);                           \
+        default: NARW = (uint8_t)args; KNOWN_JUMP(_chiAppN);    \
+        }                                                       \
+    })
+#define APP(args) _CHI_APP(CHI_GENSYM, (args))
+
+#define _CHI_OVERAPP(idx, rest, args, arity, args_val, arity_val)       \
     ({                                                                  \
-        const size_t _app_args = (args);                                \
-        CHI_ASSERT(_app_args < CHI_AMAX);                               \
-        if (_app_args == _chiFnArity(A(0)))                             \
-            JUMP_FN0;                                                   \
-        if (!__builtin_constant_p(args)) {                              \
-            NARW = (uint8_t)_app_args;                                  \
-            KNOWN_JUMP(_chiAppN);                                            \
+        const size_t args = (args_val), arity = (arity_val),            \
+            rest = args - arity;                                        \
+        CHI_ASSERT(args > arity);                                       \
+        CHI_ASSUME(rest <= CHI_AMAX);                                   \
+        for (size_t idx = 0; idx < rest; ++idx)                         \
+            SP[idx] = A(1 + arity + idx);                               \
+        SP += rest;                                                     \
+        switch (__builtin_constant_p(args_val) ? rest : 0) {            \
+        case 1: *SP++ = chiFromCont(&_chiOverApp1); break;              \
+        case 2: *SP++ = chiFromCont(&_chiOverApp2); break;              \
+        case 3: *SP++ = chiFromCont(&_chiOverApp3); break;              \
+        case 4: *SP++ = chiFromCont(&_chiOverApp4); break;              \
+        default:                                                        \
+            *SP++ = _chiFromUnboxed(rest + 2);                          \
+            *SP++ = chiFromCont(&_chiOverAppN);                         \
+            break;                                                      \
         }                                                               \
-        switch (_app_args) {                                            \
-        case 1: KNOWN_JUMP(_chiApp1);                                        \
-        case 2: KNOWN_JUMP(_chiApp2);                                        \
-        case 3: KNOWN_JUMP(_chiApp3);                                        \
-        case 4: KNOWN_JUMP(_chiApp4);                                        \
-        default: NARW = (uint8_t)_app_args; KNOWN_JUMP(_chiAppN);            \
-        }                                                               \
     })
 
-#define _PUSH_OVERAPP(...)                                              \
+#define KNOWN_OVERAPP(f, args, arity) ({ _CHI_OVERAPP(CHI_GENSYM, CHI_GENSYM, CHI_GENSYM, CHI_GENSYM, (args), (arity)); KNOWN_JUMP(f); })
+#define OVERAPP(args, arity)          ({ _CHI_OVERAPP(CHI_GENSYM, CHI_GENSYM, CHI_GENSYM, CHI_GENSYM, (args), (arity)); JUMP_FN0; })
+
+#define _CHI_PARTIAL(idx, clos, args, arity, args_val, arity_val)       \
     ({                                                                  \
-        const struct { size_t args, arity; } _overapp = { __VA_ARGS__ }; \
-        const size_t _overapp_rest = _overapp.args - _overapp.arity;    \
-        CHI_ASSERT(_overapp.args > _overapp.arity);                     \
-        CHI_BOUNDED(_overapp_rest, CHI_AMAX);                           \
-        for (size_t i = 0; i < _overapp_rest; ++i)                      \
-            SP[i] = A(1 + _overapp.arity + i);                          \
-        SP[_overapp_rest] = _chiFromUnboxed(_overapp_rest + 2);         \
-        SP[_overapp_rest + 1] = chiFromCont(&_chiOverApp);              \
-        SP += _overapp_rest + 2;                                        \
+        const size_t args = (args_val), arity = (arity_val);            \
+        CHI_ASSERT(args < arity);                                       \
+        CHI_ASSUME(args <= CHI_AMAX);                                   \
+        NEW(clos, CHI_FN(arity - args), args + 2);                      \
+        NEW_INIT(clos, 0,                                               \
+                 chiFromCont(__builtin_constant_p(args_val) ?           \
+                             (args == 1 && arity == 2 ? &_chiPartial1of2 : \
+                              args == 1 && arity == 3 ? &_chiPartial1of3 : \
+                              args == 1 && arity == 4 ? &_chiPartial1of4 : \
+                              args == 2 && arity == 3 ? &_chiPartial2of3 : \
+                              args == 2 && arity == 4 ? &_chiPartial2of4 : \
+                              args == 3 && arity == 4 ? &_chiPartial3of4 : \
+                              &_chiPartialNofM) :                       \
+                             &_chiPartialNofM));                        \
+        for (size_t idx = 0; idx <= args; ++idx)                        \
+            NEW_INIT(clos, idx + 1, A(idx));                            \
+        RET(clos);                                                      \
     })
-
-#define KNOWN_OVERAPP(f, ...) ({ _PUSH_OVERAPP(__VA_ARGS__); KNOWN_JUMP(f); })
-#define OVERAPP(...)          ({ _PUSH_OVERAPP(__VA_ARGS__); JUMP_FN0; })
-
-#define PARTIAL(...)                                                    \
-    ({                                                                  \
-        const struct { size_t args, arity; } _partial = { __VA_ARGS__ }; \
-        const size_t _partial_args = _partial.args;                     \
-        CHI_ASSERT(_partial_args < _partial.arity);                   \
-        CHI_BOUNDED(_partial_args, CHI_AMAX);                       \
-        Chili _partial_clos = NEW(CHI_FN(_partial.arity - _partial_args), _partial_args + 2); \
-        IDX(_partial_clos, 0) =                                         \
-            _partial_args == 1 && _partial.arity == 2 ? chiFromCont(&_chiPartial1of2) : \
-            _partial_args == 1 && _partial.arity == 3 ? chiFromCont(&_chiPartial1of3) : \
-            _partial_args == 2 && _partial.arity == 3 ? chiFromCont(&_chiPartial2of3) : \
-            _partial_args == 1 && _partial.arity == 4 ? chiFromCont(&_chiPartial1of4) : \
-            _partial_args == 2 && _partial.arity == 4 ? chiFromCont(&_chiPartial2of4) : \
-            _partial_args == 3 && _partial.arity == 4 ? chiFromCont(&_chiPartial3of4) : \
-            chiFromCont(&_chiPartialNofM);                              \
-        for (size_t i = 0; i <= _partial_args; ++i)                     \
-            IDX(_partial_clos, i + 1) = A(i);                           \
-        RET(_partial_clos);                                             \
-    })
+#define PARTIAL(args, arity) _CHI_PARTIAL(CHI_GENSYM, CHI_GENSYM, CHI_GENSYM, CHI_GENSYM, (args), (arity))
 
 #ifdef CHI_DYNLIB
 
-#define _EXPORT_NAME(n, ns, i) ns,
-#define _EXPORT_IDX(n, ns, i)  i,
+#define _CHI_MODULE_EXPORT_NAME(n, ns, i) ns,
+#define _CHI_MODULE_EXPORT_IDX(n, ns, i)  i,
 #define MODULE_EXPORTS(e)                                              \
-    static const char* const _chiModuleExportName[] = { e(_EXPORT_NAME) }; \
-    static const int32_t _chiModuleExportIdx[] = { e(_EXPORT_IDX) };
+    static const char* const _chiModuleExportName[] = { e(_CHI_MODULE_EXPORT_NAME) }; \
+    static const int32_t _chiModuleExportIdx[] = { e(_CHI_MODULE_EXPORT_IDX) };
 
-#define _IMPORT_NAME(n, ns) ns,
+#define _CHI_MODULE_IMPORT_NAME(n, ns) ns,
 #define MODULE_IMPORTS(i)                                           \
-    static const char* const _chiModuleImportName[] = { i(_IMPORT_NAME) };
+    static const char* const _chiModuleImportName[] = { i(_CHI_MODULE_IMPORT_NAME) };
 
 #define MODULE_INIT(n, ns, i)                                           \
     static const ChiModuleDesc n##_desc =                               \
@@ -218,17 +229,17 @@
 
 #else
 
-#define _EXPORT_VAR(n, ns, i) extern const int32_t n; const int32_t n = i;
-#define MODULE_EXPORTS(e) e(_EXPORT_VAR)
+#define _CHI_MODULE_EXPORT_VAR(n, ns, i) extern const int32_t n; const int32_t n = i;
+#define MODULE_EXPORTS(e) e(_CHI_MODULE_EXPORT_VAR)
 
-#define _IMPORT_DECL(n, ns) CHI_CONT_DECL(extern, n)
-#define _IMPORT_REF(n, ns) &n,
+#define _CHI_MODULE_IMPORT_DECL(n, ns) CHI_EXTERN_CONT_DECL(n)
+#define _CHI_MODULE_IMPORT_REF(n, ns) &n,
 #define MODULE_IMPORTS(i) \
-    i(_IMPORT_DECL) \
-    static ChiCont _chiModuleImport[] = { i(_IMPORT_REF) };
+    i(_CHI_MODULE_IMPORT_DECL) \
+    static ChiCont _chiModuleImport[] = { i(_CHI_MODULE_IMPORT_REF) };
 
 #define MODULE_INIT(n, ns, i)                                   \
-    CHI_CONT_DECL(extern, n)                                    \
+    CHI_EXTERN_CONT_DECL(n)                                     \
     CONT(n) {                                                   \
         PROLOGUE(n);                                            \
         A(0) = chiFromCont(&i);                                 \
@@ -239,4 +250,4 @@
 
 #endif
 
-#include "../chili.h"
+#include <chili.h>

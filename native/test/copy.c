@@ -1,7 +1,8 @@
-#include "test.h"
 #include "../copy.h"
+#include "test.h"
 
-ChiWord dst[32], src[32];
+extern ChiWord g_dst[], g_src[];
+ChiWord g_dst[32], g_src[32];
 
 CHI_INL void* asmCopyBytes(void *d, const void *s, size_t n) {
 #if defined(NDEBUG) && (defined(CHI_ARCH_X86) || defined(CHI_ARCH_X86_64))
@@ -66,22 +67,44 @@ static void duffCopy(void* dp, const void* sp, size_t n) {
     }
 }
 
+
+CHI_INL void chiCopyWords4(void *dst, const void *src, size_t n) {
+    ChiWord* d = (ChiWord*)dst;
+    const ChiWord* s = (const ChiWord*)src;
+    while (n >= 4) {
+        *d++ = *s++;
+        *d++ = *s++;
+        *d++ = *s++;
+        *d++ = *s++;
+        n -= 4;
+    }
+    switch (n) {
+    case 3: *d++ = *s++; // fallthrough
+    case 2: *d++ = *s++; // fallthrough
+    case 1: *d++ = *s++;
+    }
+}
+
 BENCH(chiCopyWords, 1000000) {
-    chiCopyWords(dst, src, benchRun & (CHI_DIM(dst) - 1));
+    chiCopyWords(g_dst, g_src, BENCHRUN & (CHI_DIM(g_dst) - 1));
+}
+
+BENCH(chiCopyWords4, 1000000) {
+    chiCopyWords4(g_dst, g_src, BENCHRUN & (CHI_DIM(g_dst) - 1));
 }
 
 BENCH(asmCopyWords, 1000000) {
-    asmCopyWords(dst, src, benchRun & (CHI_DIM(dst) - 1));
+    asmCopyWords(g_dst, g_src, BENCHRUN & (CHI_DIM(g_dst) - 1));
 }
 
 BENCH(asmCopyBytes, 1000000) {
-    asmCopyBytes(dst, src, sizeof (ChiWord) * (benchRun & (CHI_DIM(dst) - 1)));
+    asmCopyBytes(g_dst, g_src, sizeof (ChiWord) * (BENCHRUN & (CHI_DIM(g_dst) - 1)));
 }
 
 BENCH(duffCopy, 1000000) {
-    duffCopy(dst, src, benchRun & (CHI_DIM(dst) - 1));
+    duffCopy(g_dst, g_src, BENCHRUN & (CHI_DIM(g_dst) - 1));
 }
 
 BENCH(memcpy, 1000000) {
-    memcpy(dst, src, sizeof (ChiWord) * (benchRun & (CHI_DIM(dst) - 1)));
+    memcpy(g_dst, g_src, sizeof (ChiWord) * (BENCHRUN & (CHI_DIM(g_dst) - 1)));
 }

@@ -8,43 +8,169 @@
 #  define _CHI_STANDALONE
 #endif
 
+/**
+ * System characteristics. The runtime can be
+ * compiled on standalone systems without libc.
+ */
 #if defined(_CHI_STANDALONE)
-#  define CHI_SYSTEM_HAS_STDIO            0
-#  define CHI_SYSTEM_HAS_ERRNO            0
-#  define CHI_SYSTEM_HAS_MALLOC           0
-#  define CHI_SYSTEM_HAS_INTERRUPT        0
-#  define CHI_SYSTEM_HAS_TASKS            0
-#  define CHI_SYSTEM_HAS_PARTIAL_VIRTFREE 1
-#elif defined(_WIN32)
-#  define CHI_SYSTEM_HAS_STDIO            1
-#  define CHI_SYSTEM_HAS_ERRNO            1
-#  define CHI_SYSTEM_HAS_MALLOC           1
-#  define CHI_SYSTEM_HAS_INTERRUPT        1
-#  define CHI_SYSTEM_HAS_TASKS            1
-#  define CHI_SYSTEM_HAS_PARTIAL_VIRTFREE 0
+#  define CHI_SYSTEM_HAS_STATS              0
+#  define CHI_SYSTEM_HAS_ERRNO              0
+#  define CHI_SYSTEM_HAS_MALLOC             0
+#  define CHI_SYSTEM_HAS_INTERRUPT          0
+#  define CHI_SYSTEM_HAS_TASK               0
+#  define CHI_SYSTEM_HAS_VIRTALLOC          0
+#  define CHI_SYSTEM_HAS_PARTIAL_VIRTFREE   0
 #else
-#  define CHI_SYSTEM_HAS_STDIO            1
-#  define CHI_SYSTEM_HAS_ERRNO            1
-#  define CHI_SYSTEM_HAS_MALLOC           1
-#  define CHI_SYSTEM_HAS_INTERRUPT        1
-#  define CHI_SYSTEM_HAS_TASKS            1
-#  define CHI_SYSTEM_HAS_PARTIAL_VIRTFREE 1
+#  define CHI_SYSTEM_HAS_STATS              1
+#  define CHI_SYSTEM_HAS_ERRNO              1
+#  define CHI_SYSTEM_HAS_MALLOC             1
+#  define CHI_SYSTEM_HAS_INTERRUPT          1
+#  define CHI_SYSTEM_HAS_TASK               1
+#  define CHI_SYSTEM_HAS_VIRTALLOC          1
+#  if defined(_WIN32)
+#    define CHI_SYSTEM_HAS_PARTIAL_VIRTFREE 1
+#  else
+#    define CHI_SYSTEM_HAS_PARTIAL_VIRTFREE 0
+#  endif
 #endif
+
+/**
+ * Enable accessing environment variables.
+ * WARNING: Disable this if the environment cannot be trusted
+ * or if no environment is available.
+ */
+#ifdef _CHI_STANDALONE
+#  define CHI_ENV_ENABLED          0
+#else
+#  define CHI_ENV_ENABLED          1
+#endif
+
+/**
+ * Enable paged output for help and disassembler.
+ */
+#if defined(_WIN32) || defined(_CHI_STANDALONE)
+#  define CHI_PAGER_ENABLED          0
+#else
+#  define CHI_PAGER_ENABLED          1
+#endif
+
+/**
+ * Use absolute pager path for security.
+ * If this needs tweaking overwrite the environment variable.
+ */
+#define CHI_PAGER                  "/usr/bin/less --LONG-PROMPT --quit-if-one-screen --no-init --raw-control-chars"
+
+/**
+ * Use interrupts for timeouts instead of polling
+ */
+#define CHI_TIMEOUT_INTERRUPT_ENABLED CHI_SYSTEM_HAS_INTERRUPT
 
 /**
  * Inlining aggressiveness
  */
 /*#define CHI_INL static __attribute__ ((unused))*/
-#define CHI_INL static inline
-/*#define CHI_INL static inline __attribute__((always_inline))*/
+/*#define CHI_INL static inline*/
+#define CHI_INL static inline __attribute__ ((always_inline))
+
+/* -------------------- Calling convention, continuation settings --------------------  */
 
 /**
- * Maximum number of arguments of a continuation.
- * Continuations with more arguments are split into
- * curried functions as of now. An alternative
- * would be to put the additional arguments on the stack.
+ * Select the calling convention
  */
-#define CHI_AMAX                   16
+#if defined(CHI_ARCH_X86_64) && __has_include(<__tailcall__.h>)
+#  include <__tailcall__.h>
+#  ifdef __clang__
+#    define CHI_CALLCONV           tail_stack_arg10
+#  else
+#    define CHI_CALLCONV           tail_stack_arg6
+#  endif
+#elif defined(CHI_STANDALONE_WASM)
+#  ifdef __wasm_tail_call__
+#    define CHI_CALLCONV           tail_tls
+#  else
+#    define CHI_CALLCONV           trampoline_tls
+#endif
+#else
+#  define CHI_CALLCONV             trampoline_stack
+#endif
+
+/**
+ * Enable location information for stack traces
+ */
+#define CHI_LOC_ENABLED            1
+
+/**
+ * On 32 bit platforms, prefix data is not needed,
+ * since the function pointer and the continuation info
+ * can both be packed into the 64 bit Chili value.
+ *
+ * Coincidentally, wasm32 does not support mixed data and code since it
+ * is a Harvard architecture.
+ */
+#if CHI_ARCH_32BIT
+#  define CHI_CONT_PREFIX             0
+#else
+#  define CHI_CONT_PREFIX             1
+#  if defined(__clang__) && __has_include(<__prefix_data__.h>)
+#    include <__prefix_data__.h>
+#    define CHI_CONT_PREFIX_SECTION   0
+#    define CHI_CONT_PREFIX_ALIGN     16
+#  else
+#    define CHI_CONT_PREFIX_SECTION   1
+#    ifdef _WIN32
+#      define CHI_CONT_PREFIX_ALIGN   32
+#    else
+#      define CHI_CONT_PREFIX_ALIGN   16
+#    endif
+#  endif
+#endif
+
+/* -------------------- Basic container/algorithm settings --------------------  */
+
+/**
+ * Hash table maximum filling in percent
+ */
+#define CHI_HT_MAXFILL             80
+
+/**
+ * Hash table initial size
+ */
+#define CHI_HT_INITSHIFT           8 /* size = 2 << shift */
+
+/**
+ * Dynamic vector growth factor in percent
+ */
+#define CHI_VEC_GROWTH             200
+
+/**
+ * Quick sort cutoff, below insertion sort is used
+ */
+#define CHI_QUICK_SORT_CUTOFF      16
+
+/* -------------------- Event system settings --------------------  */
+
+#define CHI_STATS_ENABLED          1        /** Enable the statistics system */
+#define CHI_EVENT_ENABLED          1        /** Enable the event system */
+#define CHI_COUNT_ENABLED          CHI_EVENT_ENABLED
+#define CHI_EVENT_PRETTY_ENABLED   1        /** Enable the pretty log writer */
+
+#if defined(_CHI_STANDALONE)
+#  define CHI_EVENT_CONVERT_ENABLED  0
+#else
+#  define CHI_EVENT_CONVERT_ENABLED  1
+#endif
+
+/**
+ * Enable DTrace probes
+ */
+#define CHI_DTRACE_ENABLED         0
+
+/**
+ * Enable LTTng trace points
+ */
+#define CHI_LTTNG_ENABLED          0
+
+/* -------------------- Heap settings --------------------  */
 
 /**
  * Enable NaN boxing. Reference types are stored
@@ -70,6 +196,12 @@
 #endif
 
 /**
+ * Experimental setting to to compress 64 bit double precision
+ * floating points to 63 bits, such that the values can always be stored unboxed.
+ */
+#define CHI_FLOAT63_ENABLED     0
+
+/**
  * Minimum block size in words
  */
 #define CHI_BLOCK_MINSIZE          512 /* 4K */
@@ -80,132 +212,46 @@
 #define CHI_BLOCK_MAXSIZE          131072 /* 1M */
 
 /**
- * Maximum number of generations in the minor heap.
- * The number can be chosen via the command line.
- */
-#define CHI_GEN_MAX                10
-
-/**
- * Enable location information for stack traces
- */
-#define CHI_LOC_ENABLED            1
-
-/**
- * Offset of continuation info variable next to function
- */
-#ifdef _WIN32
-#  define CHI_CONTINFO_ALIGN         32
-#  define CHI_CONTINFO_OFFSET        32
-#else
-#  define CHI_CONTINFO_ALIGN         16
-#  define CHI_CONTINFO_OFFSET        16
-#endif
-
-#ifdef CHI_STANDALONE_WASM
-#  define CHI_CONTINFO_PREFIX        0
-#else
-#  define CHI_CONTINFO_PREFIX        1
-#endif
-
-/**
- * Enable tracepoints in native code for enhanced profiling.
- * Without tracepoints native code won't appear in the profiler output!
- */
-#define CHI_TRACEPOINTS_ENABLED    0
-
-/**
- * Enable the command line parser for the runtime options.
- */
-#define CHI_OPTION_ENABLED         1
-
-/**
- * Enable colors
- */
-#define CHI_COLOR_ENABLED          1
-
-/* -------------------- Event system settings --------------------  */
-
-#define CHI_STATS_ENABLED          1        /** Enable the statistics system */
-#define CHI_STATS_SCAV_ENABLED     1        /** Enable scavenger statistics */
-#define CHI_STATS_MARK_ENABLED     1        /** Enable marking statistics */
-#define CHI_STATS_SWEEP_ENABLED    1        /** Enable sweeper scanner */
-#define CHI_EVENT_ENABLED          1        /** Enable the event system */
-#define CHI_EVENT_XML_ENABLED      1        /** Enable the xml log writer */
-#define CHI_EVENT_CSV_ENABLED      1        /** Enable the csv log writer */
-#define CHI_EVENT_TE_ENABLED       1        /** Enable the trace event log writer, format consumed by chromium */
-#define CHI_EVENT_JSON_ENABLED     1        /** Enable the json log writer */
-#define CHI_EVENT_PRETTY_ENABLED   1        /** Enable the pretty log writer */
-#define CHI_EVENT_MP_ENABLED       1        /** Enable the messagpack log writer */
-#define CHI_EVENT_FILTER_SIZE      12       /** Size of the event filter bitmask */
-
-#define CHI_EVENT_TID_RUNTIME      0
-#define CHI_EVENT_TID_WORKER       1
-#define CHI_EVENT_TID_UNNAMED      1000
-#define CHI_EVENT_TID_THREAD       1001
-
-#define CHI_HASH_MAXFILL           80
-#define CHI_HASH_INITSHIFT         8 /* size = 2 << shift */
-#define CHI_VEC_GROWTH             200
-#define CHI_QUICK_SORT_CUTOFF      16
-
-/**
- * Compile with support for heap checking.
- * The heap check is very expensive and must be turned on via the command line.
- */
-#define CHI_HEAP_CHECK_ENABLED     1
-
-/**
- * Compile with support for heap dumping.
- */
-#define CHI_HEAP_DUMP_ENABLED      1
-
-/**
- * Compile with support for heap profiling.
- */
-#define CHI_HEAP_PROF_ENABLED      1
-
-/**
- * Enable DTrace probes
- */
-#define CHI_DTRACE_ENABLED         0
-
-/**
- * Enable LTTng trace points
- */
-#define CHI_LTTNG_ENABLED          0
-
-/**
  * Enable small string optimization.
  * Small strings are stored unboxed if enabled.
  */
-#define CHI_STRING_SMALLOPT        1
+#define CHI_STRING_UNBOXING        1
 
 /**
  * Enable small integer optimization
  * for big integers. Small integers
  * are stored unboxed if enabled.
  */
-#define CHI_BIGINT_SMALLOPT        1
+#define CHI_BIGINT_UNBOXING        1
 
 /**
- * Select the big integer backend. Currently
- * tommath and gmp are supported. Changing
- * this setting does not change the binary
- * API of the runtime, since the calls to the
- * respective libraries are wrapped.
+ * Enable unboxing for Int64/UInt64.
+ * This option is useful to measure
+ * the boxing overhead.
  */
-#define CHI_BIGINT_BACKEND       tommath
+#define CHI_INT64_UNBOXING         1
+
+/**
+ * Use GMP for big integer acceleration
+ */
+#if __has_include(<gmp.h>)
+#  define CHI_BIGINT_GMP           1
+#else
+#  define CHI_BIGINT_GMP           0
+#endif
 
 /**
  * Big integer size limit in bytes.
- *
- * The size must be limited since big integer allocations
- * must not fail. For example if the custom malloc fails
- * in GMP, the program is terminated.
- * However libtommath would allow more graceful error handling.
- *
  */
 #define CHI_BIGINT_LIMIT           102400 /* 100K */
+
+/**
+ * Enable the concurrent mark and sweep
+ * garbage collector
+ */
+#define CHI_GC_CONC_ENABLED       CHI_SYSTEM_HAS_TASK
+
+/* -------------------- Chunk allocator settings --------------------  */
 
 /**
  * Enable a fixed chunk memory arena.
@@ -216,7 +262,7 @@
 #ifdef _CHI_STANDALONE
 #  define CHI_CHUNK_ARENA_ENABLED   1
 #  define CHI_CHUNK_ARENA_FIXED     0
-#elif CHI_ARCH_BITS == 64 && CHI_NANBOXING_ENABLED
+#elif !CHI_ARCH_32BIT && CHI_NANBOXING_ENABLED
 #  define CHI_CHUNK_ARENA_ENABLED   1
 #  define CHI_CHUNK_ARENA_FIXED     1
 #else
@@ -225,15 +271,10 @@
 #endif
 
 #if CHI_CHUNK_ARENA_FIXED
-#  if defined (CHI_ARCH_ARM64)
-#    define CHI_CHUNK_MAX_SHIFT     37 /* 128G */
-#    define CHI_CHUNK_START         ((uintptr_t)1 << 37) /* start address (bytes) */
-#  else
-#    define CHI_CHUNK_MAX_SHIFT     38 /* 256G */
-#    define CHI_CHUNK_START         ((uintptr_t)1 << 45) /* start address (bytes) */
-#  endif
+#  define CHI_CHUNK_MAX_SHIFT     37 /* 128G */
+#  define CHI_CHUNK_START         ((uintptr_t)1 << 37) /* start address (bytes) */
 #else
-#  if CHI_ARCH_BITS == 32
+#  if CHI_ARCH_32BIT
 #    define CHI_CHUNK_MAX_SHIFT     31 /* 2G */
 #    define CHI_CHUNK_START         0UL
 #  else
@@ -249,45 +290,18 @@
 #define CHI_CHUNK_MIN_SIZE        ((uintptr_t)1 << CHI_CHUNK_MIN_SHIFT)
 #define CHI_CHUNK_MAX_SIZE        ((uintptr_t)1 << CHI_CHUNK_MAX_SHIFT)
 #define CHI_CHUNK_MAX             (CHI_CHUNK_MAX_SHIFT - CHI_CHUNK_MIN_SHIFT)
-#define CHI_CHUNK_MEMMAP_TRIES    10
+#define CHI_CHUNK_VIRTALLOC_TRIES 10
 
 /**
  * Enable the memory unmapper background task.
- * Returning memory to the OS is usually very slow,
+ * Returning memory to the OS is usually slow,
  * therefore the task is needed.
  * Memory is not returned immediately but
  * only after a certain timeout.
  */
-#ifdef _CHI_STANDALONE
-#  define CHI_UNMAP_TASK_ENABLED    0
-#else
-#  define CHI_UNMAP_TASK_ENABLED    1
-#endif
+#define CHI_UNMAP_TASK_ENABLED    CHI_SYSTEM_HAS_TASK
 
-/**
- * Enable the primitive Chili malloc implementation, if system has none.
- */
-#ifdef _CHI_STANDALONE
-#  define CHI_MALLOC_ENABLED 1
-#else
-#  define CHI_MALLOC_ENABLED 0
-#endif
-
-/**
- * Select the calling convention
- */
-#if defined(CHI_ARCH_X86_64) && __has_include("tailcall.h")
-#  ifdef __clang__
-#    define CHI_CALLCONV           tail_stack_arg8
-#  else
-#    define CHI_CALLCONV           tail_stack_arg6
-#  endif
-#elif defined(CHI_STANDALONE_WASM)
-/* TODO: If WebAssembly supports tailcalls, we can also use tail_tls */
-#  define CHI_CALLCONV             trampoline_tls
-#else
-#  define CHI_CALLCONV             trampoline_stack
-#endif
+/* -------------------- Debugging and memory poisoning --------------------  */
 
 /**
  * Activate memory poisoning, only in enabled
@@ -308,21 +322,21 @@
  * Values for memory poisoning (Debugging only)
  */
 
-#define CHI_POISON_BLOCK_CANARY    0xB10CB10C
-#define CHI_POISON_BLOCK_FREE      0xA5
-#define CHI_POISON_BLOCK_USED      0x5A
-#define CHI_POISON_MEM_USED        0xB6
-#define CHI_POISON_LIST            0x4c495354
-#define CHI_POISON_DESTROYED       0xDD
-#define CHI_POISON_MEM_BEGIN       0x585843414e415259ULL
-#define CHI_POISON_MEM_END         0x5952414e41435858ULL
+#define CHI_POISON_BLOCK_CANARY      UINT64_C(0xB10CB10CB10CB10C)
+#define CHI_POISON_BLOCK_FREE        0xA5
+#define CHI_POISON_BLOCK_USED        0x5A
+#define CHI_POISON_LIST              0x4c495354
+#define CHI_POISON_DESTROYED         0xDE
+#define CHI_POISON_UNDEF             0xDF
+#define CHI_POISON_MALLOC_BEGIN      UINT64_C(0x585843414e415259)
+#define CHI_POISON_MALLOC_END        UINT64_C(0x5952414e41435858)
+#define CHI_POISON_STACK_CANARY      UINT64_C(0xDADAD0D0DADAD0D0)
+#define CHI_POISON_STACK_CANARY_SIZE 0
 
 /*
- * Stack debugging settings
+ * Additional stack debugging settings
  */
 
-#define CHI_STACK_CANARY           0xDADAD0D0DADAD0D0ULL
-#define CHI_STACK_CANARY_SIZE      0
 #define CHI_STACK_DEBUG_WALK       0
 
 /*
@@ -339,77 +353,49 @@
  */
 #define CHI_LIKELY_STATS_ENABLED   0
 
-#define CHI_PROF_ENABLED           0
+/**
+ * Enable function logging
+ */
+#define CHI_FNLOG_ENABLED          0
+
+/* -------------------- Sink settings --------------------  */
 
 /**
- * Use polling instead of system timers for timeouts
+ * Enable colors
  */
-#ifdef _CHI_STANDALONE
-#  define CHI_TIMEOUT_POLLING      1
-#else
-#  define CHI_TIMEOUT_POLLING      0
-#endif
+#define CHI_COLOR_ENABLED          1
+
+/* -------------------- Other runtime features --------------------  */
 
 /**
- * Enable paged output for help and disassembler.
+ * Profiler
  */
-#if defined(_WIN32) || defined(_CHI_STANDALONE)
-#  define CHI_PAGER_ENABLED          0
-#else
-#  define CHI_PAGER_ENABLED          1
-#endif
+#define CHI_PROF_ENABLED              CHI_CBY_SUPPORT_ENABLED
 
 /**
- * Use absolute pager path for security.
- * If this needs tweaking overwrite the environment variable.
+ * Enable tracepoints in the runtime.
  */
-#define CHI_PAGER                  "/bin/less --LONG-PROMPT --quit-if-one-screen --no-init --raw-control-chars"
+#define CHI_TRACEPOINTS_ENABLED       CHI_PROF_ENABLED
 
 /**
- * Enable various special sinks
+ * Enable tracepoints in native code for enhanced profiling.
+ * Without tracepoints native code won't appear in the profiler output!
  */
-#ifndef _CHI_STANDALONE
-#  define CHI_SINK_ZSTD_ENABLED    1
-#else
-#  define CHI_SINK_ZSTD_ENABLED    0
-#endif
-
-#ifdef _WIN32
-#  define CHI_SINK_FD_ENABLED      0
-#else
-#  define CHI_SINK_FD_ENABLED      1
-#endif
+#define CHI_TRACEPOINTS_CONT_ENABLED  0
 
 /**
- * Use absolute pager path for security.
- * If this needs tweaking overwrite the environment variable.
+ * Enable the command line parser for the runtime options.
  */
-#ifdef _WIN32
-#  define CHI_ZSTD                 "zstd.exe"
-#else
-#  define CHI_ZSTD                 "/usr/bin/zstd"
-#endif
-
-/**
- * Enable accessing environment variables.
- * WARNING: Disable this if the environment cannot be trusted
- * or if no environment is available.
- */
-#ifdef _CHI_STANDALONE
-#  define CHI_ENV_ENABLED          0
-#else
-#  define CHI_ENV_ENABLED          1
-#endif
-
-#define CHI_CONT_HISTORY_SIZE      0
-
-#ifdef _CHI_STANDALONE
-#  define CHI_GC_CONC_ENABLED      0
-#else
-#  define CHI_GC_CONC_ENABLED      1
-#endif
+#define CHI_OPTION_ENABLED         1
 
 /* -------------------- cby interpreter settings --------------------  */
+
+/**
+ * Compile the runtime with support for the interpreter
+ */
+#ifndef CHI_CBY_SUPPORT_ENABLED
+#  define CHI_CBY_SUPPORT_ENABLED 0
+#endif
 
 /**
  * Enable FFI via libffi or dyncall.
@@ -435,10 +421,10 @@
 #define CBY_BACKEND_DUMP_ENABLED     1
 
 /**
- * Enable the function trace backend,
- * which emits TRACE events for all function calls.
+ * Enable the function logging backend,
+ * which emits FNLOG events for all function calls.
  */
-#define CBY_BACKEND_TRACE_ENABLED    1
+#define CBY_BACKEND_FNLOG_ENABLED    1
 
 /**
  * Enable the instruction counting backend
@@ -464,12 +450,18 @@
 /**
  * Compile the interpreter with support for bytecode archives
  */
-#define CBY_ARCHIVE_ENABLED          1
+#if __has_include(<zlib.h>)
+#  define CBY_ZIP_ENABLED            1
+#  define CBY_CRC32_ENABLED          1
+#else
+#  define CBY_ZIP_ENABLED            0
+#  define CBY_CRC32_ENABLED          0
+#endif
 
 /**
  * File in the archive which contains name of main module
  */
-#define CBY_ARCHIVE_MAIN             "main"
+#define CBY_ZIP_MAIN             "main"
 
 /**
  * Enable the integrated disassembler
@@ -482,14 +474,18 @@
 #define CBY_LSMOD_ENABLED            1
 
 /**
- * File extension of shared objects/native module libraries
+ * File extension of native dynamic libraries
  */
-#define CBY_NATIVE_LIBRARY_EXT       ".so"
+#ifdef _WIN32
+#  define CBY_DYNLIB_EXT             ".dll"
+#else
+#  define CBY_DYNLIB_EXT             ".so"
+#endif
 
 /**
  * File extension of module archives
  */
-#define CBY_MODULE_ARCHIVE_EXT       ".cbz"
+#define CBY_ZIP_EXT                  ".cbz"
 
 /**
  * File extension of bytecode files

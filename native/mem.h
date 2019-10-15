@@ -1,23 +1,26 @@
 #pragma once
 
-#include <chili/object/string.h>
+#include "private.h"
 
-CHI_WU char* chiCStringAlloc(size_t);
-CHI_WU char* chiCStringDup(const char*);
+CHI_INTERN CHI_WU char* chiCStringAlloc(size_t);
+CHI_INTERN CHI_WU char* chiCStringDup(const char*);
 // Unsafe since StringRef must not contain '\0'
-CHI_WU char* chiCStringUnsafeDup(ChiStringRef);
+CHI_INTERN CHI_WU char* chiCStringUnsafeDup(ChiStringRef);
 
-CHI_MALLOC CHI_WU CHI_RET_NONNULL CHI_ASSUMEALIGNED(CHI_WORDSIZE) void* chiAlloc(size_t);
-CHI_MALLOC CHI_WU CHI_RET_NONNULL CHI_ASSUMEALIGNED(CHI_WORDSIZE) void* chiZalloc(size_t);
-CHI_WU CHI_ASSUMEALIGNED(CHI_WORDSIZE) void* chiRealloc(void*, size_t);
-CHI_MALLOC CHI_WU CHI_RET_NONNULL CHI_ASSUMEALIGNED(CHI_WORDSIZE) void* chiAllocElems(size_t, size_t);
-CHI_MALLOC CHI_WU CHI_RET_NONNULL CHI_ASSUMEALIGNED(CHI_WORDSIZE) void* chiZallocElems(size_t, size_t);
-CHI_WU CHI_ASSUMEALIGNED(CHI_WORDSIZE) void* chiReallocElems(void*, size_t, size_t);
-void chiFree(void*);
+CHI_INTERN CHI_MALLOC CHI_WU CHI_RET_NONNULL CHI_ASSUME_ALIGNED(16) void* chiAlloc(size_t);
+CHI_INTERN CHI_MALLOC CHI_WU CHI_RET_NONNULL CHI_ASSUME_ALIGNED(16) void* chiAllocMany(size_t, size_t);
 
-#define chiAllocArr(t, n)   ((t*)chiAllocElems((n), sizeof (t)))
-#define chiZallocArr(t, n)  ((t*)chiZallocElems((n), sizeof (t)))
-#define chiReallocArr(p, n) ((typeof(p))chiReallocElems((p), (n), sizeof (*p)))
+/*CHI_INTERN*/ CHI_MALLOC CHI_WU CHI_RET_NONNULL CHI_ASSUME_ALIGNED(16) void* chiZalloc(size_t);
+/*CHI_INTERN*/ CHI_MALLOC CHI_WU CHI_RET_NONNULL CHI_ASSUME_ALIGNED(16) void* chiZallocMany(size_t, size_t);
+
+CHI_INTERN CHI_WU CHI_ASSUME_ALIGNED(16) void* chiRealloc(void*, size_t);
+CHI_INTERN CHI_WU CHI_ASSUME_ALIGNED(16) void* chiReallocMany(void*, size_t, size_t);
+
+/*CHI_INTERN*/ void chiFree(void*);
+
+#define chiAllocArr(t, n)   ((t*)chiAllocMany((n), sizeof (t)))
+#define chiZallocArr(t, n)  ((t*)chiZallocMany((n), sizeof (t)))
+#define chiReallocArr(p, n) ((typeof(p))chiReallocMany((p), (n), sizeof (*p)))
 #define chiAllocObj(t)      ((t*)chiAlloc(sizeof (t)))
 #define chiZallocObj(t)     ((t*)chiZalloc(sizeof (t)))
 

@@ -152,7 +152,7 @@ sub gen_rewrite {
     write_text "rewrite.h", $out;
 }
 
-sub gen_interp {
+sub gen_interpreter {
     my @insn = @_;
     my $out = "// $generated_by\nDISPATCH_BEGIN\n";
     foreach (@insn) {
@@ -162,7 +162,7 @@ sub gen_interp {
         $out .= "OP_BEGIN($opcode)\n$decoded\n${body}OP_END\n";
     }
     $out .= "DISPATCH_END\n";
-    write_text "interp.h", $out;
+    write_text "interpreter.h", $out;
 }
 
 sub gen_disasm_args {
@@ -236,14 +236,14 @@ sub gen_builder_args {
     my($opcode, @args) = @_;
     my @type = ();
     my @vars = ();
-    my @constraints = ("Builder m");
+    my @constraints = ("HasCallStack");
     my $val = "  u16 ($opcode :: Word16)\n";
     foreach my $arg (@args) {
         my @arg = @$arg;
         if ($arg[0] =~ /\A[rw]\Z/) {
             push(@type, "Reg");
             push(@vars, $arg[2]);
-            $val .= "  u$arg[1] (unReg $arg[2])\n";
+            $val .= "  reg$arg[1] $arg[2]\n";
         } elsif ($arg[0] eq "u") {
             push(@constraints, "Imm $arg[2]");
             push(@type, $arg[2]);
@@ -281,7 +281,7 @@ sub gen_builder_args {
             die "Invalid $arg[0]";
         }
     }
-    return ("(" . join(", ", @constraints) . ") => " . join(" -> ", @type), join(" ", @vars), $val);
+    return (join(" => ", @constraints) . " => " . join(" -> ", @type), join(" ", @vars), $val);
 }
 
 sub gen_builder {
@@ -290,7 +290,7 @@ sub gen_builder {
     foreach (@insn) {
         my ($id, $opcode, $desc, $args, $body) = @$_;
         my ($type, $vars, $val) = gen_builder_args($id, @$args);
-        $out .= "insn_$opcode :: $type -> m ()\n"
+        $out .= "insn_$opcode :: $type -> Emit ()\n"
             . "insn_$opcode $vars = do\n$val\n";
     }
     write_text "builder.hs", $out;
@@ -359,5 +359,5 @@ gen_doc @allinsns;
 gen_header $first_prim, @allinsns;
 gen_rewrite @allinsns;
 gen_disasm @allinsns;
-gen_interp @allinsns;
+gen_interpreter @allinsns;
 gen_builder $first_prim, @insns;

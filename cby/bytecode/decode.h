@@ -1,11 +1,15 @@
 #pragma once
 
-#include <chili/object/string.h>
+#include <chili.h>
 
 #ifndef CHECK_RANGE
 #  define CHECK_RANGE(n) ({})
 #endif
 
+/* TODO Support bigendian architectures?
+ * Either perform reencoding similar to direct dispatch rewriting
+ * or introduce chiLEx calls.
+ */
 #define FETCH8  ({ CHECK_RANGE(1); *IP++; })
 #define FETCH16 ({ CHECK_RANGE(2); IP += 2; chiPeekUInt16(IP - 2); })
 #define FETCH32 ({ CHECK_RANGE(4); IP += 4; chiPeekUInt32(IP - 4); })

@@ -1,7 +1,7 @@
 #if 0
-#include "test.h"
-#include "../xxh.h"
 #include "../mem.h"
+#include "../xxh.h"
+#include "test.h"
 #define XXH_INLINE_ALL
 #include "../xxhash/xxhash.h"
 

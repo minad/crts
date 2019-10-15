@@ -1,6 +1,6 @@
 #pragma once
 
-#include "private.h"
+#include "option.h"
 
 #define CHI_DEFAULT_PROF_OPTION  { .rate = 100, .maxDepth = 32, .maxStacks = 4096 }
 
@@ -20,4 +20,9 @@ typedef struct {
 
 typedef struct ChiRuntime_ ChiRuntime;
 
+#if CHI_PROF_ENABLED
+CHI_INTERN void chiProfilerSetup(ChiRuntime*, const ChiProfOption*);
+CHI_EXTERN const ChiOption chiProfOptionList[];
+#else
 void chiProfilerSetup(ChiRuntime*, const ChiProfOption*);
+#endif

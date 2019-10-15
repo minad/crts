@@ -1,11 +1,7 @@
-#include "option.h"
-#include "system.h"
+#include <stdlib.h>
+#include "color.h"
 #include "sink.h"
 #include "strutil.h"
-#include "mem.h"
-#include "num.h"
-#include "color.h"
-#include <stdlib.h>
 
 #if CHI_OPTION_ENABLED
 
@@ -13,11 +9,10 @@ CHI_COLD void chiOptionHelp(const ChiOptionParser* parser) {
     int max = 0;
     for (const ChiOptionList* p = parser->list; p->desc; ++p) {
         for (const ChiOption* opt = p->desc; opt->type; ++opt) {
-            if (opt->type != CHI_OPT_TITLE)
+            if (opt->type != CHI_OPTTYPE_TITLE)
                 max = CHI_MAX(max,
                               (int)strlen(opt->name) +
-                              (opt->type == CHI_OPT_FLAG ||
-                               opt->type == CHI_OPT_SET ? 0 : 2));
+                              (opt->type == CHI_OPTTYPE_FLAG ? 0 : 2));
         }
     }
 
@@ -26,43 +21,42 @@ CHI_COLD void chiOptionHelp(const ChiOptionParser* parser) {
             int n = 0;
             char cbField[8] = { 0 };
             void* field = opt->cb ? cbField : (char*)p->target + opt->field;
-            if (opt->type != CHI_OPT_TITLE)
+            if (opt->type != CHI_OPTTYPE_TITLE)
                 n = (int)strlen(opt->name) + 2;
             const char* desc = opt->name + strlen(opt->name) + 1;
             switch (opt->type) {
-            case CHI_OPT_END: CHI_BUG("End reached");
-            case CHI_OPT_TITLE:
-                chiSinkFmt(parser->out, "%s"TitleBegin"%s OPTIONS"TitleEnd"\n",
+            case CHI_OPTTYPE_END: CHI_BUG("End reached");
+            case CHI_OPTTYPE_TITLE:
+                chiSinkFmt(parser->help, "%s"TitleBegin"%s OPTIONS"TitleEnd"\n",
                            opt != p->desc || p != parser->list ? "\n" : "", opt->name);
                 break;
-            case CHI_OPT_FLAG:
-            case CHI_OPT_SET:
+            case CHI_OPTTYPE_FLAG:
                 n -= 2;
-                chiSinkFmt(parser->out, "  -R%s%*w %s\n", opt->name, max - n, desc);
+                chiSinkFmt(parser->help, "  -R%s%*w %s\n", opt->name, max - n, desc);
                 break;
-            case CHI_OPT_UINT32:
-                chiSinkFmt(parser->out, "  -R%s=n%*w %s (dfl=%u, %u-%u)\n", opt->name, max - n,
+            case CHI_OPTTYPE_UINT32:
+                chiSinkFmt(parser->help, "  -R%s=n%*w %s (dfl=%u, %u-%u)\n", opt->name, max - n,
                            desc, chiPeekUInt32(field), opt->uint32Range.min, opt->uint32Range.max);
                 break;
-            case CHI_OPT_UINT64:
-                chiSinkFmt(parser->out, "  -R%s=n%*w %s (dfl=%ju, %ju-%ju)\n", opt->name, max - n,
+            case CHI_OPTTYPE_UINT64:
+                chiSinkFmt(parser->help, "  -R%s=n%*w %s (dfl=%ju, %ju-%ju)\n", opt->name, max - n,
                            desc, chiPeekUInt64(field), opt->uint64Range.min, opt->uint64Range.max);
                 break;
-            case CHI_OPT_SIZE:
-                chiSinkFmt(parser->out, "  -R%s=s%*w %s (dfl=%Z, %Z-%Z)\n", opt->name, max - n,
+            case CHI_OPTTYPE_SIZE:
+                chiSinkFmt(parser->help, "  -R%s=s%*w %s (dfl=%Z, %Z-%Z)\n", opt->name, max - n,
                            desc, chiPeekSize(field), opt->sizeRange.min, opt->sizeRange.max);
                 break;
-            case CHI_OPT_STRING:
+            case CHI_OPTTYPE_STRING:
                 {
                     const char* val = (const char*)field;
-                    chiSinkFmt(parser->out, "  -R%s=s%*w %s", opt->name, max - n, desc);
+                    chiSinkFmt(parser->help, "  -R%s=s%*w %s", opt->name, max - n, desc);
                     if (val[0])
-                        chiSinkFmt(parser->out, " (dfl=%s)", val);
-                    chiSinkPutc(parser->out, '\n');
+                        chiSinkFmt(parser->help, " (dfl=%s)", val);
+                    chiSinkPutc(parser->help, '\n');
                 }
                 break;
-            case CHI_OPT_CHOICE:
-                chiSinkFmt(parser->out, "  -R%s=s%*w %s (%s)\n", opt->name, max - n, desc, opt->choice);
+            case CHI_OPTTYPE_CHOICE:
+                chiSinkFmt(parser->help, "  -R%s=s%*w %s (%s)\n", opt->name, max - n, desc, opt->choice);
                 break;
             }
         }
@@ -73,9 +67,9 @@ CHI_FMT(2, 3)
 static CHI_WU ChiOptionResult error(const ChiOptionParser* parser, const char* fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
-    chiSinkFmtv(parser->err, fmt, ap);
+    chiSinkFmtv(parser->usage, fmt, ap);
     va_end(ap);
-    chiSinkPuts(parser->err, "\nTry '-Rhelp' for more information.\n");
+    chiSinkPuts(parser->usage, "\nTry '-Rhelp' for more information.\n");
     return CHI_OPTRESULT_ERROR;
 }
 
@@ -86,8 +80,8 @@ static CHI_WU ChiOptionResult invalidArg(const ChiOptionParser* parser, const ch
 static CHI_WU ChiOptionResult parseInt(const ChiOptionParser* parser, const char* arg, const char* val,
                                        uint64_t min, uint64_t max, uint64_t* res) {
     const char* end = val;
-    uint64_t ival = chiReadUInt64(&end);
-    if (end == val || *end)
+    uint64_t ival;
+    if (!chiReadUInt64(&ival, &end) || *end)
         return invalidArg(parser, arg);
     if (ival < min || ival > max)
         return error(parser, "Argument '%s' out of range %ju-%ju.", arg, min, max);
@@ -115,8 +109,8 @@ static CHI_WU ChiOptionResult parseSize(const ChiOptionParser* parser, const cha
                                         size_t min, size_t max, size_t* res) {
     const char* end = val;
     size_t factor = 1;
-    uint64_t ival = chiReadUInt64(&end);
-    if (end == val)
+    uint64_t ival;
+    if (!chiReadUInt64(&ival, &end))
         return invalidArg(parser, arg);
     if (!end[1] && (end[0] == 'k' || end[0] == 'K'))
         factor = CHI_KiB(1);
@@ -152,25 +146,21 @@ static CHI_WU ChiOptionResult parseOption(const ChiOptionParser* parser, const c
 
     for (const ChiOptionList* p = parser->list; p->desc; ++p) {
         for (const ChiOption* opt = p->desc; opt->type; ++opt) {
-            if (opt->type == CHI_OPT_TITLE || !memeqstr(arg, nameSize, opt->name))
+            if (opt->type == CHI_OPTTYPE_TITLE || !memeqstr(arg, nameSize, opt->name))
                 continue;
             char cbField[8] = { 0 };
             void* field = opt->cb ? cbField : (char*)p->target + opt->field;
             if (!val) {
-                if (opt->type == CHI_OPT_FLAG) {
+                if (opt->type == CHI_OPTTYPE_FLAG)
                     *((bool*)field) = true;
-                } else if (opt->type == CHI_OPT_SET) {
-                    memcpy(field, &opt->set.val, opt->set.size);
-                } else {
+                else
                     return error(parser, "Argument '%s' requires a value.", arg);
-                }
             } else {
                 switch (opt->type) {
-                case CHI_OPT_END: CHI_BUG("End reached");
-                case CHI_OPT_SET:
-                case CHI_OPT_TITLE:
+                case CHI_OPTTYPE_END: CHI_BUG("End reached");
+                case CHI_OPTTYPE_TITLE:
                     continue;
-                case CHI_OPT_FLAG:
+                case CHI_OPTTYPE_FLAG:
                     if (streq(val, "t"))
                         *((bool*)field) = true;
                     else if (streq(val, "f"))
@@ -178,7 +168,7 @@ static CHI_WU ChiOptionResult parseOption(const ChiOptionParser* parser, const c
                     else
                         return invalidArg(parser, arg);
                     break;
-                case CHI_OPT_UINT32:
+                case CHI_OPTTYPE_UINT32:
                     {
                         uint64_t x = 0;
                         ChiOptionResult res = parseInt(parser, arg, val,
@@ -188,7 +178,7 @@ static CHI_WU ChiOptionResult parseOption(const ChiOptionParser* parser, const c
                         chiPokeUInt32(field, (uint32_t)x);
                     }
                     break;
-                case CHI_OPT_UINT64:
+                case CHI_OPTTYPE_UINT64:
                     {
                         uint64_t x = 0;
                         ChiOptionResult res = parseInt(parser, arg, val,
@@ -198,7 +188,7 @@ static CHI_WU ChiOptionResult parseOption(const ChiOptionParser* parser, const c
                         chiPokeUInt64(field, x);
                     }
                     break;
-                case CHI_OPT_SIZE:
+                case CHI_OPTTYPE_SIZE:
                     {
                         size_t x = 0;
                         ChiOptionResult res = parseSize(parser, arg, val,
@@ -208,7 +198,7 @@ static CHI_WU ChiOptionResult parseOption(const ChiOptionParser* parser, const c
                         chiPokeSize(field, x);
                     }
                     break;
-                case CHI_OPT_STRING:
+                case CHI_OPTTYPE_STRING:
                     if (!opt->cb) {
                         size_t n = strlen(val);
                         if (n + 1 > opt->string.size)
@@ -216,7 +206,7 @@ static CHI_WU ChiOptionResult parseOption(const ChiOptionParser* parser, const c
                         memcpy(field, val, n + 1);
                     }
                     break;
-                case CHI_OPT_CHOICE:
+                case CHI_OPTTYPE_CHOICE:
                     {
                         uint32_t x = 0;
                         ChiOptionResult res = parseChoice(parser, arg, val, opt->choice, &x);
@@ -227,7 +217,7 @@ static CHI_WU ChiOptionResult parseOption(const ChiOptionParser* parser, const c
                     break;
                 }
             }
-            return opt->cb ? opt->cbFn(parser, p, opt, opt->type == CHI_OPT_STRING ? val : cbField) : CHI_OPTRESULT_OK;
+            return opt->cb ? opt->cbFn(parser, p, opt, opt->type == CHI_OPTTYPE_STRING ? val : cbField) : CHI_OPTRESULT_OK;
         }
     }
 

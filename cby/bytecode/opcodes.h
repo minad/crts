@@ -46,13 +46,13 @@
     OP(fn2) \
     OP(fn3) \
     OP(fn4) \
-    OP(data) \
-    OP(data0) \
-    OP(datal0) \
-    OP(data1) \
-    OP(data2) \
-    OP(data3) \
-    OP(data4) \
+    OP(con) \
+    OP(con0) \
+    OP(conl0) \
+    OP(con1) \
+    OP(con2) \
+    OP(con3) \
+    OP(con4) \
     OP(casetbl) \
     OP(case) \
     OP(cont) \
@@ -76,12 +76,12 @@
     OP(app3) \
     OP(app4) \
     OP(app5) \
-    OP(clos) \
-    OP(clos0) \
+    OP(limit) \
     OP(clos1) \
     OP(clos2) \
     OP(clos3) \
     OP(clos4) \
+    OP(clos) \
     OP(enter) \
     OP(enterl) \
     OP(ffiget) \
@@ -89,6 +89,11 @@
     OP(ffitail) \
     OP(ffiinl) \
     OP(ffiprot) \
+    OP(thread) \
+    OP(proc) \
+    OP(plocal) \
+    OP(tstate) \
+    OP(evfilt) \
     OP(bitsToFloat32) \
     OP(bitsToFloat64) \
     OP(charEq) \
@@ -186,7 +191,7 @@
     OP(int32Neg) \
     OP(int32Not) \
     OP(int32Or) \
-    OP(int32Quot) \
+    OP(int32Quo) \
     OP(int32Rem) \
     OP(int32Shl) \
     OP(int32Shr) \
@@ -212,7 +217,7 @@
     OP(int64Neg) \
     OP(int64Not) \
     OP(int64Or) \
-    OP(int64Quot) \
+    OP(int64Quo) \
     OP(int64Rem) \
     OP(int64Shl) \
     OP(int64Shr) \
@@ -238,7 +243,7 @@
     OP(intNeg) \
     OP(intNot) \
     OP(intOr) \
-    OP(intQuot) \
+    OP(intQuo) \
     OP(intRem) \
     OP(intShl) \
     OP(intShr) \
@@ -254,6 +259,9 @@
     OP(stringCursorBegin) \
     OP(stringCursorEnd) \
     OP(stringCursorEq) \
+    OP(stringCursorLe) \
+    OP(stringCursorLt) \
+    OP(stringCursorNe) \
     OP(stringCursorGet) \
     OP(stringCursorNext) \
     OP(stringCursorPrev) \
@@ -262,7 +270,7 @@
     OP(stringLt) \
     OP(stringNe) \
     OP(stringNull) \
-    OP(substring) \
+    OP(stringSlice) \
     OP(uint16ToUInt32) \
     OP(uint32Add) \
     OP(uint32And) \
@@ -312,10 +320,7 @@
     OP(uint64ToUInt32) \
     OP(uint64Xor) \
     OP(uint8ToUInt32) \
-    OP(force) \
-    OP(par) \
-    OP(boolFalse) \
-    OP(boolTrue) \
+    OP(lazyForce) \
     OP(stringBuilderNew) \
     OP(stringBuilderChar) \
     OP(stringBuilderString) \
@@ -345,8 +350,6 @@
     OP(bufferWriteUInt32) \
     OP(bufferWriteUInt64) \
     OP(bufferWriteUInt8) \
-    OP(catch) \
-    OP(throw) \
     OP(identical) \
     OP(tag)
 
@@ -355,7 +358,7 @@ typedef enum { CBY_FOREACH_OPCODE(_CBY_OPCODE_ENUM) } Opcode;
 #undef _CBY_OPCODE_ENUM
 
 enum {
-    OPCODE_COUNT = 347,
+    OPCODE_COUNT = 350,
     OPCODE_MAXLEN = 7,
-    OPCODE_PRIM = 87
+    OPCODE_PRIM = 92
 };

@@ -1,149 +1,129 @@
 #pragma once
 
-#include "minorheap.h"
-#include "heap.h"
-#include "gc.h"
+#include "localgc.h"
+#include "localheap.h"
 
-#if CHI_SYSTEM_HAS_TASKS
-#  define CHI_FOREACH_PROCESSOR(proc, rt) \
-    for (ChiProcessor* proc = (rt)->procMan.list.head; proc; proc = proc->next)
-#  define CHI_FOREACH_OTHER_PROCESSOR_HEAD(proc, currProc, head)        \
-    for (ChiProcessor *_curr = (currProc),                              \
-             *_next = (head),                                           \
-             *proc = (_next == _curr ? _curr->next : _next);            \
-         proc; _next = proc->next, proc = (_next == _curr ? _curr->next : _next))
+#if CHI_SYSTEM_HAS_TASK
+#  define CHI_FOREACH_PROCESSOR(p, rt)          CHI_LIST_FOREACH_NODELETE(ChiProcessor, link, p, &(rt)->proc.list)
+/* Avoid accessing these global variables as much as possible!
+ * In principle they should be used only in functions,
+ * which cannot get the processor/worker as argument (e.g., external api functions).
+ */
+#  define CHI_CURRENT_PROCESSOR                 ({ CHI_ASSERT(_chiProcessor.rt); &_chiProcessor; })
+#  define CHI_CURRENT_RUNTIME                   (CHI_CURRENT_PROCESSOR->rt)
 #else
-#  define CHI_FOREACH_PROCESSOR(proc, rt) \
-    for (ChiProcessor* proc = (rt)->procMan.list.head; proc; proc = 0)
-#  define CHI_FOREACH_OTHER_PROCESSOR_HEAD(proc, currProc, head)        \
-    for (ChiProcessor* _curr = (currProc), *proc = (head); 0; CHI_NOWARN_UNUSED(_curr))
+#  define CHI_FOREACH_PROCESSOR(p, rt)          for (ChiProcessor* p = &(rt)->proc.single; p; p = 0)
+#  define CHI_CURRENT_PROCESSOR                 (&CHI_CURRENT_RUNTIME->proc.single)
+#  define CHI_CURRENT_RUNTIME                   ({ CHI_ASSERT(_chiRuntime); _chiRuntime; })
 #endif
-
-#define CHI_FOREACH_OTHER_PROCESSOR(proc, currProc)                     \
-    CHI_FOREACH_OTHER_PROCESSOR_HEAD(proc, currProc, _curr->rt->procMan.list.head)
 
 typedef struct ChiRuntime_    ChiRuntime;
 typedef struct ChiEventWS_    ChiEventWS;
 typedef struct ChiProfilerWS_ ChiProfilerWS;
 
 /**
- * Each native ChiTask associated with a ChiRuntime
- * is a worker. The current worker can be accessed via CHI_CURRENT_WORKER.
+ * Each native ChiTask associated with a ChiRuntime is a worker.
  */
 typedef struct ChiWorker_ {
-    ChiRuntime*       rt;
-    ChiEventWS*       eventWS;
-    ChiProfilerWS*    profilerWS;
-    volatile int32_t* tp;
-    volatile int32_t  _tp;
-    uint32_t          wid;
-    char              name[16];
+    ChiRuntime* rt;
+    uint32_t    wid;
+    char        name[12];
+    CHI_IF(CHI_TRACEPOINTS_ENABLED, _Atomic(int32_t)* tp, tpDummy;)
+    CHI_IF(CHI_EVENT_ENABLED, ChiEventWS* eventWS;)
+    CHI_IF(CHI_PROF_ENABLED, ChiProfilerWS* profilerWS;)
 } ChiWorker;
 
-/**
- * Processor states
- *
- * @image html processor-statemachine.png
- */
+#if CHI_SYSTEM_HAS_TASK
 typedef enum {
-    CHI_PROCESSOR_RUN,
-    CHI_PROCESSOR_FINAL,
-    CHI_PROCESSOR_PROTECT,
-    CHI_PROCESSOR_SYNC,
-    CHI_PROCESSOR_STOP,
-} ChiProcessorState;
+    CHI_SECONDARY_INACTIVE,
+    CHI_SECONDARY_ACTIVE,
+    CHI_SECONDARY_RUN,
+    CHI_SECONDARY_STOP,
+} ChiSecondaryStatus;
 
-typedef enum {
-    CHI_PM_INITIAL,
-    CHI_PM_FINAL,
-    CHI_PM_RUN,
-    CHI_PM_SYNC,
-    CHI_PM_UNSYNC,
-} ChiPMState;
+typedef struct {
+    ChiWorker          worker;
+    ChiTask            task;
+    ChiMutex           mutex;
+    ChiCond            cond;
+    ChiSecondaryStatus status;
+} ChiSecondary;
+
+typedef struct ChiProcessorLink_ ChiProcessorLink;
+struct ChiProcessorLink_ { ChiProcessorLink *prev, *next; };
+#endif
 
 /**
- * Processors are special ChiWorker%s, which execute and schedule
- * ChiThread%s.
+ * Processors execute and schedule ChiThread%s.
+ * Each processor has a primary and secondary worker.
  */
 typedef struct ChiProcessor_ {
-    ChiWorker         worker;
+#if CHI_SYSTEM_HAS_TASK
+    struct {
+        ChiWorker     worker;
+        ChiTask       task;
+    } primary;
+    ChiSecondary      secondary;
+    ChiWorker*        worker;
+    ChiProcessorLink  link;
+#else
+    union {
+        struct { ChiWorker worker; } primary;
+        ChiWorker worker[1];
+    };
+#endif
+    ChiLocalHeap      heap;
+    ChiLocalGC        gc;
+    ChiHeapHandle     handle;
+    Chili             local, thread; // Local roots
+    ChiRuntime*       rt;
+    CHI_IF(CHI_CBY_SUPPORT_ENABLED, struct CbyInterpPS_* interpPS;)
     struct {
         ChiWord**     hl;
-        bool          interrupt;
-        bool          dumpStack;
-        bool          tick;
-        ChiNanos      nextTick;
-    } trigger;
+        ChiWord*      hlDummy;
+        ChiAuxRegs*   aux;
+    } reg;
     struct {
-        ChiMutex     mutex;
-        ChiCond      cond;
-        ChiProcessorState id;
-    } state;
-    struct {
-        ChiMutex    mutex;
-        ChiCond     cond;
-        ChiMillis   timeout;
+        ChiMutex      mutex;
+        ChiCond       cond;
+        ChiMillis     timeout;
     } suspend;
-    ChiNursery      nursery;
-    ChiHeapHandle   heapHandle;
-    Chili           schedulerThread, thread;
-    ChiGCPS         gcPS;
-    void*           interpPS; ///< Used by interpreter
-    ChiRuntime*     rt;
-    ChiTask         task;
-    _Atomic(ChiProcessor*) next;
-    ChiProcessor*   nextStopped;
+    struct {
+        CHI_UNLESS(CHI_SYSTEM_HAS_INTERRUPT, ChiNanos lastTick;)
+        ChiTrigger    interrupt;
+        ChiTrigger    exit;
+        ChiTrigger    tick;
+        ChiTrigger    dumpStack;
+        ChiTrigger    userInterrupt;
+        ChiTrigger    scavenge;
+        ChiTrigger    migrate;
+    } trigger;
 } ChiProcessor;
 
-/**
- * Datastructure holding everything needed
- * for processor management.
- */
-typedef struct {
-    _Atomic(ChiPMState)       state;
-    _Atomic(uint32_t)         running;
-    /*
-     * RCU singly linked list of processors.
-     * Readers must increment/decrement critical
-     * around a critical sections.
-     * Processors are moved first to the stopped
-     * list and destroyed for critical == 0.
-     */
-    struct {
-        _Atomic(uint32_t)      critical;
-        _Atomic(ChiProcessor*) head;
-        ChiProcessor*          stopped;
-    } list;
-} ChiProcessorManager;
-
+#if CHI_SYSTEM_HAS_TASK
+#  define LIST_PREFIX chiProcessorList
+#  define LIST_ELEM   ChiProcessor
+#  include "generic/list.h"
 extern _Thread_local ChiProcessor _chiProcessor;
+#else
+extern ChiRuntime* _chiRuntime;
+#endif
 
-// Avoid accessing these global variables as much as possible!
-// In principle they should be used only in functions,
-// which cannot get the processor/worker as argument (e.g., external api functions).
-#define CHI_CURRENT_PROCESSOR ({ CHI_ASSERT(_chiProcessor.rt); &_chiProcessor; })
-#define CHI_CURRENT_WORKER    ({ CHI_ASSERT(_chiProcessor.worker.rt); &_chiProcessor.worker; })
-#define CHI_CURRENT_RUNTIME   (CHI_CURRENT_WORKER->rt)
+CHI_INTERN void chiProcessorSetup(ChiProcessor*);
+CHI_INTERN void chiProcessorProtectEnd(ChiProcessor*);
+CHI_INTERN void chiProcessorService(ChiProcessor*);
+CHI_INTERN _Noreturn void chiProcessorEnter(ChiProcessor*);
+CHI_INTERN ChiProcessor* chiProcessorBegin(ChiRuntime*);
+CHI_INTERN void chiWorkerBegin(ChiWorker*, ChiRuntime*, const char*);
+CHI_INTERN void chiWorkerEnd(ChiWorker*);
+CHI_INTERN void chiProcessorRequestAll(ChiRuntime*, ChiProcessorRequest);
+CHI_INTERN void chiProcessorRequestMain(ChiRuntime*, ChiProcessorRequest);
+CHI_INTERN void chiProcessorRequest(ChiProcessor*, ChiProcessorRequest);
 
-void chiProcessorSetup(ChiProcessor*);
-void chiProcessorSetupDone(ChiProcessor*);
-void chiProcessorProtectEnd(ChiProcessor*);
-bool chiProcessorSync(ChiProcessor*);
-_Noreturn void chiProcessorStopped(ChiProcessor*);
-uint32_t chiProcessorTryStart(ChiRuntime*);
-void chiProcessorInterrupt(ChiRuntime*);
-void chiProcessorSignal(ChiRuntime*, ChiSig);
-void chiProcessorTick(ChiRuntime*);
-ChiProcessor* chiProcessorBegin(ChiRuntime*);
-ChiWorker* chiWorkerBegin(ChiRuntime*, const char*);
-void chiWorkerEnd(ChiWorker*);
-
-CHI_INL ChiProcessor* chiWorkerToProcessor(ChiWorker* worker) {
-    ChiProcessor* proc = (ChiProcessor*)(void*)worker;
-    CHI_ASSERT(proc->rt == worker->rt);
-    return proc;
+CHI_INL CHI_WU bool chiWorkerMain(ChiWorker* worker) {
+    return !CHI_SYSTEM_HAS_TASK || !worker->wid;
 }
 
-CHI_INL CHI_WU bool chiMainWorker(ChiWorker* worker) {
-    return !worker->wid;
+CHI_INL CHI_WU bool chiProcessorMain(ChiProcessor* proc) {
+    return chiWorkerMain(&proc->primary.worker);
 }

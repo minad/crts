@@ -1,25 +1,20 @@
 #include "zip.h"
-#include "inflate.h"
-#include "mem.h"
-#include "system.h"
 
-#define NOHASH
-#define HASH        ZipFileHash
-#define ENTRY       ZipFile
-#define PREFIX      fileHash
-#define KEY(e)      chiStringRef(e->name)
-#define EXISTS(e)   e->name
-#define KEYEQ(a, b) chiStringRefEq(a, b)
-#define HASHFN      chiHashStringRef
-#include "hashtable.h"
+#if CBY_ZIP_ENABLED
 
-#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
-CHI_INL uint16_t cby_letoh16(uint16_t x) { return x; }
-CHI_INL uint32_t cby_letoh32(uint32_t x) { return x; }
-#else
-CHI_INL uint16_t cby_letoh16(uint16_t x) { return __builtin_bswap16(x); }
-CHI_INL uint32_t cby_letoh32(uint32_t x) { return __builtin_bswap32(x); }
-#endif
+#include <zlib.h>
+#include "native/endian.h"
+#include "native/mem.h"
+
+#define HT_NOSTRUCT
+#define HT_HASH        ZipFileHash
+#define HT_ENTRY       ZipFile
+#define HT_PREFIX      fileHash
+#define HT_KEY(e)      chiStringRef(e->name)
+#define HT_EXISTS(e)   e->name
+#define HT_KEYEQ(a, b) chiStringRefEq(a, b)
+#define HT_HASHFN      chiHashStringRef
+#include "native/generic/hashtable.h"
 
 /* General purpose bits:
  *
@@ -42,7 +37,7 @@ enum {
     GP_UNSUPPORTED = GP_ENCRYPTION | GP_DATADESC | GP_PATCHED,
     END_RECORD_SIG = 0x06054b50,
     FILE_RECORD_SIG = 0x02014b50,
-    FILE_HEADER_SIG = 0x04034b50,
+    FILE_HEADER_SIZE = 30,
     COMP_STORED = 0,
     COMP_DEFLATE = 8,
     ATTR_DIR = 0x10,
@@ -81,38 +76,36 @@ typedef struct CHI_PACKED {
     uint32_t start;
 } FileRecord;
 
-typedef struct CHI_PACKED {
-    uint32_t sig;
-    uint16_t versionNeeded;
-    uint16_t generalPurpose;
-    uint16_t compression;
-    uint16_t lastModTime;
-    uint16_t lastModDate;
-    uint32_t crc32;
-    uint32_t compressedSize;
-    uint32_t uncompressedSize;
-    uint16_t nameSize;
-    uint16_t extraSize;
-} FileHeader;
+static bool inflateBuffer(void *dst, size_t dstLen, const void *src, size_t srcLen) {
+    z_stream s  =
+        { .total_in  = (uInt)srcLen,
+          .avail_in  = (uInt)srcLen,
+          .total_out = (uInt)dstLen,
+          .avail_out = (uInt)dstLen,
+          .next_in   = (Bytef*)CHI_CONST_CAST(src, void*),
+          .next_out  = (Bytef*)dst
+        };
+    if (inflateInit2(&s, -MAX_WBITS) != Z_OK)
+        return false;
+    bool ok = inflate(&s, Z_FINISH) == Z_STREAM_END;
+    inflateEnd(&s);
+    return ok;
+}
 
-static ZipResult findEndRecord(FILE* fp, EndRecord* eocd) {
-    int64_t isize = fseeko(fp, 0, SEEK_END) ? -1 : ftello(fp);
-    if (isize < (int64_t)sizeof (EndRecord) || isize > UINT32_MAX)
-        return ZIP_ERROR_SEEK;
-    size_t size = (size_t)isize;
+static ZipResult findEndRecord(ChiFile handle, EndRecord* eocd) {
+    uint64_t size = chiFileSize(handle);
+    if (size < sizeof (EndRecord) || size > UINT32_MAX)
+        return ZIP_ERROR_SIZE;
 
     uint8_t block[2 * sizeof (EndRecord)];
-    size_t blockSize = CHI_MIN(size, sizeof (block));
-    if (fseeko(fp, (off_t)(size - blockSize), SEEK_SET))
-        return ZIP_ERROR_SEEK;
-
-    if (fread(block, blockSize, 1, fp) != 1)
+    size_t blockSize = CHI_MIN((size_t)size, sizeof (block));
+    if (!chiFileReadOff(handle, block, blockSize, size - blockSize))
         return ZIP_ERROR_READ;
 
     // find end of central directory
     size_t pos = blockSize - sizeof (EndRecord);
     for (;;) {
-        if (cby_letoh32(chiPeekUInt32(block + pos)) == END_RECORD_SIG)
+        if (chiLE32(chiPeekUInt32(block + pos)) == END_RECORD_SIG)
             break;
         if (pos == 0)
             return ZIP_ERROR_SIGNATURE;
@@ -120,83 +113,84 @@ static ZipResult findEndRecord(FILE* fp, EndRecord* eocd) {
     }
 
     memcpy(eocd, block + pos, sizeof (EndRecord));
-
-    if (cby_letoh32(eocd->dirStart) >= size || fseeko(fp, (off_t)cby_letoh32(eocd->dirStart), SEEK_SET))
-        return ZIP_ERROR_SEEK;
-
     return ZIP_OK;
 }
 
-static ZipResult readFileRecord(Zip* z) {
-    FileRecord r;
-    if (fread(&r, sizeof (r), 1, z->fp) != 1)
-        return ZIP_ERROR_READ;
+static ZipResult parseFileRecord(Zip* z, const uint8_t** pp, const uint8_t* end) {
+    const uint8_t* p = *pp;
 
-    if (cby_letoh32(r.sig) != FILE_RECORD_SIG)
+    FileRecord r;
+    if (p + sizeof (r) > end)
+        return ZIP_ERROR_OFFSET;
+    memcpy(&r, p, sizeof (r));
+    p += sizeof (r);
+
+    if (chiLE32(r.sig) != FILE_RECORD_SIG)
         return ZIP_ERROR_SIGNATURE;
 
-    if (cby_letoh16(r.generalPurpose) & GP_UNSUPPORTED)
+    if (chiLE16(r.generalPurpose) & GP_UNSUPPORTED)
         return ZIP_ERROR_FLAGS;
 
-    uint16_t nameSize = cby_letoh16(r.nameSize);
+    uint16_t nameSize = chiLE16(r.nameSize);
     if (!nameSize || nameSize > NAME_LIMIT)
         return ZIP_ERROR_NAME;
 
-    if (cby_letoh32(r.externalAttrs) & ATTR_DIR)
-        return fseeko(z->fp, nameSize
-                        + cby_letoh16(r.extraSize)
-                        + cby_letoh16(r.commentSize), SEEK_CUR)
-            ? ZIP_ERROR_SEEK : ZIP_OK;
-
-    uint32_t size = cby_letoh32(r.uncompressedSize);
-    if (size > SIZE_LIMIT)
+    uint32_t uncompressedSize = chiLE32(r.uncompressedSize);
+    if (uncompressedSize > SIZE_LIMIT)
         return ZIP_ERROR_SIZE;
 
-    char* name = chiCStringAlloc(nameSize);
-    if (fread(name, nameSize, 1, z->fp) != 1) {
-        chiFree(name);
-        return ZIP_ERROR_READ;
-    }
+    *pp = p + nameSize + chiLE16(r.extraSize) + chiLE16(r.commentSize);
+    if (*pp > end)
+        return ZIP_ERROR_OFFSET;
 
-    if (fseeko(z->fp, cby_letoh16(r.extraSize) + cby_letoh16(r.commentSize), SEEK_CUR)) {
-        chiFree(name);
-        return ZIP_ERROR_SEEK;
-    }
+    if (chiLE32(r.externalAttrs) & ATTR_DIR)
+        return ZIP_OK;
+
+    char* name = chiCStringAlloc(nameSize);
+    memcpy(name, p, nameSize);
 
     ZipFile* f;
-    if (!fileHashCreate(&z->fileHash, chiStringRef(name), &f)) {
+    if (!fileHashCreate(&z->hash, chiStringRef(name), &f)) {
         chiFree(name);
         return ZIP_ERROR_DUPLICATE;
     }
     f->name = name;
-    f->size = size;
-    f->start = cby_letoh32(r.start);
-
+    f->compressedSize = chiLE32(r.compressedSize);
+    f->uncompressedSize = uncompressedSize;
+    f->start = chiLE32(r.start) + FILE_HEADER_SIZE + chiLE16(r.nameSize) + chiLE16(r.extraSize);
     return ZIP_OK;
 }
 
 Zip* zipOpen(const char* file, ZipResult* res) {
     CHI_ASSERT(res);
 
-    FILE* fp = chiFileOpenRead(file);
-    if (!fp) {
+    ChiFile handle = chiFileOpenRead(file);
+    if (chiFileNull(handle)) {
         *res = ZIP_ERROR_OPEN;
         return 0;
     }
 
     EndRecord eocd;
-    *res = findEndRecord(fp, &eocd);
+    *res = findEndRecord(handle, &eocd);
     if (*res != ZIP_OK) {
-        fclose(fp);
+        chiFileClose(handle);
         return 0;
     }
 
-    uint32_t fileCount = cby_letoh16(eocd.numRecords);
-    Zip* z = (Zip*)chiZalloc(sizeof (Zip) + sizeof (ZipFile) * fileCount);
-    z->fp = fp;
+    uint32_t dirSize = chiLE32(eocd.dirSize);
+    CHI_AUTO_ALLOC(uint8_t, dir, dirSize);
+    if (!chiFileReadOff(handle, dir, dirSize, chiLE32(eocd.dirStart))) {
+        *res = ZIP_ERROR_READ;
+        chiFileClose(handle);
+        return 0;
+    }
 
+    uint32_t fileCount = chiLE16(eocd.numRecords);
+    Zip* z = (Zip*)chiZalloc(sizeof (Zip) + sizeof (ZipFile) * fileCount);
+    z->handle = handle;
+    const uint8_t* p = dir;
     for (uint32_t i = 0; i < fileCount; ++i) {
-        *res = readFileRecord(z);
+        *res = parseFileRecord(z, &p, dir + dirSize);
         if (*res != ZIP_OK) {
             zipClose(z);
             return 0;
@@ -207,51 +201,26 @@ Zip* zipOpen(const char* file, ZipResult* res) {
 }
 
 void zipClose(Zip* z) {
-    fclose(z->fp);
-    HASH_FOREACH(fileHash, f, &z->fileHash)
+    chiFileClose(z->handle);
+    CHI_HT_FOREACH(ZipFileHash, f, &z->hash)
         chiFree(f->name);
-    fileHashDestroy(&z->fileHash);
+    fileHashFree(&z->hash);
     chiFree(z);
 }
 
 ZipFile* zipFind(Zip* z, ChiStringRef name) {
-    return fileHashFind(&z->fileHash, name);
+    return fileHashFind(&z->hash, name);
 }
 
 ZipResult zipRead(Zip* z, ZipFile* f, void* buf) {
-    if (fseeko(z->fp, (off_t)f->start, SEEK_SET))
-        return ZIP_ERROR_SEEK;
+    if (f->compressedSize == f->uncompressedSize)
+        return chiFileReadOff(z->handle, buf, f->uncompressedSize, f->start) ? ZIP_OK : ZIP_ERROR_READ;
 
-    FileHeader h;
-    if (fread(&h, sizeof (FileHeader), 1, z->fp) != 1)
+    CHI_AUTO_ALLOC(uint8_t, tmp, f->compressedSize);
+    if (chiFileReadOff(z->handle, tmp, f->compressedSize, f->start) != 1)
         return ZIP_ERROR_READ;
 
-    if (cby_letoh32(h.sig) != FILE_HEADER_SIG)
-        return ZIP_ERROR_SIGNATURE;
-
-    uint16_t comp = cby_letoh16(h.compression);
-    if (comp != COMP_DEFLATE && comp != COMP_STORED)
-        return ZIP_ERROR_COMPRESSION;
-
-    if (cby_letoh16(h.generalPurpose) & GP_UNSUPPORTED)
-        return ZIP_ERROR_FLAGS;
-
-    if (fseeko(z->fp, cby_letoh16(h.nameSize) + cby_letoh16(h.extraSize), SEEK_CUR))
-        return ZIP_ERROR_SEEK;
-
-    if (comp == COMP_STORED)
-        return fread(buf, f->size, 1, z->fp) == 1
-            ? ZIP_OK : ZIP_ERROR_READ;
-
-    uint32_t compressedSize = cby_letoh32(h.compressedSize);
-    if (compressedSize > SIZE_LIMIT)
-        return ZIP_ERROR_SIZE;
-
-    CHI_AUTO_ALLOC(uint8_t, tmp, compressedSize);
-    if (fread(tmp, compressedSize, 1, z->fp) != 1)
-        return ZIP_ERROR_READ;
-
-    if (!inflate(buf, f->size, tmp, compressedSize))
+    if (!inflateBuffer(buf, f->uncompressedSize, tmp, f->compressedSize))
         return ZIP_ERROR_INFLATE;
 
     return ZIP_OK;
@@ -260,3 +229,5 @@ ZipResult zipRead(Zip* z, ZipFile* f, void* buf) {
 #define _ZIP_RESULT(N, n) n,
 const char* const zipResultName[] = { ZIP_FOREACH_RESULT(_ZIP_RESULT) };
 #undef _ZIP_RESULT
+
+#endif

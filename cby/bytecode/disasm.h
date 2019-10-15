@@ -117,14 +117,14 @@ case OP_xintn: {
 break;
 case OP_xint8: {
     const uint8_t res = FETCH8;
-    const uint8_t val = FETCH8;
-    chiSinkFmt(sink, ARGR(res)ARGU(val), (uint32_t)res, (uint32_t)val);
+    const int8_t val = (int8_t)FETCH8;
+    chiSinkFmt(sink, ARGR(res)ARGD(val), (uint32_t)res, (int32_t)val);
 }
 break;
 case OP_xint64: {
     const uint16_t res = FETCH16;
-    const uint64_t val = FETCH64;
-    chiSinkFmt(sink, ARGR(res)NAME(val)VAL("%ju"), (uint32_t)res, val);
+    const int64_t val = (int64_t)FETCH64;
+    chiSinkFmt(sink, ARGR(res)NAME(val)VAL("%jd"), (uint32_t)res, val);
 }
 break;
 case OP_movc2: {
@@ -320,7 +320,7 @@ case OP_fn4: {
     chiSinkFmt(sink, ARGR(res)ARGU(arity)ARGR(c0)ARGR(c1)ARGR(c2)ARGR(c3) FNREF , (uint32_t)res, (uint32_t)arity, (uint32_t)c0, (uint32_t)c1, (uint32_t)c2, (uint32_t)c3, FNREF_ARGS);
 }
 break;
-case OP_data: {
+case OP_con: {
     const uint16_t res = FETCH16;
     const uint16_t tag = FETCH16;
     const uint16_t nargs = FETCH16;
@@ -334,26 +334,26 @@ case OP_data: {
     chiSinkPuts(sink, " ]");
 }
 break;
-case OP_data0: {
+case OP_con0: {
     const uint8_t res = FETCH8;
     const uint8_t tag = FETCH8;
     chiSinkFmt(sink, ARGR(res)ARGU(tag), (uint32_t)res, (uint32_t)tag);
 }
 break;
-case OP_datal0: {
+case OP_conl0: {
     const uint16_t res = FETCH16;
     const uint16_t tag = FETCH16;
     chiSinkFmt(sink, ARGR(res)ARGU(tag), (uint32_t)res, (uint32_t)tag);
 }
 break;
-case OP_data1: {
+case OP_con1: {
     const uint8_t res = FETCH8;
     const uint8_t tag = FETCH8;
     const uint8_t a0 = FETCH8;
     chiSinkFmt(sink, ARGR(res)ARGU(tag)ARGR(a0), (uint32_t)res, (uint32_t)tag, (uint32_t)a0);
 }
 break;
-case OP_data2: {
+case OP_con2: {
     const uint8_t res = FETCH8;
     const uint8_t tag = FETCH8;
     const uint8_t a0 = FETCH8;
@@ -361,7 +361,7 @@ case OP_data2: {
     chiSinkFmt(sink, ARGR(res)ARGU(tag)ARGR(a0)ARGR(a1), (uint32_t)res, (uint32_t)tag, (uint32_t)a0, (uint32_t)a1);
 }
 break;
-case OP_data3: {
+case OP_con3: {
     const uint8_t res = FETCH8;
     const uint8_t tag = FETCH8;
     const uint8_t a0 = FETCH8;
@@ -370,7 +370,7 @@ case OP_data3: {
     chiSinkFmt(sink, ARGR(res)ARGU(tag)ARGR(a0)ARGR(a1)ARGR(a2), (uint32_t)res, (uint32_t)tag, (uint32_t)a0, (uint32_t)a1, (uint32_t)a2);
 }
 break;
-case OP_data4: {
+case OP_con4: {
     const uint8_t res = FETCH8;
     const uint8_t tag = FETCH8;
     const uint8_t a0 = FETCH8;
@@ -564,17 +564,9 @@ case OP_app5: {
     chiSinkFmt(sink, ARGR(fn)ARGR(a0)ARGR(a1)ARGR(a2)ARGR(a3)ARGR(a4), (uint32_t)fn, (uint32_t)a0, (uint32_t)a1, (uint32_t)a2, (uint32_t)a3, (uint32_t)a4);
 }
 break;
-case OP_clos: {
-    const uint8_t nargs = FETCH8;
-    const uint16_t limit = FETCH16;
-    const uint16_t size = FETCH16;
-    chiSinkFmt(sink, ARGU(nargs)ARGU(limit)ARGU(size), (uint32_t)nargs, (uint32_t)limit, (uint32_t)size);
-}
-break;
-case OP_clos0: {
-    const uint8_t nargs = FETCH8;
+case OP_limit: {
     const uint8_t lim = FETCH8;
-    chiSinkFmt(sink, ARGU(nargs)ARGU(lim), (uint32_t)nargs, (uint32_t)lim);
+    chiSinkFmt(sink, ARGU(lim), (uint32_t)lim);
 }
 break;
 case OP_clos1: {
@@ -599,6 +591,13 @@ case OP_clos4: {
     const uint8_t nargs = FETCH8;
     const uint8_t lim = FETCH8;
     chiSinkFmt(sink, ARGU(nargs)ARGU(lim), (uint32_t)nargs, (uint32_t)lim);
+}
+break;
+case OP_clos: {
+    const uint8_t nargs = FETCH8;
+    const uint16_t lim = FETCH16;
+    const uint16_t size = FETCH16;
+    chiSinkFmt(sink, ARGU(nargs)ARGU(lim)ARGU(size), (uint32_t)nargs, (uint32_t)lim, (uint32_t)size);
 }
 break;
 case OP_enter: {
@@ -663,6 +662,34 @@ case OP_ffiprot: {
         chiSinkFmt(sink, ARGR(a), (uint32_t)a);
     }
     chiSinkPuts(sink, " ]");
+}
+break;
+case OP_thread: {
+    const uint16_t res = FETCH16;
+    chiSinkFmt(sink, ARGR(res), (uint32_t)res);
+}
+break;
+case OP_proc: {
+    const uint16_t res = FETCH16;
+    chiSinkFmt(sink, ARGR(res), (uint32_t)res);
+}
+break;
+case OP_plocal: {
+    const uint16_t res = FETCH16;
+    chiSinkFmt(sink, ARGR(res), (uint32_t)res);
+}
+break;
+case OP_tstate: {
+    const uint16_t res = FETCH16;
+    const uint16_t thr = FETCH16;
+    chiSinkFmt(sink, ARGR(res)ARGR(thr), (uint32_t)res, (uint32_t)thr);
+}
+break;
+case OP_evfilt: {
+    const uint16_t res = FETCH16;
+    const uint16_t f = FETCH16;
+    const uint16_t n = FETCH16;
+    chiSinkFmt(sink, ARGR(res)ARGR(f)ARGR(n), (uint32_t)res, (uint32_t)f, (uint32_t)n);
 }
 break;
 case OP_bitsToFloat32: {
@@ -1283,7 +1310,7 @@ case OP_int32Or: {
     chiSinkFmt(sink, ARGR(res)ARGR(a0)ARGR(a1), (uint32_t)res, (uint32_t)a0, (uint32_t)a1);
 }
 break;
-case OP_int32Quot: {
+case OP_int32Quo: {
     const uint8_t res = FETCH8;
     const uint8_t a0 = FETCH8;
     const uint8_t a1 = FETCH8;
@@ -1455,7 +1482,7 @@ case OP_int64Or: {
     chiSinkFmt(sink, ARGR(res)ARGR(a0)ARGR(a1), (uint32_t)res, (uint32_t)a0, (uint32_t)a1);
 }
 break;
-case OP_int64Quot: {
+case OP_int64Quo: {
     const uint8_t res = FETCH8;
     const uint8_t a0 = FETCH8;
     const uint8_t a1 = FETCH8;
@@ -1628,7 +1655,7 @@ case OP_intOr: {
     chiSinkFmt(sink, ARGR(res)ARGR(a0)ARGR(a1), (uint32_t)res, (uint32_t)a0, (uint32_t)a1);
 }
 break;
-case OP_intQuot: {
+case OP_intQuo: {
     const uint8_t res = FETCH8;
     const uint8_t a0 = FETCH8;
     const uint8_t a1 = FETCH8;
@@ -1732,6 +1759,27 @@ case OP_stringCursorEq: {
     chiSinkFmt(sink, ARGR(res)ARGR(a0)ARGR(a1), (uint32_t)res, (uint32_t)a0, (uint32_t)a1);
 }
 break;
+case OP_stringCursorLe: {
+    const uint8_t res = FETCH8;
+    const uint8_t a0 = FETCH8;
+    const uint8_t a1 = FETCH8;
+    chiSinkFmt(sink, ARGR(res)ARGR(a0)ARGR(a1), (uint32_t)res, (uint32_t)a0, (uint32_t)a1);
+}
+break;
+case OP_stringCursorLt: {
+    const uint8_t res = FETCH8;
+    const uint8_t a0 = FETCH8;
+    const uint8_t a1 = FETCH8;
+    chiSinkFmt(sink, ARGR(res)ARGR(a0)ARGR(a1), (uint32_t)res, (uint32_t)a0, (uint32_t)a1);
+}
+break;
+case OP_stringCursorNe: {
+    const uint8_t res = FETCH8;
+    const uint8_t a0 = FETCH8;
+    const uint8_t a1 = FETCH8;
+    chiSinkFmt(sink, ARGR(res)ARGR(a0)ARGR(a1), (uint32_t)res, (uint32_t)a0, (uint32_t)a1);
+}
+break;
 case OP_stringCursorGet: {
     const uint8_t res = FETCH8;
     const uint8_t a0 = FETCH8;
@@ -1787,7 +1835,7 @@ case OP_stringNull: {
     chiSinkFmt(sink, ARGR(res)ARGR(a0), (uint32_t)res, (uint32_t)a0);
 }
 break;
-case OP_substring: {
+case OP_stringSlice: {
     const uint8_t res = FETCH8;
     const uint8_t a0 = FETCH8;
     const uint8_t a1 = FETCH8;
@@ -2117,24 +2165,9 @@ case OP_uint8ToUInt32: {
     chiSinkFmt(sink, ARGR(res)ARGR(a0), (uint32_t)res, (uint32_t)a0);
 }
 break;
-case OP_force: {
+case OP_lazyForce: {
     const uint8_t a0 = FETCH8;
     chiSinkFmt(sink, ARGR(a0), (uint32_t)a0);
-}
-break;
-case OP_par: {
-    const uint8_t a0 = FETCH8;
-    chiSinkFmt(sink, ARGR(a0), (uint32_t)a0);
-}
-break;
-case OP_boolFalse: {
-    const uint8_t res = FETCH8;
-    chiSinkFmt(sink, ARGR(res), (uint32_t)res);
-}
-break;
-case OP_boolTrue: {
-    const uint8_t res = FETCH8;
-    chiSinkFmt(sink, ARGR(res), (uint32_t)res);
 }
 break;
 case OP_stringBuilderNew: {
@@ -2355,17 +2388,6 @@ case OP_bufferWriteUInt8: {
     const uint8_t a1 = FETCH8;
     const uint8_t a2 = FETCH8;
     chiSinkFmt(sink, ARGR(res)ARGR(a0)ARGR(a1)ARGR(a2), (uint32_t)res, (uint32_t)a0, (uint32_t)a1, (uint32_t)a2);
-}
-break;
-case OP_catch: {
-    const uint8_t a0 = FETCH8;
-    const uint8_t a1 = FETCH8;
-    chiSinkFmt(sink, ARGR(a0)ARGR(a1), (uint32_t)a0, (uint32_t)a1);
-}
-break;
-case OP_throw: {
-    const uint8_t a0 = FETCH8;
-    chiSinkFmt(sink, ARGR(a0), (uint32_t)a0);
 }
 break;
 case OP_identical: {

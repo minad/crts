@@ -1,6 +1,6 @@
 #pragma once
 
-#include "object.h"
+#include <chili.h>
 #include <math.h>
 
 CHI_INL Chili     chi_Prim_charToString(ChiChar x)                { return chiCharToString(x); }
@@ -101,7 +101,7 @@ CHI_INL int32_t   chi_Prim_int32Mul(int32_t x, int32_t y)         { return x * y
 CHI_INL int32_t   chi_Prim_int32Neg(int32_t x)                    { return -x; }
 CHI_INL int32_t   chi_Prim_int32Not(int32_t x)                    { return ~x; }
 CHI_INL int32_t   chi_Prim_int32Or(int32_t x, int32_t y)          { return x | y; }
-CHI_INL int32_t   chi_Prim_int32Quot(int32_t x, int32_t y)        { return x / y; }
+CHI_INL int32_t   chi_Prim_int32Quo(int32_t x, int32_t y)        { return x / y; }
 CHI_INL int32_t   chi_Prim_int32Rem(int32_t x, int32_t y)         { return CHI_REM(x, y); }
 CHI_INL int32_t   chi_Prim_int32Shl(int32_t x, uint8_t y)         { return x << y; }
 CHI_INL int32_t   chi_Prim_int32Shr(int32_t x, uint8_t y)         { return x >> y; }
@@ -127,7 +127,7 @@ CHI_INL int64_t   chi_Prim_int64Mul(int64_t x, int64_t y)         { return x * y
 CHI_INL int64_t   chi_Prim_int64Neg(int64_t x)                    { return -x; }
 CHI_INL int64_t   chi_Prim_int64Not(int64_t x)                    { return ~x; }
 CHI_INL int64_t   chi_Prim_int64Or(int64_t x, int64_t y)          { return x | y; }
-CHI_INL int64_t   chi_Prim_int64Quot(int64_t x, int64_t y)        { return x / y; }
+CHI_INL int64_t   chi_Prim_int64Quo(int64_t x, int64_t y)        { return x / y; }
 CHI_INL int64_t   chi_Prim_int64Rem(int64_t x, int64_t y)         { return CHI_REM(x, y); }
 CHI_INL int64_t   chi_Prim_int64Shl(int64_t x, uint8_t y)         { return x << y; }
 CHI_INL int64_t   chi_Prim_int64Shr(int64_t x, uint8_t y)         { return x >> y; }
@@ -135,17 +135,7 @@ CHI_INL int64_t   chi_Prim_int64Sub(int64_t x, int64_t y)         { return x - y
 CHI_INL int64_t   chi_Prim_int64Xor(int64_t x, int64_t y)         { return x ^ y; }
 CHI_INL uint32_t  chi_Prim_int64ToUInt32(int64_t x)               { return (uint32_t)x; }
 CHI_INL uint64_t  chi_Prim_int64ToUInt64(int64_t x)               { return (uint64_t)x; }
-CHI_INL Chili     chi_Prim_intAnd(Chili x, Chili y)               { return chiBigIntAnd(x, y); }
 CHI_INL int32_t   chi_Prim_intCmp(Chili x, Chili y)               { return chiBigIntCmp(x, y); }
-CHI_INL Chili     chi_Prim_intDiv(Chili x, Chili y)               { return chiBigIntDiv(x, y); }
-CHI_INL Chili     chi_Prim_intMod(Chili x, Chili y)               { return chiBigIntMod(x, y); }
-CHI_INL Chili     chi_Prim_intNeg(Chili x)                        { return chiBigIntNeg(x); }
-CHI_INL Chili     chi_Prim_intNot(Chili x)                        { return chiBigIntNot(x); }
-CHI_INL Chili     chi_Prim_intOr(Chili x, Chili y)                { return chiBigIntOr(x, y); }
-CHI_INL Chili     chi_Prim_intQuot(Chili x, Chili y)              { return chiBigIntQuot(x, y); }
-CHI_INL Chili     chi_Prim_intRem(Chili x, Chili y)               { return chiBigIntRem(x, y); }
-CHI_INL Chili     chi_Prim_intShr(Chili x, uint16_t y)            { return chiBigIntShr(x, y); }
-CHI_INL Chili     chi_Prim_intXor(Chili x, Chili y)               { return chiBigIntXor(x, y); }
 CHI_INL bool      chi_Prim_intEq(Chili x, Chili y)                { return chiBigIntEq(x, y); }
 CHI_INL bool      chi_Prim_intLe(Chili x, Chili y)                { return chiBigIntLe(x, y); }
 CHI_INL bool      chi_Prim_intLt(Chili x, Chili y)                { return chiBigIntLt(x, y); }
@@ -219,7 +209,7 @@ CHI_INL uint64_t  chi_Prim_float64ToBits(double x)                { return _chiF
 CHI_INL bool      chi_Prim_arrayCas(Chili c, uint32_t i, Chili o, Chili x)                    { return chiArrayCas(c, i, o, x); }
 CHI_INL void      chi_Prim_arrayCopy(Chili s, uint32_t si, Chili d, uint32_t di, uint32_t n)  { chiArrayCopy(s, si, d, di, n); }
 CHI_INL Chili     chi_Prim_arrayRead(Chili c, uint32_t i)                                     { return chiArrayRead(c, i); }
-CHI_INL uint32_t  chi_Prim_arraySize(Chili c)                                                 { return (uint32_t)chiSize(c); }
+CHI_INL uint32_t  chi_Prim_arraySize(Chili c)                                                 { return (uint32_t)_chiSize(c); }
 CHI_INL void      chi_Prim_arrayWrite(Chili c, uint32_t i, Chili x)                           { chiArrayWrite(c, i, x); }
 CHI_INL int32_t   chi_Prim_bufferCmp(Chili a, uint32_t ai, Chili b, uint32_t bi, uint32_t n)  { return chiBufferCmp(a, ai, b, bi, n); }
 CHI_INL void      chi_Prim_bufferCopy(Chili s, uint32_t si, Chili d, uint32_t di, uint32_t n) { chiBufferCopy(s, si, d, di, n); }
@@ -239,32 +229,43 @@ CHI_INL void      chi_Prim_bufferWriteUInt64(Chili c, uint32_t i, uint64_t x)   
 CHI_INL void      chi_Prim_bufferWriteUInt8(Chili c, uint32_t i, uint8_t x)                   { chiBufferWriteUInt8(c, i, x); }
 CHI_INL uint32_t  chi_Prim_stringCursorBegin(Chili CHI_UNUSED(c))                             { return 0; }
 CHI_INL bool      chi_Prim_stringCursorEq(uint32_t i, uint32_t j)                             { return i == j; }
+CHI_INL bool      chi_Prim_stringCursorNe(uint32_t i, uint32_t j)                             { return i != j; }
+CHI_INL bool      chi_Prim_stringCursorLt(uint32_t i, uint32_t j)                             { return i < j; }
+CHI_INL bool      chi_Prim_stringCursorLe(uint32_t i, uint32_t j)                             { return i <= j; }
 CHI_INL uint32_t  chi_Prim_stringCursorEnd(Chili c)                                           { return chiStringSize(c); }
 CHI_INL ChiChar   chi_Prim_stringCursorGet(Chili c, uint32_t i)                               { return chiStringGet(c, i); }
 CHI_INL uint32_t  chi_Prim_stringCursorNext(Chili c, uint32_t i)                              { return chiStringNext(c, i); }
 CHI_INL uint32_t  chi_Prim_stringCursorPrev(Chili c, uint32_t i)                              { return chiStringPrev(c, i); }
-CHI_INL Chili     chi_Prim_substring(Chili c, uint32_t i, uint32_t j)                         { return chiSubstring(c, i, j); }
 CHI_INL Chili     chi_Prim_stringBuilderBuild(Chili b)                                        { return chiStringBuilderBuild(b); }
 CHI_INL bool      chi_Prim_identical(Chili a, Chili b)                                        { return chiIdentical(a, b); }
 CHI_INL uint32_t  chi_Prim_tag(Chili c)                                                       { return chiTag(c); }
-CHI_INL bool      chi_Prim_boolFalse(void)                                                    { return false; }
-CHI_INL bool      chi_Prim_boolTrue(void)                                                     { return true; }
 
-#define _CHI_PRIM_TRY(r, p) ({ Chili r = (p); if (!chiSuccess(r)) KNOWN_JUMP(_chiHeapOverflow); r; })
-#define CHI_PRIM_TRY(p)     _CHI_PRIM_TRY(CHI_GENSYM, (p))
+#define _CHI_PRIM_TRY2(r, p) ({ Chili r = (p); if (!chiSuccess(r)) KNOWN_JUMP(chiHeapOverflow); r; })
+#define _CHI_PRIM_TRY(p)     _CHI_PRIM_TRY2(CHI_GENSYM, (p))
 
-#define chi_Prim_throw                     THROW
-#define chi_Prim_force                     FORCE
-#define chi_Prim_catch                     CATCH
-#define chi_Prim_par                       PAR
-#define chi_Prim_arrayNew(s, x)            CHI_PRIM_TRY(chiArrayTryNew((s), (x)))
-#define chi_Prim_bufferNew(s)              CHI_PRIM_TRY(chiBufferTryNew((s), 0))
-#define chi_Prim_arrayClone(c, i, s)       CHI_PRIM_TRY(chiArrayTryClone((c), (i), (s)))
-#define chi_Prim_bufferClone(c, i, s)      CHI_PRIM_TRY(chiBufferTryClone((c), (i), (s)))
-#define chi_Prim_stringBuilderNew(n)       CHI_PRIM_TRY(chiStringBuilderTryNew(n))
-#define chi_Prim_stringBuilderChar(c, b)   CHI_PRIM_TRY(chiStringBuilderTryChar((b), (c)))
-#define chi_Prim_stringBuilderString(s, b) CHI_PRIM_TRY(chiStringBuilderTryString((b), (s)))
-#define chi_Prim_intAdd(x, y)              CHI_PRIM_TRY(chiBigIntTryAdd((x), (y)))
-#define chi_Prim_intSub(x, y)              CHI_PRIM_TRY(chiBigIntTrySub((x), (y)))
-#define chi_Prim_intMul(x, y)              CHI_PRIM_TRY(chiBigIntTryMul((x), (y)))
-#define chi_Prim_intShl(x, y)              CHI_PRIM_TRY(chiBigIntTryShl((x), (y)))
+#define _CHI_PRIM_STRINGBUILDER_CHAR(x, b, ch, sb) ({ Chili b = (sb); ChiChar x = (ch); if (CHI_UNLIKELY(!chiStringBuilderEnsure(b, 4))) KNOWN_JUMP(chiHeapOverflow); chiStringBuilderChar(b, x); b; })
+#define _CHI_PRIM_STRINGBUILDER_STRING(x, b, str, sb) ({ Chili b = (sb); ChiStringRef x = (str); if (CHI_UNLIKELY(!chiStringBuilderEnsure(b, x.size))) KNOWN_JUMP(chiHeapOverflow); chiStringBuilderString(b, x); b; })
+
+#define chi_Prim_lazyForce                 FORCE
+#define chi_Prim_arrayNew(s, x)            _CHI_PRIM_TRY(chiArrayNewFlags((s), (x), CHI_NEW_TRY))
+#define chi_Prim_bufferNew(s)              _CHI_PRIM_TRY(chiBufferNewFlags((s), 0, CHI_NEW_TRY))
+#define chi_Prim_arrayClone(c, i, s)       _CHI_PRIM_TRY(chiArrayTryClone((c), (i), (s)))
+#define chi_Prim_bufferClone(c, i, s)      _CHI_PRIM_TRY(chiBufferTryClone((c), (i), (s)))
+#define chi_Prim_stringSlice(c, i, j)      _CHI_PRIM_TRY(chiStringTrySlice((c), (i), (j)))
+#define chi_Prim_stringBuilderNew(n)       _CHI_PRIM_TRY(chiStringBuilderTryNew(n))
+#define chi_Prim_stringBuilderChar(c, b)   _CHI_PRIM_STRINGBUILDER_CHAR(CHI_GENSYM, CHI_GENSYM, (c), (b))
+#define chi_Prim_stringBuilderString(s, b) _CHI_PRIM_STRINGBUILDER_STRING(CHI_GENSYM, CHI_GENSYM, (s), (b))
+#define chi_Prim_intAdd(x, y)              _CHI_PRIM_TRY(chiBigIntTryAdd((x), (y)))
+#define chi_Prim_intAnd(x, y)              _CHI_PRIM_TRY(chiBigIntTryAnd((x), (y)))
+#define chi_Prim_intDiv(x, y)              _CHI_PRIM_TRY(chiBigIntTryDiv((x), (y)))
+#define chi_Prim_intMod(x, y)              _CHI_PRIM_TRY(chiBigIntTryMod((x), (y)))
+#define chi_Prim_intMul(x, y)              _CHI_PRIM_TRY(chiBigIntTryMul((x), (y)))
+#define chi_Prim_intQuo(x, y)              _CHI_PRIM_TRY(chiBigIntTryQuo((x), (y)))
+#define chi_Prim_intRem(x, y)              _CHI_PRIM_TRY(chiBigIntTryRem((x), (y)))
+#define chi_Prim_intShl(x, y)              _CHI_PRIM_TRY(chiBigIntTryShl((x), (y)))
+#define chi_Prim_intShr(x, y)              _CHI_PRIM_TRY(chiBigIntTryShr((x), (y)))
+#define chi_Prim_intSub(x, y)              _CHI_PRIM_TRY(chiBigIntTrySub((x), (y)))
+#define chi_Prim_intOr(x, y)               _CHI_PRIM_TRY(chiBigIntTryOr((x), (y)))
+#define chi_Prim_intXor(x, y)              _CHI_PRIM_TRY(chiBigIntTryXor((x), (y)))
+#define chi_Prim_intNeg(x)                 _CHI_PRIM_TRY(chiBigIntTryNeg(x))
+#define chi_Prim_intNot(x)                 _CHI_PRIM_TRY(chiBigIntTryNot(x))

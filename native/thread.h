@@ -1,36 +1,30 @@
 #pragma once
 
-#include "private.h"
-#include <chili/object/thread.h>
-
-/**
- * Thread states. Must be sorted alphabetically.
- */
-enum {
-    CHI_TS_RUNNING,
-    CHI_TS_TERMINATED,
-    CHI_TS_WAIT_BLACKHOLE,
-    CHI_TS_WAIT_SLEEP,
-    CHI_TS_WAIT_THREAD,
-};
+#include "object.h"
 
 typedef struct ChiProcessor_ ChiProcessor;
 
-CHI_WU Chili chiThreadNewUninitialized(ChiProcessor*);
-void chiThreadScheduler(ChiProcessor*);
-void chiThreadSetNameField(ChiProcessor*, Chili, Chili);
-void chiThreadSetStateField(ChiProcessor*, Chili, Chili);
-CHI_WU Chili chiThreadStack(Chili);
+CHI_INTERN CHI_WU Chili chiThreadNewUninitialized(ChiProcessor*);
+CHI_INTERN void chiThreadSetErrno(ChiProcessor*, int32_t);
+CHI_INTERN void chiThreadSetInterruptible(ChiProcessor*, bool);
+CHI_INTERN CHI_WU Chili chiThreadName(Chili);
+CHI_INTERN CHI_WU bool chiThreadInterruptible(Chili);
+CHI_INTERN CHI_WU uint32_t chiThreadId(Chili);
 
-/// Use chiThreadStack instead, which checks that the stack is activated
+/// Use chiThreadStack/chiThreadStackInactive instead, which checks the activation status
 CHI_INL CHI_WU Chili chiThreadStackUnchecked(Chili c) {
-    return chiAtomicLoad(&chiToThread(c)->stack);
+    return chiFieldRead(&chiToThread(c)->stack);
 }
 
-#define CHI_THREAD_EVENT(begin, proc)                               \
-    ({                                                              \
-        if (chiIdentical((proc)->thread, (proc)->schedulerThread))  \
-            CHI_EVENT0((proc), THREAD_SCHED_##begin);               \
-        else                                                        \
-            CHI_EVENT0((proc), THREAD_RUN_##begin);                 \
-    })
+CHI_INL CHI_WU Chili chiThreadStackInactive(Chili c) {
+    Chili stack = chiThreadStackUnchecked(c);
+    CHI_ASSERT(!chiObjectLocked(chiObject(stack)));
+    return stack;
+}
+
+CHI_INL CHI_WU Chili chiThreadStack(Chili c) {
+    Chili stack = chiThreadStackUnchecked(c);
+    CHI_ASSERT(chiObjectLocked(chiObject(stack)));
+    CHI_ASSERT(!chiObjectShared(chiObject(stack)));
+    return stack;
+}

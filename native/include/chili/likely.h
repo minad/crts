@@ -6,5 +6,5 @@
 #  define CHI_UNLIKELY(x)     __builtin_expect(!!(x), false)
 #endif
 
-CHI_API bool CHI_PRIVATE(chiLikely)(bool, const char*);
-CHI_API bool CHI_PRIVATE(chiUnlikely)(bool, const char*);
+CHI_EXPORT bool CHI_PRIVATE(chiLikely)(bool, const char*);
+CHI_EXPORT bool CHI_PRIVATE(chiUnlikely)(bool, const char*);

@@ -1,115 +1,107 @@
 #pragma once
 
+#include "chunk.h"
+#include "num.h"
 #include "object.h"
+#include "system.h"
 
-#define CHI_FOREACH_HEAP_SEGMENT(s, sl) CHI_LIST_FOREACH(ChiHeapSegment, list, s, sl)
-#define CHI_FOREACH_HEAP_SEGMENT_NODELETE(s, sl) CHI_LIST_FOREACH_NODELETE(ChiHeapSegment, list, s, sl)
+typedef struct ChiProcessor_ ChiProcessor;
+typedef struct ChiHeap_ ChiHeap;
+typedef union ChiHeapPage_ ChiHeapPage;
+typedef struct ChiHeapClass_ ChiHeapClass;
+typedef struct ChiHeapSegmentLink_ ChiHeapSegmentLink;
+struct ChiHeapSegmentLink_ { ChiHeapSegmentLink *prev, *next; };
 
-enum {
-    _CHI_HEAP_CLASSES    = 2,
+#define CHI_HEAP_PAGE_FREE (1U << 31)
+
+/**
+ * Each heap page contains objects of a fixed size.
+ */
+union ChiHeapPage_ {
+    uint32_t objectSize;
+    uint32_t nextIndex;
 };
 
-typedef struct ChiTimeout_ ChiTimeout;
-typedef struct ChiProcessor_ ChiProcessor;
-typedef struct ChiChunk_ ChiChunk;
-typedef struct ChiHeap_ ChiHeap;
-
 /**
- * Zones consist of segments.
+ * The heap consists of multiple segments.
+ * The segments are split in pages.
  * Each segment has one associated ChiChunk.
- * The unused objects are kept in bins for
- * each power of two size.
  */
 typedef struct {
-    ChiChunk*  chunk;
-    ChiWord*   sweep;
-    bool       live;
-    ChiList    list;
-    ChiObject* bin[0];
+    ChiHeapClass*      cls;
+    ChiChunk*          chunk;
+    ChiHeapSegmentLink link;
+    uint32_t           sweepIndex, endIndex;
+    bool               alive;
+    ChiHeapPage        *firstPage, *freePageList;
+    ChiObject          *freeObjectList[];
 } ChiHeapSegment;
 
-/**
- * Zone descriptor containing the configuration
- * of a zone, number of bins, chunk size etc.
- */
-typedef struct {
-    size_t   chunk, max;
-    uint32_t off, bins, sub;
-} ChiHeapDesc;
+#define LIST_LENGTH
+#define LIST_PREFIX chiHeapSegmentList
+#define LIST_ELEM   ChiHeapSegment
+#include "generic/list.h"
 
-/**
- * Heap size class. There are six zones,
- * containing lists of segments (free, full, swept free, swept full, sweep, used).
- */
-typedef struct {
-    ChiHeapClassUsage usage;
-    ChiHeapDesc       desc;
-    union {
-        struct { ChiList free, full, sweptFree, sweptFull, sweep, used; } zone;
-        ChiList izone[6];
-    };
-} ChiHeapClass;
+struct ChiHeapClass_ {
+    CHI_IF(CHI_COUNT_ENABLED, uint64_t allocWords;)
+    size_t             total;
+    ChiHeapSegmentList free, full;
+    size_t             limitInit;
+    uint32_t           limitFull;
+    uint32_t           segmentWords, pageWords, pagesPerSegment, bins;
+    bool               linear;
+};
 
 typedef struct {
-    ChiList*        zone;
+    CHI_IF(CHI_COUNT_ENABLED, uint64_t allocWords;)
     ChiHeapSegment* segment;
-    ChiColor        color;
-    size_t          allocWords;
-} ChiHeapUsedSegment;
+} ChiHeapSegmentHandle;
 
 /**
- * Heap handle used for multiple consecutive
- * allocations. Avoids too many heap locks/unlocks
- * during allocation.
+ * Heap handle used for lockless allocations. Each processor
+ * manages its own heap handle.
  */
 typedef struct {
-    ChiHeap* heap;
-    ChiHeapUsedSegment usedSegment[_CHI_HEAP_CLASSES];
+    ChiHeap*             heap;
+    ChiHeapSegmentHandle small, medium;
+    ChiColor             allocColor;
 } ChiHeapHandle;
+
+typedef struct {
+    CHI_IF(CHI_COUNT_ENABLED, uint64_t allocWords;)
+    ChiChunkList      list;
+    size_t            totalWords;
+    size_t            limitAlloc;
+    size_t            limitInit;
+    uint32_t          limitAllocPercent;
+} ChiHeapLarge;
 
 /**
  * Heap datastructure. The heap is locked by a central mutex.
  * For allocations, a heap handle must be acquired.
- *
- * The heap is organized in size classes.
- * Furthermore there is an additional chunk list
- * for large objects.
  */
 struct ChiHeap_ {
-    ChiHeapClass          cls[_CHI_HEAP_CLASSES]; ///< Heap size classes
-    uint32_t              allocLimit;
-    ChiMutex              mutex;                  ///< Mutex for handle acquisition
-    int32_t               sweep;                  ///< Sweeping
-    struct {
-        ChiList           list;                   ///< List of large objects
-        ChiList           listSwept;              ///< List of swept large objects
-        ChiHeapClassUsage usage;
-    } large;
+    ChiMutex          mutex;
+    ChiHeapClass      small, medium;
+    ChiHeapLarge      large;
 };
 
-typedef enum {
-    CHI_HEAP_NOFAIL,
-    CHI_HEAP_MAYFAIL,
-} ChiHeapFail;
+CHI_INTERN void chiHeapSetup(ChiHeap*, size_t, size_t, size_t, size_t, uint32_t, size_t);
+CHI_INTERN void chiHeapDestroy(ChiHeap*);
+CHI_INTERN void chiHeapUsage(ChiHeap*, ChiHeapUsage*);
+CHI_INTERN void chiHeapSegmentListFree(ChiHeap*, ChiHeapSegmentList*);
+CHI_INTERN void chiHeapChunkListFree(ChiHeap*, ChiChunkList*);
 
-void chiHeapSetup(ChiHeap*, const ChiHeapDesc*, const ChiHeapDesc*, uint32_t);
-void chiHeapDestroy(ChiHeap*);
-CHI_WU Chili chiHeapNewLarge(ChiHeapHandle*, ChiType, size_t, ChiColor, ChiHeapFail);
-CHI_WU Chili chiHeapNewSmall(ChiHeapHandle*, ChiType, size_t, ChiColor);
-void chiHeapHandleRelease(ChiHeapHandle*);
-CHI_WU bool chiHeapHandleReleaseUnlocked(ChiHeapHandle*);
-void chiHeapUsage(ChiHeap*, ChiHeapUsage*);
+CHI_INTERN void chiHeapSweepAcquire(ChiHeap*, ChiChunkList*, ChiHeapSegmentList*);
+CHI_INTERN void chiHeapSweepReleaseSegment(ChiHeap*, ChiHeapSegment*);
+CHI_INTERN void chiHeapSweepReleaseLarge(ChiHeap*, ChiChunkList*, size_t);
+
+CHI_INTERN CHI_WU void* chiHeapHandleNew(ChiHeapHandle*, size_t, ChiNewFlags);
+CHI_INTERN CHI_WU void* chiHeapHandleNewSmall(ChiHeapHandle*, size_t, ChiNewFlags);
+CHI_INTERN void chiHeapHandleSetup(ChiHeapHandle*, ChiHeap*, ChiColor);
+CHI_INTERN void chiHeapHandleDestroy(ChiHeapHandle*);
 
 // heap callouts
-void chiHeapAllocLimitReached(ChiHeap*);
-void chiHeapSweepNotify(ChiHeap*);
-CHI_WU ChiChunk* chiHeapChunkNew(ChiHeap*, size_t, ChiHeapFail);
-void chiHeapChunkFree(ChiHeap*, ChiChunk*);
-
-void chiSweepSlice(ChiHeap*, ChiSweepStats*, ChiTimeout*);
-void chiSweepBegin(ChiHeap*);
-CHI_WU bool chiSweepEnd(ChiHeap*);
-
-CHI_INL void chiHeapHandleInit(ChiHeapHandle* ctx, ChiHeap* heap) {
-    *ctx = (ChiHeapHandle){ .heap = heap };
-}
+CHI_INTERN void chiHeapLimitReached(ChiHeap*);
+CHI_INTERN CHI_WU ChiChunk* chiHeapChunkNew(ChiHeap*, size_t, ChiNewFlags);
+CHI_INTERN void chiHeapChunkFree(ChiHeap*, ChiChunk*);

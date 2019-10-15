@@ -1,19 +1,16 @@
-#include "sink.h"
-#include "error.h"
-#include "num.h"
-#include "runtime.h"
-#include "location.h"
 #include <math.h>
+#include "error.h"
+#include "location.h"
+#include "new.h"
+#include "runtime.h"
+#include "sink.h"
 
 enum { FMTBUFSZ = 128 };
 
-size_t chiLocFmt(ChiSink* sink, const ChiLocInfo* loc, int32_t what) {
+size_t chiLocFmt(ChiSink* sink, const ChiLocInfo* loc, ChiLocFmt what) {
     size_t written = 0;
-    if (what & (CHI_LOCFMT_FN | CHI_LOCFMT_MODFN)) {
-        if ((what & CHI_LOCFMT_MODFN) && loc->module.size)
-            written += chiSinkFmt(sink, "%S.", loc->module);
+    if (what & CHI_LOCFMT_FN)
         written += chiSinkPuts(sink, loc->fn);
-    }
     if ((what & CHI_LOCFMT_INTERP) && loc->interp)
         written += chiSinkPuts(sink, "[i]");
     if ((what & CHI_LOCFMT_FILE) && loc->file.size)
@@ -31,8 +28,10 @@ static void fmtDouble(ChiStringRef* field, char* buf, uint32_t prec, char fmt, d
         *field = CHI_STRINGREF("NaN");
     } else if (__builtin_isinf(x)) {
         *field = CHI_STRINGREF("-Inf");
-        if (x > 0)
+        if (x > 0) {
             ++field->bytes;
+            --field->size;
+        }
     } else if (a < 1e-99 || (a >= 1 && a < 10) || (fmt == 'f' && a < 1e12)) {
         // Precise fix point formatting for small doubles (Locale independent!)
         prec = CHI_MIN(prec, 19);
@@ -68,13 +67,30 @@ static void fmtNanos(ChiStringRef* field, char* buf, uint32_t prec, uint32_t* wi
 }
 
 static uint32_t fmtChili(char* buf, Chili c) {
-    size_t n = chiUnboxed(c) ?
-        chiFmt(buf, FMTBUFSZ, "U%jx", chiToUnboxed(c)) :
-        chiFmt(buf, FMTBUFSZ,
-               "%s[id=%lu,size=%zu,gen=%u]",
-               chiTypeName(chiType(c)), chiAddress(c),
-               chiSize(c), chiGen(c, CHI_MASK(CHI_CURRENT_RUNTIME->option.block.size)));
-    return (uint32_t)n;
+    if (chiUnboxed(c))
+        return (uint32_t)chiFmt(buf, FMTBUFSZ, "U%jx", chiToUnboxed(c));
+    ChiGen gen = chiGen(c);
+    ChiType type = chiType(c);
+    char tag[16] = "";
+    if (type <= CHI_LAST_TAG)
+        chiFmt(tag, sizeof (tag), "tag=%u,", (uint32_t)type);
+    else if (chiFn(type))
+        chiFmt(tag, sizeof (tag), "arity=%u,", chiFnTypeArity(type));
+    if (gen == CHI_GEN_MAJOR) {
+        ChiObject* obj = chiObjectUnchecked(c);
+        return (uint32_t)chiFmt(buf, FMTBUFSZ,
+                                "%s[id=%lu,size=%zu,%s%s,color=%u" CHI_IF(CHI_POISON_ENABLED, ",owner=%u") "%s%s]",
+                                chiTypeName(type), chiAddress(c), chiObjectSize(obj), tag,
+                                chiObjectShared(obj) ? "major-shared" : "major-local",
+                                CHI_UN(Color, chiObjectColor(obj)),
+                                CHI_IF(CHI_POISON_ENABLED, chiObjectOwner(obj) - 1,)
+                                chiObjectDirty(obj) ? ",dirty" : "",
+                                chiObjectLocked(obj) ? ",locked" : "");
+    }
+    return (uint32_t)chiFmt(buf, FMTBUFSZ,
+                            "%s[id=%lu,size=%zu,%sgen=%u]",
+                            chiTypeName(type), chiAddress(c),
+                            chiSizeField(c), tag, gen);
 }
 
 static uint32_t fmtSize(char* buf, size_t size) {
@@ -124,7 +140,7 @@ size_t chiSinkFmtv(ChiSink* sink, const char* fmt, va_list ap) {
             width = va_arg(ap, uint32_t);
             ++p;
         } else {
-            width = chiReadUInt32(&p);
+            CHI_IGNORE_RESULT(chiReadUInt32(&width, &p));
         }
 
         uint32_t prec = 0;
@@ -134,7 +150,7 @@ size_t chiSinkFmtv(ChiSink* sink, const char* fmt, va_list ap) {
                 prec = va_arg(ap, uint32_t);
                 ++p;
             } else {
-                prec = chiReadUInt32(&p);
+                CHI_IGNORE_RESULT(chiReadUInt32(&prec, &p));
             }
         }
 
@@ -150,7 +166,7 @@ size_t chiSinkFmtv(ChiSink* sink, const char* fmt, va_list ap) {
         ChiStringRef field = { .bytes = (uint8_t*)fmtBuf };
         switch (*p) {
         case 'L':
-            written += chiLocFmt(sink, va_arg(ap, const ChiLocInfo*), width ? (int32_t)width : CHI_LOCFMT_ALL);
+            written += chiLocFmt(sink, va_arg(ap, const ChiLocInfo*), width ? (ChiLocFmt)width : CHI_LOCFMT_ALL);
             continue;
         case '%':
             fmtBuf[0] = '%';
@@ -164,8 +180,11 @@ size_t chiSinkFmtv(ChiSink* sink, const char* fmt, va_list ap) {
             field.size = 0;
             break;
         case 'S': // ChiStringRef
-            field = CHI_DEFINED(CHI_STANDALONE_WASM)
-                    ? *va_arg(ap, ChiStringRef*) : va_arg(ap, ChiStringRef);
+#ifdef CHI_STANDALONE_WASM
+            field = *va_arg(ap, ChiStringRef*);
+#else
+            field = va_arg(ap, ChiStringRef);
+#endif
             break;
         case 'b':
             field.size = va_arg(ap, uint32_t);
@@ -212,8 +231,7 @@ size_t chiSinkFmtv(ChiSink* sink, const char* fmt, va_list ap) {
             fmtDouble(&field, fmtBuf, prec, *p, va_arg(ap, double));
             break;
         case 'm': // errno
-            field = CHI_SYSTEM_HAS_ERRNO && chiErrorString(fmtBuf, FMTBUFSZ)
-                ? chiStringRef(fmtBuf) : CHI_STRINGREF("Unknown error");
+            field = CHI_AND(CHI_SYSTEM_HAS_ERRNO, chiErrnoString(fmtBuf, FMTBUFSZ)) ? chiStringRef(fmtBuf) : CHI_STRINGREF("Unknown error");
             break;
         default:
             CHI_BUG("Invalid format specifier");
@@ -264,16 +282,16 @@ size_t chiFmt(char* buf, size_t bufsize, const char* fmt, ...) {
     return ret;
 }
 
-Chili chiFmtString(const char* fmt, ...) {
+Chili chiFmtString(ChiProcessor* proc, const char* fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
-    Chili ret = chiFmtStringv(fmt, ap);
+    Chili ret = chiFmtStringv(proc, fmt, ap);
     va_end(ap);
     return ret;
 }
 
-Chili chiFmtStringv(const char* fmt, va_list ap) {
+Chili chiFmtStringv(ChiProcessor* proc, const char* fmt, va_list ap) {
     CHI_STRING_SINK(sink);
     chiSinkFmtv(sink, fmt, ap);
-    return chiStringNew(chiSinkString(sink));
+    return chiStringNew(proc, chiSinkString(sink));
 }

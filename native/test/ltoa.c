@@ -1,7 +1,7 @@
+#include <stdio.h>
 #include "../num.h"
 #include "../strutil.h"
 #include "test.h"
-#include <stdio.h>
 
 TEST(chiShowUInt) {
     char a[24], b[24];

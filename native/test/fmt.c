@@ -1,12 +1,11 @@
-#include "../sink.h"
-#include "test.h"
-#include "../strutil.h"
 #include <stdio.h>
+#include "../strutil.h"
+#include "test.h"
 
 static ChiSinkMem sink;
 static uint8_t sinkBuf[64];
 
-CHI_CONSTRUCTOR {
+CHI_CONSTRUCTOR(fmtTest) {
     chiSinkMemInit(&sink, sinkBuf, sizeof (sinkBuf));
 }
 
@@ -47,9 +46,9 @@ BENCH(SinkFmtInt, 1000000) {
 
 BENCH(SinkInt, 1000000) {
     sink.used = 0;
-    chiSinkPuti(&sink.base, 123);
+    chiSinkPutu(&sink.base, 123);
     chiSinkPutc(&sink.base, ' ');
-    chiSinkPuti(&sink.base, 123);
+    chiSinkPutu(&sink.base, 123);
 }
 
 BENCH(SinkFmtStr, 1000000) {

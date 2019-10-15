@@ -1,7 +1,6 @@
 #pragma once
 
-#include "event/utils.h"
-#include "bit.h"
+#include "system.h"
 
 #if CHI_DTRACE_ENABLED
 #  include "event/dtrace.h"
@@ -33,49 +32,61 @@
     __builtin_choose_expr(__builtin_types_compatible_p(typeof(ctx), ChiProcessor*), ((ChiProcessor*)(void*)(ctx))->rt, \
     __builtin_choose_expr(__builtin_types_compatible_p(typeof(ctx), ChiWorker*), ((ChiWorker*)(void*)(ctx))->rt, ctx))
 
-#define _CHI_EVENT_FILTER_ENABLED(ctx, type)                            \
-    (CHI_EVENT_ENABLED &&                                               \
-     CHI_UNLIKELY(chiBitGet(_CHI_EVENT_RT(ctx)->option.event->filter, CHI_EVENT_##type)))
+#define _CHI_EVENT_FILTER_ENABLED(ctx, type) \
+    CHI_AND(CHI_EVENT_ENABLED, chiEventFilterEnabled(_CHI_EVENT_RT(ctx)->option.event.filter, CHI_EVENT_##type))
 
-#define CHI_EVENT_P(ctx, type)                                          \
+#define chiEventEnabled(ctx, type)                                          \
     (_CHI_EVENT_FILTER_ENABLED(ctx, type) || _CHI_DTRACE_ENABLED(type) || _CHI_LTTNG_ENABLED(type))
 
-#define CHI_EVENT_STRUCT(ctx, type, event)                              \
+#define chiEventStruct(ctx, type, event)                                \
     ({                                                                  \
-        _CHI_EVENT_CTX_##type* _ctx = (ctx);                            \
-        CHI_FIELD_TYPE(ChiEventData, type) _eventptr = (event);         \
+        typeof(ctx) _ctx = (ctx);                                       \
+        typeof(event) _event = (event);                                 \
         if (_CHI_EVENT_FILTER_ENABLED(_ctx, type))                      \
-            chiEvent(_ctx, CHI_EVENT_##type, (ChiEventData){.type=_eventptr}); \
-        _CHI_DTRACE(type, _ctx, _eventptr);                             \
-        _CHI_LTTNG(type, _ctx, _eventptr);                              \
+            _CHI_EVENT_##type(_ctx, _event);                            \
+        _CHI_DTRACE(type, _ctx, _event);                                \
+        _CHI_LTTNG(type, _ctx, _event);                                 \
     })
 
-#define CHI_EVENT(ctx, type, arg, ...)                                  \
-    CHI_EVENT_STRUCT(ctx, type, &((typeof(*(CHI_FIELD_TYPE(ChiEventData, type))0)){ arg, __VA_ARGS__ }))
+#define chiEvent(ctx, type, arg, ...)                                  \
+    chiEventStruct(ctx, type, &((typeof(*(CHI_FIELD_TYPE(ChiEventPayload, type)*)0)){ arg, __VA_ARGS__ }))
 
-#define CHI_EVENT0(ctx, type)                                           \
+#define chiEvent0(ctx, type)                                            \
     ({                                                                  \
-        _CHI_EVENT_CTX_##type* _ctx = (ctx);                            \
+        typeof(ctx) _ctx = (ctx);                                       \
         if (_CHI_EVENT_FILTER_ENABLED(_ctx, type))                      \
-            chiEvent(_ctx, CHI_EVENT_##type, (ChiEventData){0});        \
+            _CHI_EVENT_##type(_ctx);                                    \
         _CHI_DTRACE(type, _ctx);                                        \
         _CHI_LTTNG(type, _ctx);                                         \
     })
 
-extern const char* const chiEventName[];
+#define CHI_FOREACH_EVENT_FORMAT(FORMAT, SEP)    \
+    FORMAT(NONE,   none)   SEP                   \
+    FORMAT(PRETTY, pretty) SEP                   \
+    FORMAT(JSON,   json)   SEP                   \
+    FORMAT(CSV,    csv)    SEP                   \
+    FORMAT(BIN,    evlog)
+#define _CHI_EVENT_FORMAT(N, n) CHI_EVFMT_##N,
+typedef enum { CHI_FOREACH_EVENT_FORMAT(_CHI_EVENT_FORMAT,) } ChiEventFormat;
+#undef _CHI_EVENT_FORMAT
+
 
 #if CHI_EVENT_ENABLED
-void chiEventSetup(ChiRuntime*);
-void chiEventDestroy(ChiRuntime*);
-void chiEventWorkerStart(ChiWorker*);
-void chiEventWorkerStop(ChiWorker*);
-void chiEvent(void*, ChiEvent, ChiEventData);
-CHI_WU bool chiEventModifyFilter(uint8_t*, ChiStringRef);
+CHI_EXTERN const char* const chiEventName[];
+CHI_INTERN void chiEventSetup(ChiRuntime*);
+CHI_INTERN void chiEventDestroy(ChiRuntime*);
+CHI_INTERN void chiEventWorkerStart(ChiWorker*);
+CHI_INTERN void chiEventWorkerStop(ChiWorker*);
+CHI_INTERN CHI_WU bool chiEventModifyFilter(void*, ChiStringRef);
+
+#if CHI_EVENT_CONVERT_ENABLED
+typedef struct ChiSink_ ChiSink;
+CHI_INTERN void chiEventConvert(const char*, ChiFile, ChiSink*, ChiEventFormat, size_t);
+#endif
 #else
 CHI_INL void chiEventSetup(ChiRuntime* CHI_UNUSED(rt)) {}
 CHI_INL void chiEventDestroy(ChiRuntime* CHI_UNUSED(rt)) {}
 CHI_INL void chiEventWorkerStart(ChiWorker* CHI_UNUSED(worker)) {}
 CHI_INL void chiEventWorkerStop(ChiWorker* CHI_UNUSED(worker)) {}
-CHI_INL void chiEvent(void* CHI_UNUSED(ctx), ChiEvent CHI_UNUSED(e), ChiEventData CHI_UNUSED(d)) {}
-CHI_INL CHI_WU bool chiEventModifyFilter(uint8_t* CHI_UNUSED(f), ChiStringRef CHI_UNUSED(s)) { return true; }
+CHI_INL CHI_WU bool chiEventModifyFilter(void* CHI_UNUSED(f), ChiStringRef CHI_UNUSED(s)) { return true; }
 #endif

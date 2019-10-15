@@ -20,7 +20,9 @@ static void sigInstall(int sig) {
         chiSysErr("sigaction failed");
 }
 
-static void dispatcherRun(void* CHI_UNUSED(arg)) {
+CHI_TASK(dispatcherRun, CHI_UNUSED(arg)) {
+    CHI_ASSERT_ONCE;
+
     sigInstall(SIGINT);
     sigInstall(SIGQUIT);
     sigInstall(SIGUSR1);
@@ -43,7 +45,7 @@ static void dispatcherRun(void* CHI_UNUSED(arg)) {
         sigCount = 0;
         setSigMask(SIG_UNBLOCK, &handledSignals);
         struct timespec ts = nanosToTimespec(chiMicrosZero(timeout) ?
-                        (ChiNanos){1000000000UL} : chiMicrosToNanos(timeout));
+                                             chiNanos(1000000000UL) : chiMicrosToNanos(timeout));
         nanosleep(&ts, 0);
     }
 }

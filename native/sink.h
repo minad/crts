@@ -1,10 +1,11 @@
 #pragma once
 
-#include "rtoption.h"
-#include <chili/object/string.h>
 #include <stdarg.h>
+#include "rtoption.h"
+#include "system.h"
 
 typedef struct ChiSink_ ChiSink;
+typedef struct ChiProcessor_ ChiProcessor;
 
 /**
  * Sink for outputting data.
@@ -12,9 +13,9 @@ typedef struct ChiSink_ ChiSink;
  * sink operations.
  */
 struct ChiSink_ {
-    void (*write)(ChiSink*, const void*, size_t);
+    bool (*write)(ChiSink*, const void*, size_t);
+    bool (*flush)(ChiSink*);
     void (*close)(ChiSink*);
-    void (*flush)(ChiSink*);
 };
 
 typedef struct {
@@ -33,51 +34,45 @@ typedef struct {
     ChiByteVec vec;
 } ChiSinkString;
 
-extern ChiSink *const chiStdout;
-extern ChiSink *const chiStderr;
-extern ChiSink *const chiSinkNull;
-CHI_WU ChiSink* chiStderrColor(ChiSinkColor);
-CHI_WU ChiSink* chiStdoutColor(ChiSinkColor);
+typedef struct {
+    ChiSink  base;
+    ChiSink* sink;
+} _ChiSinkProxy;
 
-ChiSink* chiSinkMemInit(ChiSinkMem*, void*, size_t);
-ChiSink* chiSinkStringInit(ChiSinkString*);
-CHI_WU ChiSink* chiSinkMemNew(void*, size_t);
-CHI_WU ChiSink* chiSinkStringNew(void);
-CHI_WU ChiSink* chiSinkLockNew(ChiSink*, size_t);
-CHI_WU ChiSink* chiSinkBufferNew(ChiSink*, size_t);
-CHI_WU ChiSink* chiSinkFileTryNew(const char*, ChiSinkColor);
-ChiStringRef chiSinkString(ChiSink*);
-const char* chiSinkCString(ChiSink*);
-void chiSinkWarn(ChiSink*, const char*, ...) CHI_FMT(2, 3);
-void chiSinkWarnv(ChiSink*, const char*, va_list);
-size_t chiSinkWriteq(ChiSink*, const uint8_t*, size_t);
-size_t chiSinkWriteh(ChiSink*, const void*, size_t);
-size_t chiSinkFmt(ChiSink*, const char*, ...) CHI_FMT(2, 3);
-size_t chiSinkFmtv(ChiSink*, const char*, va_list);
-size_t chiSinkPuti(ChiSink*, int64_t);
-size_t chiSinkPutu(ChiSink*, uint64_t);
-size_t chiSinkPutx(ChiSink*, uint64_t);
-const char* chiZstdPath(void);
+typedef struct {
+    ChiSink    base;
+    ChiFile    handle;
+} _ChiSinkFile;
 
-CHI_INL CHI_WU const char* chiSinkCompress(void) {
-    return CHI_SINK_ZSTD_ENABLED && chiZstdPath() ? ".zst" : "";
-}
+#define chiStdout (&_chiStdout.base)
+#define chiStderr (&_chiStderr.base)
+#define chiSinkNull (&_chiSinkNull)
 
-CHI_INL void chiSinkFlush(ChiSink* sink) {
-    sink->flush(sink);
-}
+CHI_EXTERN _ChiSinkProxy _chiStdout;
+CHI_EXTERN _ChiSinkFile _chiStderr;
+CHI_EXTERN ChiSink _chiSinkNull;
 
-CHI_INL void chiSinkClose(ChiSink* sink) {
-    sink->close(sink);
-}
-
-CHI_INL size_t chiSinkWrite(ChiSink* sink, const void* buf, size_t size) {
-    sink->write(sink, buf, size);
-    return size;
-}
+CHI_INTERN ChiSink* chiSinkColor(ChiSinkColor);
+CHI_INTERN ChiSink* chiSinkMemInit(ChiSinkMem*, void*, size_t);
+CHI_INTERN ChiSink* chiSinkStringInit(ChiSinkString*);
+CHI_INTERN CHI_WU ChiSink* chiSinkStringNew(void);
+CHI_INTERN CHI_WU ChiSink* chiSinkFileTryNew(const char*, size_t, bool, ChiSinkColor);
+CHI_INTERN ChiStringRef chiSinkString(ChiSink*);
+CHI_INTERN const char* chiSinkCString(ChiSink*);
+CHI_INTERN void chiSinkWarn(ChiSink*, const char*, ...) CHI_FMT(2, 3);
+CHI_INTERN void chiSinkWarnv(ChiSink*, const char*, va_list);
+CHI_INTERN size_t chiSinkWriteq(ChiSink*, const uint8_t*, size_t);
+CHI_INTERN size_t chiSinkWriteh(ChiSink*, const void*, size_t);
+CHI_INTERN size_t chiSinkFmt(ChiSink*, const char*, ...) CHI_FMT(2, 3);
+CHI_INTERN size_t chiSinkFmtv(ChiSink*, const char*, va_list);
+CHI_INTERN size_t chiSinkPutu(ChiSink*, uint64_t);
+CHI_INTERN void chiSinkFlush(ChiSink*);
+CHI_INTERN void chiSinkWrite(ChiSink*, const void*, size_t);
+CHI_INTERN void chiSinkClose(ChiSink*);
 
 CHI_INL size_t chiSinkPuts(ChiSink* sink, ChiStringRef s) {
-    return chiSinkWrite(sink, s.bytes, s.size);
+    chiSinkWrite(sink, s.bytes, s.size);
+    return s.size;
 }
 #define chiSinkPuts(sink, str) chiSinkPuts((sink), chiStringRef(str))
 
@@ -102,7 +97,7 @@ CHI_DEFINE_AUTO(ChiSink*, chiSinkClose)
     CHI_AUTO_SINK(s, chiSinkStringInit(&t))
 #define CHI_STRING_SINK(s) _CHI_STRING_SINK(CHI_GENSYM, s)
 
-size_t chiFmt(char*, size_t, const char*, ...) CHI_FMT(3, 4);
-size_t chiFmtv(char*, size_t, const char*, va_list);
-Chili chiFmtString(const char*, ...) CHI_FMT(1, 2);
-Chili chiFmtStringv(const char*, va_list);
+CHI_INTERN size_t chiFmtv(char*, size_t, const char*, va_list);
+CHI_INTERN size_t chiFmt(char*, size_t, const char*, ...) CHI_FMT(3, 4);
+CHI_INTERN Chili chiFmtStringv(ChiProcessor*, const char*, va_list);
+CHI_INTERN Chili chiFmtString(ChiProcessor*, const char*, ...) CHI_FMT(1, 2);

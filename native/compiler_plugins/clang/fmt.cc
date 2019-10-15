@@ -46,7 +46,7 @@ public:
 class FmtASTAction : public PluginASTAction {
 protected:
     std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance& ci, StringRef) override {
-        return llvm::make_unique<FmtASTConsumer>(ci);
+        return std::make_unique<FmtASTConsumer>(ci);
     }
 
     bool ParseArgs(const CompilerInstance& ci, const std::vector <std::string> &args) override {

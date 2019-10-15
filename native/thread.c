@@ -1,94 +1,85 @@
-#include "thread.h"
-#include "stack.h"
-#include "runtime.h"
-#include "event.h"
 #include "barrier.h"
+#include "event.h"
+#include "new.h"
+#include "stack.h"
+
+typedef enum {
+    TS_ERRNO = 1,
+    TS_INTERRUPTIBLE = 3,
+    TS_NAME = 5,
+    TS_TID = 8,
+} ThreadState;
+
+static void threadSet(Chili thread, ThreadState ts, Chili val) {
+    CHI_ASSERT(chiUnboxed(val));
+    Chili c = chiThreadState(thread);
+    // No chiFieldWrite barrier needed, since only unboxed values are written!
+    if (chiTrue(c))
+        chiAtomicWrite(chiArrayField(chiIdx(c, ts), 0), val);
+}
+
+static Chili threadGet(Chili thread, ThreadState ts, Chili dfl) {
+    Chili c = chiThreadState(thread);
+    return chiTrue(c) ? chiArrayRead(chiIdx(c, ts), 0) : dfl;
+}
 
 Chili chiThreadNewUninitialized(ChiProcessor* proc) {
-    Chili c = chiNew(CHI_THREAD, CHI_SIZEOF_WORDS (ChiThread));
+    Chili c = chiNewInl(proc, CHI_THREAD, CHI_SIZEOF_WORDS (ChiThread), CHI_NEW_SHARED | CHI_NEW_CLEAN);
     ChiThread* t = chiToThread(c);
-    ++proc->rt->threadCount;
-    uint32_t tid = proc->rt->nextTid++ & UINT32_MAX;
-    t->tid = chiFromUnboxed(tid);
-    t->exceptBlock = t->lastErrno = CHI_FALSE;
-    chiAtomicInit(&t->stack, chiStackNew(proc));
-    chiAtomicInit(&t->name, CHI_FALSE);
-    chiAtomicInit(&t->local, CHI_FALSE);
-    chiAtomicInit(&t->state, chiNewEmpty(CHI_TS_RUNNING));
+    chiFieldInit(&t->stack, chiStackNew(proc));
+    chiFieldInit(&t->state, CHI_FALSE);
     return c;
 }
 
-void chiThreadSetStateField(ChiProcessor* proc, Chili thread, Chili state) {
-    chiWriteField(proc, thread, &chiToThread(thread)->state, state);
+Chili chiThreadName(Chili thread) {
+    return threadGet(thread, TS_NAME, CHI_FALSE);
 }
 
-void chiThreadSetNameField(ChiProcessor* proc, Chili thread, Chili name) {
-    ChiThread* t = chiToThread(thread);
-    chiWriteField(proc, thread, &t->name, name);
-    CHI_EVENT(proc, THREAD_NAME,
-              .tid = (uint32_t)chiToUnboxed(t->tid),
-              .name = chiStringRef(&name));
+bool chiThreadInterruptible(Chili thread) {
+    return chiToBool(threadGet(thread, TS_INTERRUPTIBLE, CHI_FALSE));
 }
 
-void chiThreadSetState(Chili thread, Chili state) {
-    chiThreadSetStateField(CHI_CURRENT_PROCESSOR, thread, state);
+void chiThreadSetErrno(ChiProcessor* proc, int32_t e) {
+    threadSet(proc->thread, TS_ERRNO, chiFromInt32(e));
 }
 
-void chiThreadSetName(Chili thread, Chili name) {
-    chiThreadSetNameField(CHI_CURRENT_PROCESSOR, thread, name);
+void chiThreadSetInterruptible(ChiProcessor* proc, bool b) {
+    threadSet(proc->thread, TS_INTERRUPTIBLE, chiFromBool(b));
 }
 
-void chiThreadSetLocal(Chili thread, Chili local) {
-    chiWriteField(CHI_CURRENT_PROCESSOR, thread, &chiToThread(thread)->local, local);
+uint32_t chiThreadId(Chili thread) {
+    Chili c = chiThreadState(thread);
+    return chiTrue(c) ? chiToUInt32(chiIdx(c, TS_TID)) : 0;
 }
 
-Chili chiThreadCurrent(void) {
-    return CHI_CURRENT_PROCESSOR->thread;
-}
-
-Chili chiThreadNew(Chili run) {
+void chiThreadInitState(Chili c) {
     ChiProcessor* proc = CHI_CURRENT_PROCESSOR;
+    ChiField* field = &chiToThread(proc->thread)->state;
+    CHI_ASSERT(!chiTrue(chiFieldRead(field)));
+    chiPromoteShared(proc, &c);
+    chiAtomicWrite(field, c);
+}
+
+Chili chiThreadNew(Chili state, Chili run) {
+    ChiProcessor* proc = CHI_CURRENT_PROCESSOR;
+
+    // Promote closure to shared space. This isolates the thread!
+    ChiPromoteState ps;
+    chiPromoteSharedBegin(&ps, proc);
+    chiPromoteSharedObject(&ps, &state);
+    chiPromoteSharedObject(&ps, &run);
+    chiPromoteSharedEnd(&ps);
+
     Chili c = chiThreadNewUninitialized(proc);
-    ChiStack* s = chiToStack(chiThreadStackUnchecked(c));
+    chiFieldInit(&chiToThread(c)->state, state);
+    Chili stack = chiThreadStackInactive(c);
+    ChiStack* s = chiToStack(stack);
     s->sp[0] = chiFromCont(&chiApp1);
     s->sp[1] = run;
     s->sp[2] = CHI_FALSE;
     s->sp[3] = chiFromUnboxed(5);
-    s->sp[4] = chiFromCont(&chiEnterCont);
+    s->sp[4] = chiFromCont(&chiRestoreCont);
     s->sp += 5;
-    CHI_EVENT(proc, THREAD_NEW,
-              .tid = (uint32_t)chiToUnboxed(chiToThread(c)->tid),
-              .count = proc->rt->threadCount);
+    chiEvent(proc, THREAD_NEW, .newTid = chiThreadId(c), .newStack = chiAddress(stack));
     return c;
-}
-
-void chiThreadScheduler(ChiProcessor* proc) {
-    CHI_ASSERT(chiTrue(proc->rt->entryPoint.scheduler));
-    CHI_ASSERT(!chiIdentical(proc->thread, proc->schedulerThread));
-
-    if (chiTag(chiThreadState(proc->thread)) == CHI_TS_TERMINATED) {
-        CHI_ASSERT(proc->rt->threadCount > 0);
-        --proc->rt->threadCount;
-        CHI_EVENT(proc, THREAD_TERMINATED, .count = proc->rt->threadCount);
-    }
-
-    ChiStack* s = chiToStack(chiThreadStackUnchecked(proc->schedulerThread));
-    CHI_ASSERT(s->sp == s->base);
-    s->sp[0] = chiFromCont(&chiApp2);
-    s->sp[1] = proc->rt->entryPoint.scheduler;
-    s->sp[2] = proc->thread;
-    s->sp[3] = proc->rt->switchThreadClos;
-    s->sp[4] = chiFromUnboxed(6);
-    s->sp[5] = chiFromCont(&chiEnterCont);
-    s->sp += 6;
-
-    proc->thread = proc->schedulerThread;
-
-    CHI_ASSERT(chiTag(chiThreadState(proc->thread)) == CHI_TS_RUNNING);
-}
-
-Chili chiThreadStack(Chili c) {
-    Chili stack = chiThreadStackUnchecked(c);
-    CHI_ASSERT(chiObjectActive(chiObject(stack)));
-    return stack;
 }

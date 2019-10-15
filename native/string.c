@@ -1,8 +1,23 @@
-#include <chili/object/string.h>
 #include "barrier.h"
-#include "runtime.h"
 #include "event.h"
+#include "new.h"
 #include "strutil.h"
+
+enum { TRAILING_SIZE_BYTE = 1 };
+
+// Store bytesize in trailing byte like Ocaml does it.
+CHI_INL void setTrailSize(uint8_t* bytes, uint32_t size) {
+    CHI_ASSERT(size != 0);
+    uint8_t pad = (uint8_t)(CHI_WORDSIZE - 1 - (size & (CHI_WORDSIZE - 1)));
+    bytes[size + pad] = pad;
+    for (uint32_t i = 0; i < CHI_WORDSIZE - 1; ++i) {
+        if (pad) {
+            --pad;
+            bytes[size + i] = 0;
+        }
+    }
+    CHI_ASSERT(chiStringTrailSize(bytes, CHI_BYTES_TO_WORDS(size + TRAILING_SIZE_BYTE)) == size);
+}
 
 bool chiUtf8Valid(const uint8_t* p, uint32_t n) {
     /*
@@ -31,57 +46,55 @@ bool chiUtf8Valid(const uint8_t* p, uint32_t n) {
     return !state;
 }
 
-static Chili newStringFromBytes(const uint8_t* bytes, uint32_t size) {
-    CHI_ASSERT(size);
-    Chili c = chiStringNewFlags(size, CHI_NEW_UNINITIALIZED);
-    memcpy(chiRawPayload(c), bytes, size);
-    return c;
-}
-
-Chili chiCharToString(ChiChar c) {
-    ChiWord w = 0;
-    uint8_t* s = (uint8_t*)&w;
-    s[0] = chiUtf8Encode(chiOrd(c), s + 1);
-    return CHI_STRING_SMALLOPT ? chiFromUnboxed(w) : newStringFromBytes(s + 1, s[0]);
-}
-
-enum { TRAILING_SIZE_BYTE = 1 };
-
-Chili chiStringNewFlags(uint32_t size, uint32_t flags) {
-    CHI_ASSERT(size);
-    Chili c = chiNewFlags(CHI_STRING, CHI_BYTES_TO_WORDS(size + TRAILING_SIZE_BYTE), flags);
+static Chili newStringUninitialized(ChiProcessor* proc, uint32_t size, ChiNewFlags flags) {
+    Chili c = chiNewInl(proc, CHI_STRING, CHI_BYTES_TO_WORDS(size + TRAILING_SIZE_BYTE), flags);
     if (chiSuccess(c)) {
-        uint8_t* bytes = (uint8_t*)chiRawPayload(c);
-        if (!(flags & CHI_NEW_UNINITIALIZED))
-            memset(bytes, 0, size);
-        chiSetByteSize(bytes, size);
+        setTrailSize(chiToString(c)->bytes, size);
         CHI_ASSERT(chiStringSize(c) == size);
     }
     return c;
 }
 
-Chili chiStringTryNewPin(uint32_t size) {
-    return chiStringNewFlags(size, CHI_NEW_TRY | CHI_NEW_PIN);
+static Chili newStringFromBytes(ChiProcessor* proc, const uint8_t* bytes, uint32_t size, ChiNewFlags flags) {
+    CHI_ASSERT(size);
+    Chili c = newStringUninitialized(proc, size, flags);
+    if (chiSuccess(c))
+        memcpy(chiToString(c)->bytes, bytes, size);
+    return c;
 }
 
-Chili chiSubstring(Chili a, uint32_t i, uint32_t j) {
+Chili chiStringNewFlags(uint32_t size, ChiNewFlags flags) {
+    if (!size)
+        return CHI_FALSE;
+    Chili c = newStringUninitialized(CHI_CURRENT_PROCESSOR, size, flags);
+    if (chiSuccess(c) && !(flags & CHI_NEW_UNINITIALIZED))
+        memset(chiToString(c)->bytes, 0, size);
+    return c;
+}
+
+Chili chiStringTrySlice(Chili a, uint32_t i, uint32_t j) {
     ChiStringRef s = chiStringRef(&a);
     CHI_ASSERT(i <= s.size);
     CHI_ASSERT(j <= s.size);
     CHI_ASSERT(j >= i);
-    return chiStringFromBytes(s.bytes + i, j - i);
+    return newStringFromBytes(CHI_CURRENT_PROCESSOR, s.bytes + i, j - i, CHI_NEW_TRY);
 }
 
-Chili chiStringFromBytes(const uint8_t* buf, uint32_t size) {
-    CHI_ASSERT(chiUtf8Valid(buf, size));
-    return chiFitsSmallString(size) ? chiFromSmallString(buf, size) : newStringFromBytes(buf, size);
+Chili _chiStringNew(ChiProcessor* proc, ChiStringRef r) {
+    CHI_ASSERT(chiUtf8Valid(r.bytes, r.size));
+    return chiFitsSmallString(r.size) ? chiFromSmallString(r.bytes, r.size)
+        : newStringFromBytes(proc, r.bytes, r.size, CHI_NEW_DEFAULT);
+}
+
+Chili chiStringFromRef(ChiStringRef r) {
+    return _chiStringNew(CHI_CURRENT_PROCESSOR, r);
 }
 
 Chili chiStaticString(const ChiStaticBytes* s) {
     CHI_ASSERT(s->size);
     CHI_ASSERT(!chiFitsSmallString(s->size));
     CHI_ASSERT(chiUtf8Valid(s->bytes, s->size));
-    return newStringFromBytes(s->bytes, s->size);
+    return newStringFromBytes(CHI_CURRENT_PROCESSOR, s->bytes, s->size, CHI_NEW_DEFAULT);
 }
 
 bool chiStringRefEq(ChiStringRef a, ChiStringRef b) {
@@ -105,84 +118,104 @@ int32_t chiStringCmp(Chili a, Chili b) {
 
 Chili chiStringBuilderTryNew(uint32_t cap) {
     cap = CHI_MAX(cap, 32);
-    Chili str = chiNewFlags(CHI_STRING, CHI_BYTES_TO_WORDS(cap + TRAILING_SIZE_BYTE), CHI_NEW_TRY);
+    Chili str = chiNewFlags(CHI_PRESTRING, CHI_BYTES_TO_WORDS(cap + TRAILING_SIZE_BYTE), CHI_NEW_TRY);
     if (!chiSuccess(str))
         return CHI_FAIL;
     Chili b = chiNew(CHI_STRINGBUILDER, CHI_SIZEOF_WORDS(ChiStringBuilder));
-    chiAtomicInit(&chiToStringBuilder(b)->string, str);
+    chiFieldInit(&chiToStringBuilder(b)->buf, str);
     chiToStringBuilder(b)->size = CHI_FALSE;
+    chiToStringBuilder(b)->cap = chiFromUInt32(cap);
     return b;
 }
 
-static Chili builderOverflow(void) {
-    CHI_EVENT0(CHI_CURRENT_PROCESSOR, STRBUILDER_OVERFLOW);
-    return CHI_FAIL;
+static bool builderOverflow(ChiProcessor* proc) {
+    chiEvent0(proc, STRBUILDER_OVERFLOW);
+    return false;
 }
 
-static Chili builderAppendBytes(Chili b, const uint8_t* bytes, uint32_t n) {
+bool chiStringBuilderTryGrow(Chili b, uint32_t n) {
+    ChiProcessor* proc = CHI_CURRENT_PROCESSOR;
     ChiStringBuilder* sb = chiToStringBuilder(b);
 
-    Chili str = chiAtomicLoad(&sb->string);
-    uint32_t requestedCap, size = chiToUInt32(sb->size);
+    uint64_t cap = chiToUInt32(sb->cap);
+    while ((uint64_t)chiToUInt32(sb->size) + n > cap)
+        cap *= 2;
 
-    // requested capacity too large
-    if (CHI_UNLIKELY(__builtin_add_overflow(size, n, &requestedCap)))
-        return builderOverflow();
+    // new capacity too large
+    if (CHI_UNLIKELY(cap >= UINT32_MAX))
+        return builderOverflow(proc);
 
-    size_t cap = CHI_WORDSIZE * chiSize(str) - TRAILING_SIZE_BYTE;
-    if (requestedCap > cap) {
-        while (cap < requestedCap) {
-            // new capacity too large
-            if (CHI_UNLIKELY(__builtin_mul_overflow(cap, 2, &cap)))
-                return builderOverflow();
-        }
+    // Allocate new string, return fail in case of failure
+    Chili newBuf = chiNewInl(proc, CHI_PRESTRING,
+                                CHI_BYTES_TO_WORDS((uint32_t)cap + TRAILING_SIZE_BYTE), CHI_NEW_TRY);
+    if (!chiSuccess(newBuf))
+        return builderOverflow(proc);
 
-        // Allocate new string, return fail in case of failure
-        Chili newStr = chiNewFlags(CHI_STRING, CHI_BYTES_TO_WORDS(cap + TRAILING_SIZE_BYTE), CHI_NEW_TRY);
-        if (!chiSuccess(newStr))
-            return CHI_FAIL;
+    memcpy(chiToPreString(newBuf)->bytes,
+           chiToPreString(chiFieldRead(&sb->buf))->bytes,
+           chiToUInt32(sb->size));
+    chiFieldWrite(proc, b, &sb->buf, newBuf);
+    sb->cap = chiFromUInt32((uint32_t)cap);
 
-        memcpy(chiRawPayload(newStr), chiRawPayload(str), size);
-        chiWriteField(CHI_CURRENT_PROCESSOR, b, &sb->string, newStr);
-        str = newStr;
-    }
-
-    memcpy((uint8_t*)chiRawPayload(str) + size, bytes, n);
-    sb->size = chiFromUInt32(size + n);
-
-    return b;
-}
-
-Chili chiStringBuilderTryChar(Chili b, ChiChar c) {
-    uint8_t buf[6];
-    return builderAppendBytes(b, buf, chiUtf8Encode(chiOrd(c), buf));
-}
-
-Chili chiStringBuilderTryString(Chili b, Chili s) {
-    ChiStringRef r = chiStringRef(&s);
-    return builderAppendBytes(b, r.bytes, r.size);
+    return true;
 }
 
 Chili chiStringBuilderBuild(Chili b) {
     ChiStringBuilder* sb = chiToStringBuilder(b);
-    Chili str = chiAtomicLoad(&sb->string);
+
+    Chili buf = chiFieldRead(&sb->buf);
+    if (CHI_POISON_ENABLED)
+        chiFieldWrite(CHI_CURRENT_PROCESSOR, b, &sb->buf, CHI_FALSE);
+
     uint32_t size = chiToUInt32(sb->size);
-    uint8_t* bytes = (uint8_t*)chiRawPayload(str);
+    uint8_t* bytes = chiToPreString(buf)->bytes;
 
     // Unboxed small strings
     if (chiFitsSmallString(size))
         return chiFromSmallString(bytes, size);
 
-    size_t allocW = chiSize(str), sizeW = CHI_BYTES_TO_WORDS(size + TRAILING_SIZE_BYTE);
-    if (sizeW < allocW) {
-        // Copy small unpinned strings to ensure tight packing on the major heap
-        // after the string object gets promoted.
-        if (allocW <= CHI_MAX_UNPINNED)
-            return chiStringFromBytes(bytes, size);
-        chiObjectShrink(chiObject(str), allocW, sizeW);
+    size_t allocW = chiSize(buf), sizeW = CHI_BYTES_TO_WORDS(size + TRAILING_SIZE_BYTE);
+    ChiGen gen = chiGen(buf);
+    Chili str;
+    if (gen == CHI_GEN_MAJOR) {
+        if (sizeW < allocW)
+            chiObjectSetSize(chiObject(buf), sizeW);
+        str = chiWrapLarge(bytes, sizeW, CHI_STRING);
+    } else {
+        str = chiWrap(bytes, sizeW, CHI_STRING, gen);
     }
 
-    chiSetByteSize(bytes, size);
+    setTrailSize(bytes, size);
     CHI_ASSERT(chiStringSize(str) == size);
     return str;
+}
+
+/**
+ * Strings need special pinning treatment due to the unboxed small
+ * string optimization. Chili strings are always zero terminated.
+ * However it must still be ensured that the string does not contain inner zero bytes.
+ */
+Chili chiStringPin(Chili c) {
+    if (!chiTrue(c) || (!chiUnboxed(c) && chiGen(c) == CHI_GEN_MAJOR))
+        return c;
+
+    ChiProcessor* proc = CHI_CURRENT_PROCESSOR;
+
+    if (CHI_STRING_UNBOXING && chiUnboxed63(c)) {
+        const uint8_t* s = (const uint8_t*)&c;
+        uint32_t size = s[CHI_SMALL_STRING_MAX];
+        CHI_ASSERT(size <= CHI_SMALL_STRING_MAX);
+        Chili d = newStringUninitialized(proc, size, CHI_NEW_SHARED | CHI_NEW_CLEAN);
+        uint8_t* bytes = (uint8_t*)chiRawPayload(d);
+        for (uint32_t i = 0; i < CHI_SMALL_STRING_MAX; ++i) {
+            if (size) {
+                --size;
+                bytes[i] = s[i];
+            }
+        }
+        return d;
+    }
+
+    chiPromoteLocal(proc, &c);
+    return c;
 }

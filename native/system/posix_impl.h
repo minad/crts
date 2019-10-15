@@ -1,12 +1,9 @@
-#include <fcntl.h>
 #include <signal.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
-#include <sys/stat.h>
 #include <time.h>
 #include "../strutil.h"
 #include "interrupt.h"
-#include "tasklocal.h"
 
 #if defined(__FreeBSD__) || defined(__OpenBSD__)
 #  include <pthread_np.h>
@@ -26,12 +23,6 @@
 #  define _CHI_MADV_NOHUGE 0
 #endif
 
-#ifdef MAP_NORESERVE
-#  define _CHI_MAP_NORESERVE MAP_NORESERVE
-#else
-#  define _CHI_MAP_NORESERVE 0
-#endif
-
 #if defined(CLOCK_MONOTONIC_COARSE)
 #  define _CHI_CLOCK_REAL_FAST CLOCK_MONOTONIC_COARSE
 #elif defined(CLOCK_MONOTONIC_FAST)
@@ -40,8 +31,7 @@
 #  define _CHI_CLOCK_REAL_FAST CLOCK_MONOTONIC
 #endif
 
-static pthread_key_t taskLocalKey;
-static ChiTask       dispatcherTask;
+static ChiTask dispatcherTask;
 
 static struct timespec nanosToTimespec(ChiNanos ns) {
     return (struct timespec) { .tv_sec = (long)(CHI_UN(Nanos, ns) / 1000000000UL),
@@ -49,29 +39,46 @@ static struct timespec nanosToTimespec(ChiNanos ns) {
 }
 
 static ChiNanos timespecToNanos(struct timespec tv) {
-    return (ChiNanos){(uint64_t)tv.tv_sec * 1000000000 + (uint64_t)tv.tv_nsec};
+    return chiNanos((uint64_t)tv.tv_sec * 1000000000 + (uint64_t)tv.tv_nsec);
 }
 
 static ChiNanos timevalToNanos(struct timeval tv) {
-    return (ChiNanos){(uint64_t)tv.tv_sec * 1000000000 + (uint64_t)tv.tv_usec * 1000};
+    return chiNanos((uint64_t)tv.tv_sec * 1000000000 + (uint64_t)tv.tv_usec * 1000);
 }
 
 static ChiSig convertPosixSig(int sig) {
     switch (sig) {
-    case SIGQUIT: return CHI_SIG_DUMPHEAP;
-    case SIGUSR1: return CHI_SIG_DUMPSTACK;
-    case SIGINT:  return CHI_SIG_INTERRUPT;
+    case SIGQUIT: return CHI_SIG_DUMPSTACK;
+    case SIGINT:  return CHI_SIG_USERINTERRUPT;
     default:      CHI_BUG("Wrong signal");
     }
 }
 
 static void dispatchPosixSig(int sig) {
-    if (sig == SIGQUIT || sig == SIGUSR1 || sig == SIGINT)
+    if (sig == SIGQUIT || sig == SIGINT)
         dispatchSig(convertPosixSig(sig));
 }
 
 static void setSigMask(int how, sigset_t* set) {
     _CHI_PTHREAD_CHECK(pthread_sigmask(how, set, 0));
+}
+
+static void blockSignals(void) {
+    sigset_t block;
+    sigfillset(&block);
+    sigdelset(&block, SIGABRT);
+    sigdelset(&block, SIGBUS);
+    sigdelset(&block, SIGFPE);
+    sigdelset(&block, SIGILL);
+    sigdelset(&block, SIGSEGV);
+    sigdelset(&block, SIGSYS);
+    sigdelset(&block, SIGTRAP);
+    sigdelset(&block, SIGTSTP);
+    sigdelset(&block, SIGTERM);
+    sigdelset(&block, SIGHUP);
+    sigdelset(&block, SIGPROF);
+    sigdelset(&block, SIGPIPE);
+    setSigMask(SIG_SETMASK, &block);
 }
 
 static long cachedSysconf(int c, long* n) {
@@ -92,31 +99,16 @@ static long cachedSysconf(int c, long* n) {
 #endif
 
 void chiSystemSetup(void) {
-    _CHI_PTHREAD_CHECK(pthread_key_create(&taskLocalKey, destroyTaskLocal));
-
-    interruptSetup();
-
-    sigset_t block;
-    sigfillset(&block);
-    sigdelset(&block, SIGABRT);
-    sigdelset(&block, SIGBUS);
-    sigdelset(&block, SIGFPE);
-    sigdelset(&block, SIGILL);
-    sigdelset(&block, SIGSEGV);
-    sigdelset(&block, SIGSYS);
-    sigdelset(&block, SIGTRAP);
-    sigdelset(&block, SIGTSTP);
-    sigdelset(&block, SIGTERM);
-    sigdelset(&block, SIGHUP);
-    sigdelset(&block, SIGPROF);
-    sigdelset(&block, SIGPIPE);
-    setSigMask(SIG_SETMASK, &block);
+    CHI_ASSERT_ONCE;
+    blockSignals();
 
     struct sigaction sa = { .sa_handler = SIG_IGN };
     if (sigaction(SIGPIPE, &sa, 0))
         chiSysErr("sigaction");
 
-    dispatcherTask = chiTaskCreate(dispatcherRun, 0);
+    dispatcherTask = chiTaskTryCreate(dispatcherRun, 0);
+    if (chiTaskNull(dispatcherTask))
+        chiSysErr("chiTaskTryCreate");
 }
 
 static ChiNanos getClock(clockid_t clock) {
@@ -151,70 +143,18 @@ ChiNanos chiCondTimedWait(ChiCond* c, ChiMutex* m, ChiNanos ns) {
     return chiNanosDelta(getClock(CLOCK_REALTIME), begin);
 }
 
-typedef struct {
-    ChiTaskRun run;
-    void* arg;
-} TaskArg;
-
-static void* taskRun(void* arg) {
-    TaskArg ta = *(TaskArg*)arg;
-    chiFree(arg);
-    ta.run(ta.arg);
-    return 0;
-}
-
 ChiTask chiTaskTryCreate(ChiTaskRun run, void* arg) {
-    TaskArg* ta = chiAllocObj(TaskArg);
-    ta->run = run;
-    ta->arg = arg;
     ChiTask t;
-    int ret = pthread_create(CHI_UNP(Task, &t), 0, taskRun, ta);
+    int ret = pthread_create(CHI_UNP(Task, &t), 0, run, arg);
     if (ret) {
-        chiFree(ta);
         errno = ret;
-        CHI_CLEAR(&t);
+        CHI_ZERO_STRUCT(&t);
     }
     return t;
 }
 
-ChiTask chiTaskCreate(ChiTaskRun run, void* arg) {
-    ChiTask t = chiTaskTryCreate(run, arg);
-    if (chiTaskNull(t))
-        chiSysErr("pthread_create");
-    return t;
-}
-
-ChiTask chiTaskCurrent(void) {
-    return (ChiTask){ pthread_self() };
-}
-
-_Noreturn void chiTaskExit(void) {
-    pthread_exit(0);
-}
-
-void chiTaskYield(void) {
-    sched_yield();
-}
-
-void chiTaskJoin(ChiTask t) {
-    _CHI_PTHREAD_CHECK(pthread_join(CHI_UN(Task, t), 0));
-}
-
 void chiTaskCancel(ChiTask t) {
     pthread_kill(CHI_UN(Task, t), SIGPIPE);
-}
-
-void chiTaskClose(ChiTask CHI_UNUSED(t)) {
-}
-
-bool chiTaskEqual(ChiTask a, ChiTask b) {
-    return pthread_equal(CHI_UN(Task, a), CHI_UN(Task, b));
-}
-
-bool chiTaskNull(ChiTask a) {
-    ChiTask b;
-    CHI_CLEAR(&b);
-    return chiTaskEqual(a, b);
 }
 
 void chiTaskName(const char* name) {
@@ -223,34 +163,91 @@ void chiTaskName(const char* name) {
         pthread_setname_np(pthread_self(), name);
 }
 
-void* chiTaskLocal(size_t size, ChiDestructor destructor) {
-    TaskLocal* oldLocal = (TaskLocal*)pthread_getspecific(taskLocalKey);
-    TaskLocal* newLocal = (TaskLocal*)chiAlloc(sizeof (TaskLocal) + size);
-    newLocal->destructor = destructor;
-    newLocal->next = oldLocal;
-    _CHI_PTHREAD_CHECK(pthread_setspecific(taskLocalKey, newLocal));
-    return newLocal->data;
-}
-
-static void madivse_err(void* p, size_t s, int flags) {
+static void madvise_err(void* p, size_t s, int flags) {
     if (flags && madvise(p, s, flags))
         chiSysErr("madvise");
 }
 
-void* chiVirtAlloc(void* ptr, size_t size, int32_t flags) {
+bool chiVirtReserve(ChiVirtMem* mem, void* ptr, size_t size) {
+    CHI_ASSERT(ptr);
+    CHI_ASSERT(size);
+
+    /* Use a temporary file for the memory mapping.
+     * In contrast to an anonymous mapping, this allows
+     * to reserve the complete heap without overcommiting.
+     * Note that the file will never be written to,
+     * since the mapping is PROT_NONE.
+     */
+    char path[] = "/tmp/chili-heap.XXXXXX";
+    int fd = mkstemp(path);
+    if (fd < 0)
+        return false;
+    unlink(path);
+
+    void* res = mmap(ptr, size,
+                     PROT_NONE,
+                     MAP_PRIVATE,
+                     fd, 0);
+
+    // Check that we got the right address
+    if (res != ptr) {
+        if (res != MAP_FAILED)
+            chiErr("Could not reserve memory %p - %p", ptr, (uint8_t*)ptr + size);
+        close(fd);
+        return false;
+    }
+
+    mem->_ptr = ptr;
+    mem->_size = size;
+    mem->_fd = fd;
+    return true;
+}
+
+bool chiVirtCommit(ChiVirtMem* mem, void* ptr, size_t size, bool huge) {
+    CHI_ASSERT(ptr);
+    CHI_ASSERT(size);
+    CHI_ASSERT((uint8_t*)mem->_ptr <= (uint8_t*)ptr);
+    CHI_ASSERT((uint8_t*)ptr + size <= (uint8_t*)mem->_ptr + mem->_size);
+    CHI_NOWARN_UNUSED(mem);
+
+    // Replace exiting reserved mapping with an anonymous mapping
+    if (mmap(ptr, size,
+             PROT_READ | PROT_WRITE,
+             MAP_PRIVATE |
+             MAP_FIXED |
+             MAP_ANONYMOUS,
+             -1, 0) == MAP_FAILED)
+        return false;
+
+    madvise_err(ptr, size, huge ? _CHI_MADV_HUGE : _CHI_MADV_NOHUGE);
+    return true;
+}
+
+void chiVirtDecommit(ChiVirtMem* mem, void* ptr, size_t size) {
+    CHI_ASSERT(ptr);
+    CHI_ASSERT(size);
+    CHI_ASSERT((uint8_t*)mem->_ptr <= (uint8_t*)ptr);
+    CHI_ASSERT((uint8_t*)ptr + size <= (uint8_t*)mem->_ptr + mem->_size);
+
+    // Replace exiting mapping by protected heap reservation mapping
+    if (mmap(ptr, size,
+             PROT_NONE,
+             MAP_PRIVATE |
+             MAP_FIXED,
+             mem->_fd,
+             (off_t)((uint8_t*)ptr - (uint8_t*)mem->_ptr)) == MAP_FAILED)
+        chiSysErr("mmap");
+}
+
+void* chiVirtAlloc(void* ptr, size_t size, bool huge) {
     ptr = mmap(ptr, size,
                PROT_READ | PROT_WRITE,
                MAP_ANONYMOUS |
-               MAP_PRIVATE |
-               (ptr ? MAP_FIXED : 0) |
-               ((flags & CHI_MEMMAP_NORESERVE) ? _CHI_MAP_NORESERVE : 0),
+               MAP_PRIVATE,
                -1, 0);
     if (ptr == MAP_FAILED)
         return 0;
-    if (flags & CHI_MEMMAP_HUGE)
-        madivse_err(ptr, size, _CHI_MADV_HUGE);
-    else if (flags & CHI_MEMMAP_NOHUGE)
-        madivse_err(ptr, size, _CHI_MADV_NOHUGE);
+    madvise_err(ptr, size, huge ? _CHI_MADV_HUGE : _CHI_MADV_NOHUGE);
     return ptr;
 }
 
@@ -279,22 +276,19 @@ bool chiFilePerm(const char* file, int32_t perm) {
     return !access(file, flags);
 }
 
-void chiActivity(ChiActivity* a) {
+void chiSystemStats(ChiSystemStats* a) {
     struct rusage r;
-    getrusage(RUSAGE_SELF, &r);
+    if (getrusage(RUSAGE_SELF, &r) < 0)
+        chiSysErr("getrusage");
     a->cpuTimeUser = timevalToNanos(r.ru_utime);
     a->cpuTimeSystem = timevalToNanos(r.ru_stime);
-    a->residentSize = (size_t)r.ru_maxrss * 1024;
+    a->residentSize = (size_t)r.ru_maxrss * 1024; // TODO: Current RSS!
     a->pageFault = (uint64_t)r.ru_minflt;
-    a->pageSwap = (uint64_t)r.ru_majflt;
     a->contextSwitch = (uint64_t)r.ru_nivcsw;
-    a->diskRead = (uint64_t)r.ru_inblock;
-    a->diskWrite = (uint64_t)r.ru_oublock;
 }
 
-#if CHI_PAGER_ENABLED
 void chiPager(void) {
-    if (!chiTerminal(STDOUT_FILENO))
+    if (!CHI_PAGER_ENABLED || !chiFileTerminal(CHI_FILE_STDOUT))
         return;
     CHI_AUTO_FREE(pagerEnv, chiGetEnv("CHI_PAGER"));
     const char* pager = pagerEnv ? pagerEnv : CHI_PAGER;
@@ -307,66 +301,25 @@ void chiPager(void) {
     if (pid < 0)
         chiSysErr("fork");
     if (pid) { // parent
-        dup2(fd[0], 0);
+        if (dup2(fd[0], STDIN_FILENO) < 0)
+            chiSysErr("dup2");
         close(fd[0]);
         close(fd[1]);
         execl("/bin/sh", "sh", "-c", pager, NULL);
         chiSysErr("execl");
     }
     // child
-    dup2(fd[1], 1);
+    if (dup2(fd[1], STDOUT_FILENO) < 0)
+        chiSysErr("dup2");
     close(fd[0]);
     close(fd[1]);
 }
-#endif
 
-uint32_t chiPid(void) {
-    return (uint32_t)getpid();
-}
-
-bool chiTerminal(int fd) {
+bool chiFileTerminal(ChiFile file) {
     const char* term = CHI_ENV_ENABLED ? getenv("TERM") : 0;
     if (term && streq(term, "dumb"))
         return false;
-    // Cache result such that it works if the pager is used
-    static int termOut = 0;
-    if (!termOut)
-        termOut = isatty(STDOUT_FILENO) ? 1 : -1;
-    return fd == STDOUT_FILENO ? termOut > 0 : !!isatty(fd);
-}
-
-FILE* chiFileOpenWrite(const char* file) {
-    FILE* fp = fopen(file, "ae");
-    if (!fp)
-        return 0;
-    off_t off = ftello(fp);
-    if (off) {
-        int err = off > 0 ? EEXIST : errno;
-        fclose(fp);
-        errno = err;
-        return 0;
-    }
-    return fp;
-}
-
-FILE* chiFileOpenRead(const char* name) {
-    return fopen(name, "re");
-}
-
-FILE* chiOpenFd(int fd) {
-    fd = dup(fd);
-    return fd >= 0 ? fdopen(fd, "we") : 0;
-}
-
-FILE* chiOpenPipe(const char* cmd) {
-    FILE* fp = popen(cmd, "we");
-#ifdef F_SETPIPE_SZ
-    if (fp && fcntl(fileno(fp), F_SETPIPE_SZ, CHI_MiB(1)) < 0) {
-        pclose(fp);
-        fp = 0;
-    }
-#endif
-    return fp;
+    return !!isatty(CHI_UN(File, file));
 }
 
 #if CHI_ENV_ENABLED
@@ -378,7 +331,7 @@ char* chiGetEnv(const char* var) {
 
 int __xpg_strerror_r(int, char*, size_t);
 
-bool chiErrorString(char* buf, size_t bufsiz) {
+bool chiErrnoString(char* buf, size_t bufsiz) {
 #ifdef __GLIBC__
     return !__xpg_strerror_r(errno, buf, bufsiz);
 #else

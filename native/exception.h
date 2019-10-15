@@ -14,11 +14,8 @@ typedef enum {
 
 typedef struct ChiRuntime_ ChiRuntime;
 
-CHI_WU Chili chiAsyncException(ChiAsyncException, Chili);
-CHI_WU Chili chiRuntimeException(Chili, Chili);
+CHI_INTERN CHI_WU Chili chiAsyncException(ChiProcessor*, Chili*, ChiAsyncException);
+CHI_INTERN CHI_WU Chili chiRuntimeException(ChiProcessor*, Chili*, Chili);
 
-#define CHI_THROW_RUNTIME_EX(proc, msg)                                 \
-    THROW(chiRuntimeException((msg), chiStackGetTrace((proc), SP)))
-
-#define CHI_THROW_ASYNC_EX(proc, type)                                  \
-    THROW(chiAsyncException((type), chiStackGetTrace((proc), SP)))
+#define CHI_THROW_RUNTIME_EX(proc, msg) ({ A(0) = chiRuntimeException((proc), SP, (msg)); KNOWN_JUMP(chiExceptionThrow); })
+#define CHI_THROW_ASYNC_EX(proc, type) ({ A(0) = chiAsyncException((proc), SP, (type)); KNOWN_JUMP(chiExceptionThrow); })

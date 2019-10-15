@@ -1,12 +1,12 @@
 #pragma once
 
-#include "runtime.h"
-#include "stats.h"
-#include "profiler.h"
-#include <chili/object.h>
+#include "native/event.h"
+#include "native/profiler.h"
+#include "native/runtime.h"
 
 typedef struct CbyDyn_ CbyDyn;
 typedef struct ChiSink_ ChiSink;
+typedef struct CbyInterpState_ CbyInterpState;
 typedef uint8_t CbyCode;
 typedef void (*CbyRewrite)(CbyCode*, const CbyCode*);
 typedef struct CbyInterpreter_ CbyInterpreter;
@@ -52,22 +52,17 @@ typedef struct {
 } CbyModuleLoader;
 
 /**
- * Module object loaded from bytecode
- */
-typedef struct {
-    Chili name, init, exports, imports;
-} CbyModule;
-
-/**
  * Interpreter specific options
  */
+CHI_WARN_OFF(c++-compat)
 typedef struct {
-    ChiProfOption  prof[CBY_BACKEND_PROF_ENABLED];
-    bool repl;
+    CHI_IF(CBY_BACKEND_PROF_ENABLED, ChiProfOption prof;)
+    CHI_IF(CHI_EVENT_CONVERT_ENABLED, ChiEventFormat evconv;)
     CHI_IF(CBY_DISASM_ENABLED, bool disasm;)
     CHI_IF(CBY_LSMOD_ENABLED, bool lsmod;)
     CHI_IF(CBY_BACKEND_DUMP_ENABLED, bool dumpFile;)
 } CbyOption;
+CHI_WARN_ON
 
 /**
  * Main interpreter datastructure, which
@@ -77,7 +72,7 @@ struct CbyInterpreter_ {
     ChiRuntime            rt;
     CbyModuleLoader       ml;
     struct {
-        void*             state;
+        CbyInterpState*   state;
         ChiMutex          mutex;
         uint32_t          id;
         const CbyBackend* impl;
@@ -85,14 +80,19 @@ struct CbyInterpreter_ {
     CbyOption             option;
 };
 
-typedef struct ChiLocInfo_ ChiLocInfo;
+#define CBY_OBJECT(NAME, Name, ...) _CHI_OBJECT(CBY##_##NAME, Cby##Name, chiToCby##Name, ##__VA_ARGS__)
 
-#define CBY_OBJECT(NAME, Name, ...) _CHI_OBJECT(CBY##_##NAME, Cby##Name, Cby##Name, ##__VA_ARGS__)
+/**
+ * Module object (byteocode/native)
+ */
+typedef struct CHI_PACKED CHI_WORD_ALIGNED {
+    Chili name, init, exports, imports;
+} CbyModule;
 
 // We keep the handle to the shared object
 // however finalizers and module unloading is not supported right now
-CBY_OBJECT(NATIVE_MODULE, NativeModule, Chili name, init, exports, imports, handle)
-CBY_OBJECT(INTERP_MODULE, InterpModule, Chili name, init, exports, imports, code, ffi[])
+CBY_OBJECT(NATIVE_MODULE, NativeModule, CbyModule base; Chili handle)
+CBY_OBJECT(INTERP_MODULE, InterpModule, CbyModule base; Chili code, ffi[])
 
 #define _CBY_FFI_BACKEND_none    0
 #define _CBY_FFI_BACKEND_libffi  1
@@ -106,21 +106,24 @@ CBY_OBJECT(FFI, FFI, void *fn; CbyDyn *handle; ffi_cif cif; ffi_type* atype[])
 CBY_OBJECT(FFI, FFI, void *fn; CbyDyn *handle)
 #endif
 
-CHI_WU int32_t cbyModuleExport(Chili, const char*);
-CHI_WU Chili cbyLoadByName(CbyModuleLoader*, ChiStringRef);
-CHI_WU Chili cbyLoadByNameOrFile(CbyModuleLoader*, const char*);
-CHI_WU Chili cbyLoadFromFile(CbyModuleLoader*, const char*);
-CHI_WU Chili cbyLoadFromStdin(CbyModuleLoader*, uint32_t);
-void cbyAddPath(CbyModuleLoader*, ChiStringRef);
-void cbyListModules(CbyModuleLoader*, ChiSink*);
-void cbyModuleLoaderDestroy(CbyModuleLoader*);
-void cbyReadLocation(const CbyCode*, const CbyCode*, ChiLocInfo*);
-void cbyReadFnLocation(Chili, ChiLocInfo*);
-CHI_WU bool cbyDisasm(ChiSink*, const CbyCode*, const CbyCode*);
-CHI_WU const CbyCode* cbyDisasmInsn(ChiSink*, const CbyCode*, const CbyCode*, const CbyCode*, const CbyCode*);
+CHI_INTERN CHI_WU bool cbyLibrary(const char*);
+CHI_INTERN CHI_WU int32_t cbyModuleExport(Chili, const char*);
+CHI_INTERN CHI_WU Chili cbyModuleLoadByName(ChiProcessor*, ChiStringRef);
+CHI_INTERN CHI_WU Chili cbyModuleLoadByNameOrFile(ChiProcessor*, const char*);
+CHI_INTERN void cbyAddPath(CbyModuleLoader*, ChiStringRef);
+CHI_INTERN void cbyModuleListing(CbyModuleLoader*, ChiSink*);
+CHI_INTERN void cbyModuleLoaderDestroy(CbyModuleLoader*);
+CHI_INTERN void cbyReadLocation(const CbyCode*, ChiLocInfo*);
+CHI_INTERN void cbyReadFnLocation(Chili, ChiLocInfo*);
+CHI_INTERN CHI_WU bool cbyDisasm(ChiSink*, const CbyCode*, const CbyCode*);
+CHI_INTERN CHI_WU const CbyCode* cbyDisasmInsn(ChiSink*, const CbyCode*, const CbyCode*, const CbyCode*, const CbyCode*);
 void cbyDirectDispatchInit(const char*, void**, void**, void*);
 void cbyDirectDispatchRewrite(void**, CbyCode*, const CbyCode*);
-CHI_WU bool cbyLibrary(const char*);
+
+CHI_EXTERN_CONT_DECL(cbyFFIError)
+CHI_EXPORT_CONT_DECL(cbyModuleInit)
+CHI_EXPORT void cbyModuleUnload(Chili);
+CHI_EXPORT CHI_WU Chili cbyModuleParse(Chili, Chili);
 
 CHI_INL CHI_WU CbyInterpreter* cbyInterpreter(ChiProcessor* proc) {
     return CHI_OUTER(CbyInterpreter, rt, proc->rt);
@@ -144,7 +147,7 @@ CHI_INL CbyCode* cbyInterpModuleCode(Chili c) {
 }
 
 CHI_INL CbyFn* chiToCbyFn(Chili c) {
-    CHI_ASSERT(chiFn(chiType(c)) || chiType(c) == CHI_THUNKFN);
+    CHI_ASSERT(chiFnOrThunk(chiType(c)));
     return (CbyFn*)chiRawPayload(c);
 }
 
@@ -160,5 +163,4 @@ CHI_INL CHI_WU const CbyCode* chiToIP(Chili c) {
     return (const CbyCode*)chiToPtr(c);
 }
 
-extern const char* const cbyOpName[];
-extern const char* const cbyFFIType[];
+CHI_EXTERN const char* const cbyOpName[];

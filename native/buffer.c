@@ -1,28 +1,27 @@
-#include "private.h"
-#include <chili/object/buffer.h>
+#include "new.h"
 
-Chili chiBufferNewFlags(uint32_t size, uint8_t val, uint32_t flags) {
-    CHI_ASSERT(size);
-    Chili c = chiNewFlags(CHI_BUFFER, CHI_BYTES_TO_WORDS(size + 1), flags);
-    if (chiSuccess(c)) {
-        uint8_t* bytes = chiBufferBytes(c);
-        if (!(flags & CHI_NEW_UNINITIALIZED))
-            memset(bytes, val, size);
-        chiSetByteSize(bytes, size);
-        CHI_ASSERT(chiBufferSize(c) == size);
-    }
+Chili chiBufferNewUninitialized(ChiProcessor* proc, uint32_t size, ChiNewFlags flags) {
+    if (!size)
+        return chiNewEmpty(CHI_BUFFER0);
+    uint32_t delta = size % CHI_WORDSIZE == 0 ? 0 : CHI_WORDSIZE - size % CHI_WORDSIZE;
+    Chili c = chiNewInl(proc, (ChiType)(CHI_BUFFER0 + delta), CHI_BYTES_TO_WORDS(size),
+                        flags | CHI_NEW_SHARED | CHI_NEW_CLEAN);
+    CHI_ASSERT(!chiSuccess(c) || chiBufferSize(c) == size);
     return c;
 }
 
-Chili chiBufferTryNew(uint32_t size, uint8_t val) {
-    return chiBufferNewFlags(size, val, CHI_NEW_TRY);
-}
-
-Chili chiBufferTryNewPin(uint32_t size, uint8_t val) {
-    return chiBufferNewFlags(size, val, CHI_NEW_TRY | CHI_NEW_PIN);
+Chili chiBufferNewFlags(uint32_t size, uint8_t val, ChiNewFlags flags) {
+    if (!size)
+        return chiNewEmpty(CHI_BUFFER0);
+    Chili c = chiBufferNewUninitialized(CHI_CURRENT_PROCESSOR, size, flags);
+    if (chiSuccess(c) && !(flags & CHI_NEW_UNINITIALIZED))
+        memset(chiBufferBytes(c), val, size);
+    return c;
 }
 
 Chili chiBufferTryClone(Chili src, uint32_t start, uint32_t size) {
+    if (!size)
+        return chiNewEmpty(CHI_BUFFER0);
     Chili c = chiBufferNewFlags(size, 0, CHI_NEW_UNINITIALIZED | CHI_NEW_TRY);
     if (chiSuccess(c))
         memcpy(chiBufferBytes(c), chiBufferBytes(src) + start, size);

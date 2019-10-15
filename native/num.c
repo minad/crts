@@ -17,8 +17,8 @@ static const char digits[200] = {
     '9','0','9','1','9','2','9','3','9','4','9','5','9','6','9','7','9','8','9','9'
 };
 
-const uint64_t chiPow10[] = { 1e0,1e1,1e2,1e3,1e4,1e5,1e6,1e7,1e8,1e9,1e10,1e11,1e12,1e13,1e14,1e15,1e16,1e17,1e18,1e19 };
-const char chiHexDigit[] = "0123456789abcdef";
+CHI_INTERN const uint64_t chiPow10[] = { 1e0,1e1,1e2,1e3,1e4,1e5,1e6,1e7,1e8,1e9,1e10,1e11,1e12,1e13,1e14,1e15,1e16,1e17,1e18,1e19 };
+CHI_INTERN const char chiHexDigits[] = {'0','1','2','3','4','5','6','7','8','9','a','b','c','d','e','f'};
 
 static uint32_t countDigits10(uint64_t n) {
     if (n == 0)
@@ -47,10 +47,10 @@ char* chiShowUInt(char* p, uint64_t n) {
         memcpy(p -= 2, digits + a, 2);
     }
     if (n < 10) {
-        *--p = (char)('0' + n);
+        p[-1] = (char)('0' + n);
     } else {
         n *= 2;
-        memcpy(p -= 2, digits + n, 2);
+        memcpy(p - 2, digits + n, 2);
     }
     return end;
 }
@@ -68,13 +68,13 @@ char* chiShowHexUInt(char* p, uint64_t n) {
     char *end = p;
     *end = 0;
     while (n >= 256) {
-        *--p = chiHexDigit[n & 15];
-        *--p = chiHexDigit[(n / 16) & 15];
+        *--p = chiHexDigits[n & 15];
+        *--p = chiHexDigits[(n / 16) & 15];
         n /= 256;
     }
-    *--p = chiHexDigit[n & 15];
+    *--p = chiHexDigits[n & 15];
     if (n >= 16)
-        *--p = chiHexDigit[(n / 16) & 15];
+        *--p = chiHexDigits[(n / 16) & 15];
     return end;
 }
 
@@ -89,15 +89,21 @@ uint64_t chiPow(uint64_t a, uint32_t b) {
     return p;
 }
 
-// We manually unpack the double to get a sane conversion to integers
-int64_t chiFloat64ToInt64(double x) {
-    if (!__builtin_isfinite(x))
-        return 0;
-    const uint64_t bits = chiFloat64ToBits(x);
-    const int exp = ((int)(bits >> 52) & 0x7FF) - 1023 - 52;
-    const int64_t frac = (int64_t)(bits & (-1ULL >> 12)) | (1LL << 52);
-    const int64_t sign = bits >> 63 ? -1 : 1;
-    if (exp < -63 || exp > 63)
-        return 0;
-    return sign * (exp < 0 ? frac >> -exp : frac << exp);
-}
+// Non locale dependent version of strtoull.
+// Also doesn't use errno.
+#define _CHI_READ_UINT(n)                                               \
+    bool chiReadUInt##n(uint##n##_t* x, const char** end) {             \
+        const char* s = *end;                                           \
+        *x = 0;                                                         \
+        while (chiDigit(*s)) {                                          \
+            if (__builtin_mul_overflow(*x, 10, x) ||                    \
+                __builtin_add_overflow(*x, (uint##n##_t)(*s++ - '0'), x)) \
+                return false;                                           \
+        }                                                               \
+        if (*end == s)                                                  \
+            return false;                                               \
+        *end = s;                                                       \
+        return true;                                                    \
+    }
+_CHI_READ_UINT(64)
+_CHI_READ_UINT(32)

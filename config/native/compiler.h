@@ -10,10 +10,9 @@
 #endif
 
 /**
- * Minimum block limit in wods, equals
- * CHI_BLOCK_MINSIZE - (6 + CHI_BLOCK_MINSIZE / 32)
+ * Minimum block limit in words
  */
-#define CHI_BLOCK_MINLIMIT         490
+#define CHI_BLOCK_MINLIMIT         497
 
 /**
  * Maximum size in words of a unpinned object
@@ -21,6 +20,14 @@
  * This value must fit in the size field of Chili.
  */
 #define CHI_MAX_UNPINNED           62
+
+/**
+ * Maximum number of arguments of a continuation.
+ * Continuations with more arguments are split into
+ * curried functions as of now. An alternative
+ * would be to put the additional arguments on the stack.
+ */
+#define CHI_AMAX                   16
 
 /**
  * Size of the context stored in

@@ -1,7 +1,5 @@
-#include <chili/object/string.h>
-#include "utf16.h"
 #include "mem.h"
-#include "private.h"
+#include "utf16.h"
 
 size_t chiUtf8Size(const uint16_t* w) {
     size_t len = 0;

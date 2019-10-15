@@ -1,11 +1,10 @@
 #pragma once
 
-#include <chili/object/string.h>
-#include <stdio.h>
+#include "native/system.h"
 
 typedef struct {
     char*    name;
-    uint32_t size, start;
+    uint32_t compressedSize, uncompressedSize, start;
 } ZipFile;
 
 typedef struct {
@@ -14,18 +13,18 @@ typedef struct {
 } ZipFileHash;
 
 typedef struct {
-    FILE*       fp;
-    ZipFileHash fileHash;
+    ZipFileHash hash;
+    ChiFile     handle;
 } Zip;
 
 #define ZIP_FOREACH_RESULT(RESULT)                              \
     RESULT(OK, "ok")                                            \
         RESULT(ERROR_OPEN,        "open failed")                \
         RESULT(ERROR_READ,        "read failed")                \
-        RESULT(ERROR_SEEK,        "seek failed")                \
-        RESULT(ERROR_INFLATE,     "inflate failed")             \
         RESULT(ERROR_NAME,        "invalid name")               \
         RESULT(ERROR_SIZE,        "file too large")             \
+        RESULT(ERROR_OFFSET,      "invalid offset")             \
+        RESULT(ERROR_INFLATE,     "inflate failed")             \
         RESULT(ERROR_COMPRESSION, "invalid compression method") \
         RESULT(ERROR_SIGNATURE,   "invalid signature")          \
         RESULT(ERROR_DUPLICATE,   "duplicate file")             \
@@ -35,9 +34,9 @@ typedef enum { ZIP_FOREACH_RESULT(_ZIP_RESULT) } ZipResult;
 #undef _ZIP_RESULT
 
 extern const char* const zipResultName[];
-CHI_WU Zip* zipOpen(const char*, ZipResult*);
-void zipClose(Zip*);
-CHI_WU ZipFile* zipFind(Zip*, ChiStringRef);
-CHI_WU ZipResult zipRead(Zip*, ZipFile*, void*);
+CHI_INTERN CHI_WU Zip* zipOpen(const char*, ZipResult*);
+CHI_INTERN void zipClose(Zip*);
+CHI_INTERN CHI_WU ZipFile* zipFind(Zip*, ChiStringRef);
+CHI_INTERN CHI_WU ZipResult zipRead(Zip*, ZipFile*, void*);
 
 CHI_DEFINE_AUTO(Zip*, zipClose)

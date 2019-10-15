@@ -13,12 +13,13 @@ static void dispatcherNotify(void) {
     }
 }
 
-static void dispatcherRun(void* CHI_UNUSED(arg)) {
+CHI_TASK(dispatcherRun, CHI_UNUSED(arg)) {
+    CHI_ASSERT_ONCE;
+
     sigset_t handledSignals;
     sigemptyset(&handledSignals);
     sigaddset(&handledSignals, SIGINT);
     sigaddset(&handledSignals, SIGQUIT);
-    sigaddset(&handledSignals, SIGUSR1);
 
     int sigfd = signalfd(-1, &handledSignals, SFD_NONBLOCK | SFD_CLOEXEC);
     if (sigfd < 0)

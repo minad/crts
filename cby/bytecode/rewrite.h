@@ -99,12 +99,12 @@ case OP_xintn: {
 break;
 case OP_xint8: {
     const uint8_t res = FETCH8;
-    const uint8_t val = FETCH8;
+    const int8_t val = (int8_t)FETCH8;
 }
 break;
 case OP_xint64: {
     const uint16_t res = FETCH16;
-    const uint64_t val = FETCH64;
+    const int64_t val = (int64_t)FETCH64;
 }
 break;
 case OP_movc2: {
@@ -268,7 +268,7 @@ case OP_fn4: {
     int32_t _fnref = (int32_t)FETCH32; const CbyCode* fnref = IP + _fnref;
 }
 break;
-case OP_data: {
+case OP_con: {
     const uint16_t res = FETCH16;
     const uint16_t tag = FETCH16;
     const uint16_t nargs = FETCH16;
@@ -277,30 +277,30 @@ case OP_data: {
     }
 }
 break;
-case OP_data0: {
+case OP_con0: {
     const uint8_t res = FETCH8;
     const uint8_t tag = FETCH8;
 }
 break;
-case OP_datal0: {
+case OP_conl0: {
     const uint16_t res = FETCH16;
     const uint16_t tag = FETCH16;
 }
 break;
-case OP_data1: {
+case OP_con1: {
     const uint8_t res = FETCH8;
     const uint8_t tag = FETCH8;
     const uint8_t a0 = FETCH8;
 }
 break;
-case OP_data2: {
+case OP_con2: {
     const uint8_t res = FETCH8;
     const uint8_t tag = FETCH8;
     const uint8_t a0 = FETCH8;
     const uint8_t a1 = FETCH8;
 }
 break;
-case OP_data3: {
+case OP_con3: {
     const uint8_t res = FETCH8;
     const uint8_t tag = FETCH8;
     const uint8_t a0 = FETCH8;
@@ -308,7 +308,7 @@ case OP_data3: {
     const uint8_t a2 = FETCH8;
 }
 break;
-case OP_data4: {
+case OP_con4: {
     const uint8_t res = FETCH8;
     const uint8_t tag = FETCH8;
     const uint8_t a0 = FETCH8;
@@ -466,14 +466,7 @@ case OP_app5: {
     const uint8_t a4 = FETCH8;
 }
 break;
-case OP_clos: {
-    const uint8_t nargs = FETCH8;
-    const uint16_t limit = FETCH16;
-    const uint16_t size = FETCH16;
-}
-break;
-case OP_clos0: {
-    const uint8_t nargs = FETCH8;
+case OP_limit: {
     const uint8_t lim = FETCH8;
 }
 break;
@@ -495,6 +488,12 @@ break;
 case OP_clos4: {
     const uint8_t nargs = FETCH8;
     const uint8_t lim = FETCH8;
+}
+break;
+case OP_clos: {
+    const uint8_t nargs = FETCH8;
+    const uint16_t lim = FETCH16;
+    const uint16_t size = FETCH16;
 }
 break;
 case OP_enter: {
@@ -540,6 +539,29 @@ case OP_ffiprot: {
     for (uint32_t args_count = 0; args_count < nargs; ++args_count) {
         const uint16_t a = FETCH16;
     }
+}
+break;
+case OP_thread: {
+    const uint16_t res = FETCH16;
+}
+break;
+case OP_proc: {
+    const uint16_t res = FETCH16;
+}
+break;
+case OP_plocal: {
+    const uint16_t res = FETCH16;
+}
+break;
+case OP_tstate: {
+    const uint16_t res = FETCH16;
+    const uint16_t thr = FETCH16;
+}
+break;
+case OP_evfilt: {
+    const uint16_t res = FETCH16;
+    const uint16_t f = FETCH16;
+    const uint16_t n = FETCH16;
 }
 break;
 case OP_bitsToFloat32: {
@@ -1063,7 +1085,7 @@ case OP_int32Or: {
     const uint8_t a1 = FETCH8;
 }
 break;
-case OP_int32Quot: {
+case OP_int32Quo: {
     const uint8_t res = FETCH8;
     const uint8_t a0 = FETCH8;
     const uint8_t a1 = FETCH8;
@@ -1209,7 +1231,7 @@ case OP_int64Or: {
     const uint8_t a1 = FETCH8;
 }
 break;
-case OP_int64Quot: {
+case OP_int64Quo: {
     const uint8_t res = FETCH8;
     const uint8_t a0 = FETCH8;
     const uint8_t a1 = FETCH8;
@@ -1356,7 +1378,7 @@ case OP_intOr: {
     const uint8_t a1 = FETCH8;
 }
 break;
-case OP_intQuot: {
+case OP_intQuo: {
     const uint8_t res = FETCH8;
     const uint8_t a0 = FETCH8;
     const uint8_t a1 = FETCH8;
@@ -1444,6 +1466,24 @@ case OP_stringCursorEq: {
     const uint8_t a1 = FETCH8;
 }
 break;
+case OP_stringCursorLe: {
+    const uint8_t res = FETCH8;
+    const uint8_t a0 = FETCH8;
+    const uint8_t a1 = FETCH8;
+}
+break;
+case OP_stringCursorLt: {
+    const uint8_t res = FETCH8;
+    const uint8_t a0 = FETCH8;
+    const uint8_t a1 = FETCH8;
+}
+break;
+case OP_stringCursorNe: {
+    const uint8_t res = FETCH8;
+    const uint8_t a0 = FETCH8;
+    const uint8_t a1 = FETCH8;
+}
+break;
 case OP_stringCursorGet: {
     const uint8_t res = FETCH8;
     const uint8_t a0 = FETCH8;
@@ -1491,7 +1531,7 @@ case OP_stringNull: {
     const uint8_t a0 = FETCH8;
 }
 break;
-case OP_substring: {
+case OP_stringSlice: {
     const uint8_t res = FETCH8;
     const uint8_t a0 = FETCH8;
     const uint8_t a1 = FETCH8;
@@ -1771,20 +1811,8 @@ case OP_uint8ToUInt32: {
     const uint8_t a0 = FETCH8;
 }
 break;
-case OP_force: {
+case OP_lazyForce: {
     const uint8_t a0 = FETCH8;
-}
-break;
-case OP_par: {
-    const uint8_t a0 = FETCH8;
-}
-break;
-case OP_boolFalse: {
-    const uint8_t res = FETCH8;
-}
-break;
-case OP_boolTrue: {
-    const uint8_t res = FETCH8;
 }
 break;
 case OP_stringBuilderNew: {
@@ -1976,15 +2004,6 @@ case OP_bufferWriteUInt8: {
     const uint8_t a0 = FETCH8;
     const uint8_t a1 = FETCH8;
     const uint8_t a2 = FETCH8;
-}
-break;
-case OP_catch: {
-    const uint8_t a0 = FETCH8;
-    const uint8_t a1 = FETCH8;
-}
-break;
-case OP_throw: {
-    const uint8_t a0 = FETCH8;
 }
 break;
 case OP_identical: {

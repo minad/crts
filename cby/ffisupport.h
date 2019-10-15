@@ -1,12 +1,12 @@
 #pragma once
 
-#include "ffidefs.h"
-#include "error.h"
+#include "native/error.h"
+#include "native/ffidefs.h"
 
 #define _FFI_TYPE_ENUM(name, libffi, dcarg, dccall, type) FFI_##name,
 typedef enum { CHI_FOREACH_FFI_TYPE(,_FFI_TYPE_ENUM) } FFIType;
 
-typedef struct { int _void; } ChiVoid;
+CHI_UNITTYPE(ChiVoid)
 CHI_INL ChiVoid chiToVoid(Chili CHI_UNUSED(c))     { CHI_BUG("Invalid FFI argument type 'void'"); }
 CHI_INL Chili   chiFromVoid(ChiVoid CHI_UNUSED(v)) { return CHI_FALSE; }
 CHI_INL Chili   chiToChili(Chili c)                { return c; }
@@ -96,7 +96,7 @@ CHI_INL void ffiDestroy(FFIData* d) {
     dcFree(d->dc);
 }
 #else
-typedef int FFIData[0];
+CHI_UNITTYPE(FFIData)
 CHI_INL void ffiArgs(FFIData* CHI_UNUSED(d), const CbyCode* CHI_UNUSED(ffiref), const Chili* CHI_UNUSED(REG), uint32_t CHI_UNUSED(nargs), const CbyCode* CHI_UNUSED(IP)) {}
 CHI_INL Chili ffiCall(FFIData* CHI_UNUSED(d), const CbyCode* CHI_UNUSED(ffiref), CbyFFI* CHI_UNUSED(ffi)) { return CHI_FALSE; }
 CHI_INL void ffiSetup(FFIData* CHI_UNUSED(d)) {}

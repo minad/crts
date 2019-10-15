@@ -39,19 +39,19 @@ TEST(x_memcmp) {
 }
 
 BENCH(memset, 10000) {
-    memset(buf + (benchRun % 16), 123, benchRun % (sizeof (buf) - 16));
+    memset(buf + (BENCHRUN % 16), 123, BENCHRUN % (sizeof (buf) - 16));
 }
 
 BENCH(x_memset, 10000) {
-    x_memset(buf + (benchRun % 16), 123, benchRun % (sizeof (buf) - 16));
+    x_memset(buf + (BENCHRUN % 16), 123, BENCHRUN % (sizeof (buf) - 16));
 }
 
 BENCH(memcmp, 10000) {
-    volatile int x = memcmp(buf + (benchRun % 16), buf2 + (benchRun % 16), benchRun % (sizeof (buf) - 16));
+    __volatile__ int x = memcmp(buf + (BENCHRUN % 16), buf2 + (BENCHRUN % 16), BENCHRUN % (sizeof (buf) - 16));
     (void)x;
 }
 
 BENCH(x_memcmp, 10000) {
-    volatile int x = x_memcmp(buf + (benchRun % 16), buf2 + (benchRun % 16), benchRun % (sizeof (buf) - 16));
+    __volatile__ int x = x_memcmp(buf + (BENCHRUN % 16), buf2 + (BENCHRUN % 16), BENCHRUN % (sizeof (buf) - 16));
     (void)x;
 }

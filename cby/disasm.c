@@ -1,12 +1,13 @@
-#include "cby.h"
-#include "color.h"
-#include "sink.h"
-#include "location.h"
-#include "ffisupport.h"
-#include "bytecode/opcodes.h"
-
-#define CHECK_RANGE(n) ({ if (IP < codeStart || IP + (n) > codeEnd) goto OUT_OF_RANGE; })
 #include "bytecode/decode.h"
+#include "bytecode/opcodes.h"
+#include "cby.h"
+#include "ffisupport.h"
+#include "native/color.h"
+#include "native/location.h"
+#include "native/sink.h"
+
+#undef CHECK_RANGE
+#define CHECK_RANGE(n) ({ if (IP < codeStart || IP + (n) > codeEnd) goto OUT_OF_RANGE; })
 
 #define REG         FgMagenta"@%u"FgDefault
 #define VAL(x)      FgRed x FgDefault
@@ -19,7 +20,11 @@
 #define FFIREF_NAME ({ const CbyCode* _oldip = IP; IP = ffiref + 4; const ChiStringRef _name = FETCH_STRING; IP = _oldip; _name; })
 #define FFIREF_ARGS (uint32_t)(ffiref - codeStart), FFIREF_NAME
 #define FNREF       " "FgCyan"<%08x %S>"FgDefault
-#define FNREF_ARGS  (uint32_t)(fnref - codeStart), ({ cbyReadLocation(codeStart, fnref, &loc); loc.fn; })
+#define FNREF_ARGS  (uint32_t)(fnref - codeStart), ({ cbyReadLocation(fnref, &loc); loc.fn; })
+
+#define _CBY_FFI_TYPE_NAME(name, libffi, dcarg, dccall, type) #type,
+static const char* const ffiTypeName[] = { CHI_FOREACH_FFI_TYPE(, _CBY_FFI_TYPE_NAME) };
+#undef _CBY_FFI_TYPE_NAME
 
 CHI_COLD bool cbyDisasm(ChiSink* sink, const CbyCode* codeStart, const CbyCode* codeEnd) {
     const CbyCode* init = 0, *IP = codeStart + CBY_MAGIC_SIZE;
@@ -40,9 +45,9 @@ CHI_COLD bool cbyDisasm(ChiSink* sink, const CbyCode* codeStart, const CbyCode* 
                 uint32_t rtype = FETCH8;
                 uint32_t nargs = FETCH8;
                 chiSinkFmt(sink, FgWhite"%8u"FgDefault"    #%-*u"ARGQ(name)NAME(rtype)VAL("%s")ARGU(nargs)NAME(atypes)"[",
-                           off, OPCODE_MAXLEN - 1, i, name, cbyFFIType[rtype], nargs);
+                           off, OPCODE_MAXLEN - 1, i, name, ffiTypeName[rtype], nargs);
                 for (uint32_t j = 0; j < nargs; ++j)
-                    chiSinkFmt(sink, "%*w"VAL("%s"), j > 0, cbyFFIType[FETCH8]);
+                    chiSinkFmt(sink, "%*w"VAL("%s"), j > 0, ffiTypeName[FETCH8]);
                 chiSinkPuts(sink, "]\n");
             }
         }
@@ -91,7 +96,7 @@ CHI_COLD bool cbyDisasm(ChiSink* sink, const CbyCode* codeStart, const CbyCode* 
     while (IP < codeEnd) {
         IP += CBY_FNHEADER;
         ChiLocInfo loc;
-        cbyReadLocation(codeStart, IP, &loc);
+        cbyReadLocation(IP, &loc);
         chiSinkFmt(sink, "\n"FgWhite"%08x"FgDefault" " TitleBegin"%s%S"TitleEnd" size=%zu%*L\n",
                    (uint32_t)(IP - codeStart), IP == init ? "[init] " : "",
                    loc.fn, loc.size, CHI_LOCFMT_FILE, &loc);

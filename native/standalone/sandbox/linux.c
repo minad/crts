@@ -1,6 +1,6 @@
 #include <sandbox.h>
-#include <string.h>
 #include <stdbool.h>
+#include <string.h>
 #if defined(__x86_64__)
 #  include "syscall_x86_64.h"
 #elif defined(__aarch64__)
@@ -103,6 +103,8 @@ enum {
 
       // personality
       READ_IMPLIES_EXEC   = 0x0400000,
+      ADDR_NO_RANDOMIZE   = 0x0040000,
+      MMAP_PAGE_ZERO      = 0x0100000,
 
       // custom config
       MAX_DEVS    = 8,
@@ -255,12 +257,17 @@ static int sys_prctl(int op, long a1, long a2, long a3, long a4) {
     return (int)syscall_result(syscall5(SYS_prctl, op, a1, a2, a3, a4));
 }
 
+static void explicit_bzero(void* mem, size_t n) {
+    memset(mem, 0, n);
+    __asm__ __volatile__ ("" : : "r"(mem) : "memory");
+}
+
 void sb_exit(int status) {
     sys_exit_group(status);
 }
 
 void sb_yield(uint64_t ns, struct sb_mask* mask) {
-    struct sys_timespec ts = { .tv_sec = (long)(ns / 1000000000ULL), .tv_nsec = (long)(ns % 1000000000ULL) };
+    struct sys_timespec ts = { .tv_sec = (long)(ns / UINT64_C(1000000000)), .tv_nsec = (long)(ns % UINT64_C(1000000000)) };
     struct sys_pollfd fd[2 * MAX_DEVS], *fdp = fd;
     for (uint32_t i = 0; i < info.stream_count; ++i)
         *fdp++ = (struct sys_pollfd){ .fd = (int)i,
@@ -308,7 +315,7 @@ static uint64_t get_clock(int clock) {
     struct sys_timespec ts;
     if (sys_clock_gettime(clock, &ts))
         sb_die("clock_gettime failed");
-    return 1000000000ULL * (uint64_t)ts.tv_sec + (uint64_t)ts.tv_nsec;
+    return UINT64_C(1000000000) * (uint64_t)ts.tv_sec + (uint64_t)ts.tv_nsec;
 }
 
 uint64_t sb_clock_monotonic(void) {
@@ -522,14 +529,14 @@ static void clean_args(int *argc, char** argv) {
         ++p;
         size_t n = strlen(argv[0]), d = (size_t)(p - argv[0]);
         memmove(argv[0], p, n - d);
-        memset(argv[0] + n - d, 0, d);
+        explicit_bzero(argv[0] + n - d, d);
     }
     int n = 1;
     for (int i = 1; i < *argc; ++i) {
         if (strncmp(argv[i], "-S", 2)) {
             argv[n++] = argv[i];
         } else {
-            memset(argv[i], 0, strlen(argv[i]));
+            explicit_bzero(argv[i], strlen(argv[i]));
             argv[i] = 0;
         }
     }
@@ -539,7 +546,7 @@ static void clean_args(int *argc, char** argv) {
 
 static void clean_env(char** env) {
     while (*env) {
-        memset(*env, 0, strlen(*env));
+        explicit_bzero(*env, strlen(*env));
         *env++ = 0;
     }
 }
@@ -547,7 +554,7 @@ static void clean_env(char** env) {
 static void clean_auxv(long* auxv, void** ehdr) {
     for (; *auxv; auxv += 2) {
         if (auxv[0] == AT_EXECFN)
-            memset((char*)auxv[1], 0, strlen((char*)auxv[1]));
+            explicit_bzero((char*)auxv[1], strlen((char*)auxv[1]));
         else if (auxv[0] == AT_SYSINFO_EHDR)
             *ehdr = (void*)auxv[1];
         auxv[0] = 0;
@@ -593,13 +600,16 @@ static void check_persona(void) {
         sb_die("personality failed");
     if (persona & READ_IMPLIES_EXEC)
         sb_die("READ_IMPLIES_EXEC is unacceptable");
+    if (persona & ADDR_NO_RANDOMIZE)
+        sb_die("ADDR_NO_RANDOMIZE is unacceptable");
+    if (persona & MMAP_PAGE_ZERO)
+        sb_die("MMAP_PAGE_ZERO is unacceptable");
 }
 
 void _sb_start(int, char**);
 void _sb_start(int argc, char** argv) {
     char** env = argv + argc + 1, **auxv = env;
     while (*auxv++);
-    check_persona();
 
     void* ehdr = 0;
     clean_auxv((long*)auxv, &ehdr);
@@ -607,6 +617,12 @@ void _sb_start(int argc, char** argv) {
 
     struct sb_opts opts = { .heap = 128 };
     parse_args(&opts, argc, argv);
+
+    if (opts.unsafe)
+        sb_warn("unsafe mode, seccomp sandbox disabled!");
+    else
+        check_persona();
+
     init_heap(&info.heap, opts.heap);
 
     set_nonblock(SB_STREAM_IN);
@@ -630,9 +646,7 @@ void _sb_start(int argc, char** argv) {
     clean_args(&argc, argv);
     clean_env(env);
 
-    if (opts.unsafe)
-        sb_warn("unsafe mode, seccomp sandbox disabled!");
-    else
+    if (!opts.unsafe)
         init_seccomp();
 
     sb_exit(sb_main(argc, argv));

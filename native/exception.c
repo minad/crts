@@ -1,19 +1,20 @@
 #include "exception.h"
-#include "adt.h"
+#include "new.h"
 #include "runtime.h"
+#include "stack.h"
 
-CHI_COLD Chili chiAsyncException(ChiAsyncException e, Chili trace) {
-    Chili show = chiNewFn(1, &chiShowAsyncException);
-    Chili id = CHI_STATIC_STRING("AsyncException"); // TODO use uint128 identifier
-    Chili identifier = chiNewTuple(id, id);
-    Chili info = chiNewTuple(identifier, show);
-    return chiNewTuple(info, chiFromUnboxed(e), trace);
+CHI_COLD Chili chiAsyncException(ChiProcessor* proc, Chili* sp, ChiAsyncException e) {
+    Chili show = chiNewFn(proc, 1, &chiShowAsyncException);
+    Chili id = chiStringNew(proc, "AsyncException"); // TODO use uint128 identifier
+    Chili identifier = chiNewTuple(proc, id, id);
+    Chili info = chiNewTuple(proc, identifier, show);
+    return chiNewTuple(proc, info, chiFromUnboxed(e), chiStackGetTrace(proc, sp));
 }
 
-CHI_COLD Chili chiRuntimeException(Chili str, Chili trace) {
-    Chili show = chiNewFn(1, &chiIdentity);
-    Chili id = CHI_STATIC_STRING("RuntimeException"); // TODO use uint128 identifier
-    Chili identifier = chiNewTuple(id, id);
-    Chili info = chiNewTuple(identifier, show);
-    return chiNewTuple(info, str, trace);
+CHI_COLD Chili chiRuntimeException(ChiProcessor* proc, Chili* sp, Chili msg) {
+    Chili show = chiNewFn(proc, 1, &chiIdentity);
+    Chili id = chiStringNew(proc, "RuntimeException"); // TODO use uint128 identifier
+    Chili identifier = chiNewTuple(proc, id, id);
+    Chili info = chiNewTuple(proc, identifier, show);
+    return chiNewTuple(proc, info, msg, chiStackGetTrace(proc, sp));
 }

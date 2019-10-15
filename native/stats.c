@@ -1,10 +1,5 @@
 #include "color.h"
 #include "sink.h"
-#include "stats.h"
-#include "mem.h"
-#include "ascii.h"
-
-#if CHI_STATS_ENABLED
 
 enum {
     ROW_LEN   = 10,
@@ -84,6 +79,27 @@ static size_t formatCell(ChiSink* cell, const ChiStatsColumn* col, uint32_t y, d
             return 1;
         }
         return chiSinkFmt(cell, "%.2f", col->floats[y]);
+    case CHI_STATS_PATH:
+        if (col->strings[y].size > cellSize - 1U) {
+            const uint8_t* start = col->strings[y].bytes, *end = start + col->strings[y].size, *p = start, *q;
+            size_t maxlen = cellSize - 1U, written = 0, slashes = 0;
+            while (p < end && (q = (const uint8_t*)memchr(p, '/', (size_t)(end - p)))) {
+                p = q + 1;
+                ++slashes;
+            }
+            size_t w = maxlen > (size_t)(end - p) ? (maxlen - (size_t)(end - p)) / (slashes + 1) + 1 : 1;
+            p = start;
+            while (written < maxlen && p < end && (q = (const uint8_t*)memchr(p, '/', (size_t)(end - p)))) {
+                size_t m = CHI_MIN((size_t)(q - p), w);
+                chiSinkWrite(cell, p, m);
+                chiSinkPutc(cell, '/');
+                p = q + 1;
+                written += m + 1;
+            }
+            chiSinkWrite(cell, p, (size_t)(end - p));
+            return written + (size_t)(end - p);
+        }
+        // fall through
     case CHI_STATS_STRING:
         {
             size_t n = CHI_MIN(cellSize - 1U, col->strings[y].size);
@@ -175,6 +191,7 @@ static void jsonCell(ChiSink* sink, uint32_t y, const ChiStatsColumn* col) {
                     100 * col->floats[y] : col->floats[y]);
         break;
     case CHI_STATS_STRING:
+    case CHI_STATS_PATH:
         chiSinkPutq(sink, col->strings[y]);
         break;
     }
@@ -223,22 +240,24 @@ void chiStatsSetup(ChiStats* s, uint32_t cell, bool json) {
 void chiStatsDestroy(ChiStats* s, const char* file, ChiSinkColor color) {
     ChiStringRef str = chiSinkString(s->sink);
     if (str.size) {
-        CHI_AUTO_SINK(sink, chiSinkFileTryNew(file, color));
+        CHI_AUTO_SINK(sink, chiSinkFileTryNew(file[0] ? file : "stderr", CHI_KiB(8), false, color));
         if (sink) {
-            chiSinkPuts(sink, str);
             if (s->json) {
+                chiSinkPuts(sink, str);
                 if (s->state == STATE_VALUE)
                     chiSinkPuts(sink, "\n    }\n  }\n}\n");
                 else if (s->state == STATE_TABLE)
                     chiSinkPuts(sink, "\n}\n");
 
             } else {
+                chiSinkPuts(sink, TitleBegin "CHILI RUNTIME STATISTICS\n\n"TitleBegin);
+                chiSinkPuts(sink, str);
                 chiSinkPutc(sink, '\n');
             }
         }
     }
     chiSinkClose(s->sink);
-    chiPoisonMem(s, CHI_POISON_DESTROYED, sizeof (ChiStats));
+    CHI_POISON_STRUCT(s, CHI_POISON_DESTROYED);
 }
 
 void chiStatsTitle(ChiStats* s, const char* n) {
@@ -408,5 +427,3 @@ void chiStatsAddTable(ChiStats* s, const ChiStatsTable* table) {
     }
     tableFree(table);
 }
-
-#endif
