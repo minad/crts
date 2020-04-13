@@ -34,7 +34,7 @@ static bool isQualified(const char* file) {
 
 static bool isLibrary(const char* file) {
     return strends(file, CBY_DYNLIB_EXT)
-        || (CBY_ZIP_ENABLED && strends(file, CBY_ZIP_EXT));
+        || (CBY_ARCHIVE_ENABLED && strends(file, CBY_ARCHIVE_EXT));
 }
 
 bool cbyLibrary(const char* file) {
@@ -153,32 +153,32 @@ static void listDirModules(ChiSink* sink, const char* path, StringVec* vec) {
         pushNameExt(entry, vec);
 }
 
-static void freeArchive(CbyModuleLoader* ml) {
-    if (ml->archive) {
-        zipClose((Zip*)ml->archive);
-        chiFree(ml->archiveName);
-        ml->archive = ml->archiveName = 0;
+static void freeArchive(CbyArchiveCache* cache) {
+    if (cache->handle) {
+        zipClose((Zip*)cache->handle);
+        chiFree(cache->name);
+        cache->handle = cache->name = 0;
     }
 }
 
-static Zip* loadArchive(CbyModuleLoader* ml, const char* file, ZipResult* res) {
-    if (ml->archive && streq(ml->archiveName, file)) {
+static Zip* loadArchive(CbyArchiveCache* cache, const char* file, ZipResult* res) {
+    if (cache->handle && streq(cache->name, file)) {
         *res = ZIP_OK;
-        return (Zip*)ml->archive;
+        return (Zip*)cache->handle;
     }
 
     Zip* z = zipOpen(file, res);
     if (z) {
-        freeArchive(ml);
-        ml->archive = z;
-        ml->archiveName = chiCStringDup(file);
+        freeArchive(cache);
+        cache->handle = z;
+        cache->name = chiCStringDup(file);
     }
 
     return z;
 }
 
 static char* findMainModule(Zip* z) {
-    ZipFile* f = zipFind(z, CHI_STRINGREF(CBY_ZIP_MAIN));
+    ZipFile* f = zipFind(z, CHI_STRINGREF(CBY_ARCHIVE_MAIN));
     if (f) {
         char* name = chiCStringAlloc(f->uncompressedSize);
         if (zipRead(z, f, name) == ZIP_OK)
@@ -192,7 +192,7 @@ static Chili parseModule(ChiProcessor*, ChiStringRef, Chili);
 
 static Chili loadArchiveModule(ChiProcessor* proc, const char* file, ChiStringRef mainMod) {
     ZipResult res;
-    Zip* z = loadArchive(&cbyInterpreter(proc)->ml, file, &res);
+    Zip* z = loadArchive(CHI_AND(CBY_ARCHIVE_ENABLED, &cbyInterpreter(proc)->ml.cache), file, &res);
     if (!z)
         return newErr(proc, "Could not open archive '%s': %s", file, zipResultName[res]);
 
@@ -409,7 +409,7 @@ static Chili loadNativeModule(ChiProcessor* proc, const char* file, ChiStringRef
 }
 
 static Chili loadLibraryModule(ChiProcessor* proc, const char* file, ChiStringRef name) {
-    return CBY_ZIP_ENABLED && strends(file, CBY_ZIP_EXT) ?
+    return CBY_ARCHIVE_ENABLED && strends(file, CBY_ARCHIVE_EXT) ?
         loadArchiveModule(proc, file, name) : loadNativeModule(proc, file, name);
 }
 
@@ -473,7 +473,7 @@ Chili cbyModuleLoadByName(ChiProcessor* proc, ChiStringRef name) {
 }
 
 void cbyModuleLoaderDestroy(CbyModuleLoader* ml) {
-    freeArchive(ml);
+    CHI_IF(CBY_ARCHIVE_ENABLED, freeArchive(&ml->cache));
     chiFree(ml->path);
 }
 
@@ -498,7 +498,7 @@ void cbyModuleListing(CbyModuleLoader* ml, ChiSink* sink) {
         if (strends(file, CBY_DYNLIB_EXT)) {
             type = "Native library";
             listNativeModules(sink, file, &vec);
-        } else if (CBY_ZIP_ENABLED && strends(file, CBY_ZIP_EXT)) {
+        } else if (CBY_ARCHIVE_ENABLED && strends(file, CBY_ARCHIVE_EXT)) {
             type = "Archive";
             listArchiveModules(sink, file, &vec);
         } else {

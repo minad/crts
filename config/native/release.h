@@ -451,17 +451,17 @@
  * Compile the interpreter with support for bytecode archives
  */
 #if __has_include(<zlib.h>)
-#  define CBY_ZIP_ENABLED            1
+#  define CBY_ARCHIVE_ENABLED            1
 #  define CBY_CRC32_ENABLED          1
 #else
-#  define CBY_ZIP_ENABLED            0
+#  define CBY_ARCHIVE_ENABLED            0
 #  define CBY_CRC32_ENABLED          0
 #endif
 
 /**
  * File in the archive which contains name of main module
  */
-#define CBY_ZIP_MAIN             "main"
+#define CBY_ARCHIVE_MAIN             "main"
 
 /**
  * Enable the integrated disassembler
@@ -485,7 +485,7 @@
 /**
  * File extension of module archives
  */
-#define CBY_ZIP_EXT                  ".cbz"
+#define CBY_ARCHIVE_EXT                  ".cbz"
 
 /**
  * File extension of bytecode files

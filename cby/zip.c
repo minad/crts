@@ -1,6 +1,6 @@
 #include "zip.h"
 
-#if CBY_ZIP_ENABLED
+#if CBY_ARCHIVE_ENABLED
 
 #include <zlib.h>
 #include "native/endian.h"

@@ -42,13 +42,17 @@ typedef const struct {
     ChiHookFn  procStart, procStop;
 } CbyBackend;
 
+typedef struct {
+    void* handle;
+    char* name;
+} CbyArchiveCache;
+
 /**
  * Module loader
  */
 typedef struct {
     char* path;
-    void* archive;
-    char* archiveName;
+    CHI_IF(CBY_ARCHIVE_ENABLED, CbyArchiveCache cache;)
 } CbyModuleLoader;
 
 /**
