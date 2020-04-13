@@ -276,7 +276,6 @@ static bool vaNeedHandles(VirtAllocator* va, size_t needed) {
 
 static ChiChunk* vaGetHandle(VirtAllocator* va, void* start, size_t size) {
     ChiChunk* chunk = (ChiChunk*)chiPoolGet(&va->handlePool);
-    CHI_ASSERT(chunk);
     CHI_IF(CHI_CHUNK_ARENA_ENABLED, chunk->_used = false; addrListPoison(chunk));
     chiChunkListPoison(chunk);
     chunk->size = size;

@@ -64,14 +64,13 @@ static void* mallocLarge(size_t size) {
 static void* mallocSmall(size_t size) {
     CHI_LOCK_MUTEX(&mallocMutex);
     ChiPool* pool = mallocGetPool(size);
-    uint64_t* hdr = (uint64_t*)chiPoolGet(pool);
+    uint64_t* hdr = (uint64_t*)chiPoolTryGet(pool);
     if (CHI_UNLIKELY(!hdr)) {
         ChiChunk* chunk = chiChunkNew(CHI_CHUNK_MIN_SIZE, 0);
         if (!chunk)
             return mallocOutOfMem();
         chiPoolGrow(pool, chunk->start, CHI_CHUNK_MIN_SIZE);
         hdr = (uint64_t*)chiPoolGet(pool);
-        CHI_ASSERT(hdr != 0);
     }
     CHI_ASSERT((uintptr_t)hdr % 16 == 0);
     hdr[0] = 0;

@@ -12,11 +12,16 @@ typedef struct {
 } ChiPool;
 
 CHI_INL ChiPoolObject* _chiPoolAlloc(ChiPool* pool) {
-    if ((uint8_t*)pool->next + pool->object > (uint8_t*)pool->end)
-        return 0;
+    CHI_ASSERT((uint8_t*)pool->next + pool->object <= (uint8_t*)pool->end);
     void* obj = pool->next;
     pool->next = (uint8_t*)obj + pool->object;
     return (ChiPoolObject*)obj;
+}
+
+CHI_INL void* _chiPoolGet(ChiPool* pool) {
+    ChiPoolObject* obj = pool->free;
+    pool->free = obj->next;
+    return obj;
 }
 
 CHI_INL void chiPoolPut(ChiPool* pool, void* obj) {
@@ -32,12 +37,14 @@ CHI_INL void chiPoolGrow(ChiPool* pool, void* start, size_t size) {
     pool->end = (uint8_t*)start + size;
 }
 
+CHI_INL void* chiPoolTryGet(ChiPool* pool) {
+    return CHI_LIKELY(pool->free) ? _chiPoolGet(pool)
+        : (uint8_t*)pool->next + pool->object <= (uint8_t*)pool->end
+        ? _chiPoolAlloc(pool) : 0;
+}
+
 CHI_INL void* chiPoolGet(ChiPool* pool) {
-    if (CHI_UNLIKELY(!pool->free))
-        return _chiPoolAlloc(pool);
-    ChiPoolObject* obj = pool->free;
-    pool->free = obj->next;
-    return obj;
+    return CHI_LIKELY(pool->free) ? _chiPoolGet(pool) : _chiPoolAlloc(pool);
 }
 
 CHI_INL bool chiPoolAvail(ChiPool* pool, size_t n) {
