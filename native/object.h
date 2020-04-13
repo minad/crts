@@ -6,18 +6,6 @@ _Static_assert(sizeof (struct ChiObject_) == _CHI_OBJECT_HEADER_SIZE * CHI_WORDS
 
 CHI_INTERN CHI_WU const char* chiTypeName(ChiType);
 
-CHI_INL void chiColorStateInit(ChiColorState* s) {
-    s->white = CHI_WRAP(Color, _CHI_COLOR_USED);
-    s->gray  = CHI_WRAP(Color, _CHI_COLOR_SHADED | _CHI_COLOR_USED);
-    s->black = CHI_WRAP(Color, _CHI_COLOR_EPOCH + _CHI_COLOR_USED);
-}
-
-CHI_INL void chiColorStateEpoch(ChiColorState* s) {
-    s->black = CHI_WRAP(Color, (uint8_t)(CHI_UN(Color, s->black) + _CHI_COLOR_EPOCH));
-    s->gray  = CHI_WRAP(Color, (uint8_t)(CHI_UN(Color, s->gray)  + _CHI_COLOR_EPOCH));
-    s->white = CHI_WRAP(Color, (uint8_t)(CHI_UN(Color, s->white) + _CHI_COLOR_EPOCH));
-}
-
 CHI_INL CHI_WU bool chiColorEq(ChiColor a, ChiColor b) {
     return CHI_UN(Color, a) == CHI_UN(Color, b);
 }

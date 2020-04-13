@@ -5,7 +5,7 @@
 #include "runtime.h"
 #include "sink.h"
 
-enum { FMTBUFSZ = 128 };
+enum { FMTBUFSZ = 256 };
 
 size_t chiLocFmt(ChiSink* sink, const ChiLocInfo* loc, ChiLocFmt what) {
     size_t written = 0;

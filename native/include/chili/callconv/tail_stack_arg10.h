@@ -12,7 +12,6 @@ struct _ChiRegStore;
 struct _ChiRegStore {
     ChiWord* hl;              ///< Heap limit
     Chili    a[CHI_AMAX - 6]; ///< Arguments
-    uint8_t  na;              ///< Argument number
     ChiAuxRegs aux;
 };
 
@@ -22,7 +21,6 @@ struct _ChiRegStore {
 #define SP   _chiRegSP
 #define HP   _chiRegHP
 #define SLRW _chiRegSL
-#define NARW (_chiReg->na)
 #define A(i) (*({ size_t _i = (i); CHI_ASSERT(_i < CHI_AMAX);           \
                 _i == 0 ? &_chiRegA0                                    \
                     : _i == 1 ? &_chiRegA1                              \

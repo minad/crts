@@ -1,5 +1,3 @@
-#include <string.h>
-
 typedef int32_t z_size;
 
 #if Z_BITS == 64
@@ -17,14 +15,6 @@ typedef uint16_t _z_ddigit;
 #else
 #error Invalid Z_BITS value
 #endif
-
-_z_inl void zd_cpy(z_digit* r, const z_digit* a, z_size n) {
-    memcpy(r, a, (size_t)n * sizeof (z_digit));
-}
-
-_z_inl void zd_zero(z_digit* r, z_size n) {
-    memset(r, 0, (size_t)n * sizeof (z_digit));
-}
 
 _z_inl z_digit zd_shl(z_digit* r, const z_digit* a, z_size n, unsigned int s) {
     Z_ASSERT(s > 0);
@@ -70,10 +60,10 @@ _z_inl void _zd_dd_mul(z_digit a, z_digit b, z_digit* hp, z_digit* lp) {
 // TODO provide implementation which does not use _z_ddigit?
 // uint128 div mod synthesises a call to __udivmodti3
 _z_inl void _zd_dd_div(z_digit ah, z_digit al, z_digit b, z_digit* qp, z_digit* rp) {
+    Z_ASSERT(ah <= b);
     _z_ddigit w = ((_z_ddigit)ah << Z_BITS) | (_z_ddigit)al;
-    z_digit q = (z_digit)(w / b), r = (z_digit)(w % b);
-    *qp = q;
-    *rp = r;
+    *qp = (z_digit)(w / b);
+    *rp = (z_digit)(w % b);
 }
 
 _z_inl z_digit zd_mul_1(z_digit* r, const z_digit* a, z_size n, z_digit b) {
@@ -199,34 +189,30 @@ _z_inl z_digit _zd_div_1(z_digit* q, const z_digit* u, z_size m, z_digit v) {
     return c;
 }
 
-_z_inl void _zd_div_knuth_step(z_digit* q, z_digit* u, z_digit* v,
-                               z_size n, z_size j) {
+_z_inl void _zd_div_knuth_step(z_digit* q, z_digit* u, z_digit* v, z_size n, z_size j) {
     // Estimate Q of q[j]
-    z_digit Q, R;
-    _zd_dd_div(u[j+n], u[j+n-1], v[n-1], &Q, &R);
+    z_digit Q, R, h, l;
+    bool Qh = u[j + n] == v[n - 1];
+    _zd_dd_div(u[j + n], u[j + n - 1], v[n - 1], &Q, &R);
 
-    // TODO cleanup?
+    // Calculate Q
     do {
-        if (~Q) {
-            z_digit ph, pl;
-            _zd_dd_mul(Q, v[n-2], &ph, &pl);
-            if (ph < R || (ph == R && v[n-2] <= u[j+n-2]))
+        if (!Qh)   {
+            _zd_dd_mul(Q, v[n - 2], &h, &l);
+            if (h < R || (h == R && l <= u[j + n - 2]))
                 break;
         }
-        --Q;
-    } while (!__builtin_add_overflow(R, v[n-1], &R) && ~R); // R += v[n-1]; R < ~0
+        Qh = !__builtin_sub_overflow(Q, 1, &Q) && Qh;
+    } while (!__builtin_add_overflow(R, v[n - 1], &R));
 
     // Multiply and subtract
-    z_digit k = zd_submul_1(u + j, v, n, Q);
-    bool neg = u[j+n] < k;
-    u[j+n] -= k;
-    q[j] = Q;
-
-    // Add back if we subtracted too much
-    if (_z_unlikely(neg)) { // TODO: Branch never taken?
-        --q[j];
-        u[j + n] = zd_add_n(u + j, u + j, v, n);
+    if (__builtin_sub_overflow(u[j + n], zd_submul_1(u + j, v, n, Q), &u[j + n])) {
+        // Add back if we subtracted too much
+        --Q;
+        u[j + n] += zd_add_n(u + j, u + j, v, n);
     }
+
+    q[j] = Q;
 }
 
 // Knuth's algorithm D, adapted from Hacker's Delight by Warren
@@ -238,11 +224,11 @@ _z_inl bool _zd_div_knuth(z_digit* q, z_digit* r,
     Z_ASSERT(v[n - 1]);
 
     // Allocate scratch space
-    unsigned s = (unsigned)__builtin_clzll(v[n-1]) - 8U * sizeof(long long) + Z_BITS;
+    unsigned s = (unsigned)(__builtin_clzll(v[n - 1]) - 8 * (int)sizeof(long long) + Z_BITS);
     z_size needed = n + m + 1;
     z_digit scratch[Z_SCRATCH],
         *vn = _z_unlikely(needed > Z_SCRATCH)
-        ? Z_ALLOC(sizeof (z_digit) * (size_t)needed)
+        ? (z_digit*)Z_ALLOC(sizeof (z_digit) * (size_t)needed)
         : scratch,
         *un = vn + n;
     if (_z_unlikely(!vn))
@@ -253,8 +239,8 @@ _z_inl bool _zd_div_knuth(z_digit* q, z_digit* r,
         zd_shl(vn, v, n, s);
         un[m] = zd_shl(un, u, m, s);
     } else {
-        zd_cpy(vn, v, n);
-        zd_cpy(un, u, m);
+        _z_cpy(vn, v, n);
+        _z_cpy(un, u, m);
         un[m] = 0;
     }
 
@@ -265,7 +251,7 @@ _z_inl bool _zd_div_knuth(z_digit* q, z_digit* r,
     if (s)
         zd_shr(r, un, n, s);
     else
-        zd_cpy(r, un, n);
+        _z_cpy(r, un, n);
 
     if (vn != scratch)
         Z_FREE(vn);

@@ -4,11 +4,7 @@ CHI_EXPORT _Noreturn void CHI_PRIVATE(chiDebugAssert)(const char*, uint32_t, con
 
 #ifdef NDEBUG
 #  define CHI_ASSERT(cond)     ({})
-#  ifdef __clang__
-#    define CHI_ASSUME(cond)   __builtin_assume(cond)
-#  else
-#    define CHI_ASSUME(cond)   ((cond) ? ({}) : CHI_UNREACHABLE)
-#  endif
+#  define CHI_ASSUME(cond)     ((cond) ? ({}) : CHI_UNREACHABLE)
 #  define CHI_BUG(...)         __builtin_unreachable()
 #  define CHI_DBGMSG(...)      ({})
 #else

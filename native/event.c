@@ -3,6 +3,8 @@
 #include "error.h"
 #include "event.h"
 #include "location.h"
+#include "mem.h"
+#include "runtime.h"
 #include "sink.h"
 #include "strutil.h"
 #include "thread.h"
@@ -326,7 +328,7 @@ void chiEventWrite(void* ctx, ChiEvent e, const ChiEventPayload* p) {
     Event event = {
         .type = e,
         .payload = p,
-        .ts = chiNanosDelta(chiClock(CHI_CLOCK_REAL_FINE), rt->timeRef.start.real),
+        .ts = chiNanosDelta(chiClockMonotonicFine(), rt->timeRef.start.real),
         .wid = worker ? worker->wid : 0,
         .tid = eventDesc[e].ctx == CTX_THREAD ? chiThreadId(proc->thread) : 0,
     };

@@ -1,6 +1,6 @@
 #include "cycles.h"
 
-CHI_COLD uint32_t chiCpuCyclesOverhead(void) {
+uint32_t chiCpuCyclesOverhead(void) {
     static uint32_t result = 0;
     if (result)
         return result;

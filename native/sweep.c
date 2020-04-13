@@ -22,14 +22,14 @@ static void sweepTake(ChiGC* gc, ChiHeapSegment** segment, ChiChunkList* largeLi
 }
 
 static bool pageSweep(ChiHeapPage* page, ChiObject* start, ChiObject* obj,
-                      ChiObject** freeObjectList, ChiColorState colorState,
+                      ChiObject** freeObjectList, ChiMarkState markState,
                       ChiSweepClassStats* stats) {
     CHI_NOWARN_UNUSED(stats);
     bool alive = false;
     uint32_t objectSize = page->objectSize;
     // Sweep from the end in order to obtain a free list with increasing addresses
     while (obj >= start) {
-        if (chiObjectGarbage(colorState, obj)) {
+        if (chiObjectGarbage(markState, obj)) {
             chiCountObject(stats->garbage, objectSize);
             obj->free.next = *freeObjectList;
             *freeObjectList = obj;
@@ -42,7 +42,7 @@ static bool pageSweep(ChiHeapPage* page, ChiObject* start, ChiObject* obj,
     return alive;
 }
 
-static void segmentSweep(ChiHeapSegment* s, ChiColorState colorState,
+static void segmentSweep(ChiHeapSegment* s, ChiMarkState markState,
                          ChiSweepClassStats* stats, ChiTimeout* timeout) {
     ChiHeapClass* cls = s->cls;
     // Sweep segment backward in order to get a page free list with increasing addresses
@@ -63,7 +63,7 @@ static void segmentSweep(ChiHeapSegment* s, ChiColorState colorState,
             ChiObject* freeObjectList = s->freeObjectList[bin],
                 *start = (ChiObject*)s->chunk->start + s->sweepIndex * cls->pageWords,
                 *last = start + (cls->pageWords / objectSize) * objectSize - objectSize;
-            if (pageSweep(page, start, last, &freeObjectList, colorState, stats)) {
+            if (pageSweep(page, start, last, &freeObjectList, markState, stats)) {
                 s->freeObjectList[bin] = freeObjectList;
                 s->alive = true;
             } else {
@@ -75,13 +75,13 @@ static void segmentSweep(ChiHeapSegment* s, ChiColorState colorState,
     }
 }
 
-static size_t largeSweep(ChiHeap* heap, ChiChunkList* list, ChiColorState colorState, ChiSweepClassStats* stats) {
+static size_t largeSweep(ChiHeap* heap, ChiChunkList* list, ChiMarkState markState, ChiSweepClassStats* stats) {
     CHI_NOWARN_UNUSED(stats);
     size_t freed = 0;
     CHI_FOREACH_CHUNK (c, list) {
         ChiObject* obj = (ChiObject*)c->start;
         size_t size = c->size / CHI_WORDSIZE;
-        if (chiObjectGarbage(colorState, obj)) {
+        if (chiObjectGarbage(markState, obj)) {
             freed += size;
             chiCountObject(stats->garbage, size);
             chiChunkListDelete(c);
@@ -93,14 +93,14 @@ static size_t largeSweep(ChiHeap* heap, ChiChunkList* list, ChiColorState colorS
     return freed;
 }
 
-void chiSweepSlice(ChiHeap* heap, ChiGC* gc, ChiColorState colorState, ChiSweepStats* pstats, ChiTimeout* timeout) {
+void chiSweepSlice(ChiHeap* heap, ChiGC* gc, ChiMarkState markState, ChiSweepStats* pstats, ChiTimeout* timeout) {
     ChiSweepClassStats largeStats = {}, smallStats = {}, mediumStats = {};
     while (chiTimeoutTick(timeout)) {
         ChiHeapSegment* s = 0;
         ChiChunkList largeList = CHI_LIST_INIT(largeList);
         sweepTake(gc, &s, &largeList);
         if (s) {
-            segmentSweep(s, colorState, s->cls == &heap->small ? &smallStats : &mediumStats, timeout);
+            segmentSweep(s, markState, s->cls == &heap->small ? &smallStats : &mediumStats, timeout);
             if (s->sweepIndex) {
                 CHI_LOCK_MUTEX(&gc->mutex);
                 chiHeapSegmentListAppend(&gc->sweep.segmentPartial, s);
@@ -109,7 +109,7 @@ void chiSweepSlice(ChiHeap* heap, ChiGC* gc, ChiColorState colorState, ChiSweepS
                 chiHeapSweepReleaseSegment(heap, s);
             }
         } else if (!chiChunkListNull(&largeList)) {
-            size_t freed = largeSweep(heap, &largeList, colorState, &largeStats);
+            size_t freed = largeSweep(heap, &largeList, markState, &largeStats);
             chiHeapSweepReleaseLarge(heap, &largeList, freed);
         } else {
             break;

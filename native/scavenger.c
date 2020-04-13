@@ -167,7 +167,8 @@ static void scanDirtyStack(ScavengerState* state, Chili c) {
     CHI_ASSERT(!chiObjectShared(obj));
 
     CHI_LOCK_OBJECT(obj);
-    CHI_ASSERT(state->proc->gc.phase != CHI_GC_ASYNC || chiColorEq(chiObjectColor(obj), state->black));
+    CHI_ASSERT(atomic_load_explicit(&state->proc->gc.phase, memory_order_relaxed) != CHI_GC_ASYNC
+               || chiColorEq(chiObjectColor(obj), state->black));
 
     if (state->gc)
         chiObjectSetColor(obj, state->black);
@@ -290,7 +291,7 @@ void chiScavenger(ChiProcessor* proc, uint32_t aging, bool snapshot, ChiScavenge
         .blockMask  = CHI_ALIGNMASK(opt->block.size),
         .aging      = aging,
         .gc         = snapshot ? &proc->gc : 0,
-        .black      = proc->gc.colorState.black,
+        .black      = proc->gc.markState.black,
         .depth      = opt->heap.scanDepth,
         .collapse   = !opt->gc.scav.noCollapse,
         .heapHandle = &proc->handle,

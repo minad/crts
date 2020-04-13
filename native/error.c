@@ -1,14 +1,14 @@
 #include "error.h"
 #include "sink.h"
 
-CHI_COLD void chiWarn(const char* fmt, ...) {
+void chiWarn(const char* fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
     chiSinkWarnv(chiStderr, fmt, ap);
     va_end(ap);
 }
 
-CHI_COLD _Noreturn void chiErr(const char* fmt, ...) {
+_Noreturn void chiErr(const char* fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
     chiSinkWarnv(chiStderr, fmt, ap);
@@ -20,6 +20,6 @@ CHI_COLD _Noreturn void chiErr(const char* fmt, ...) {
 #endif
 }
 
-CHI_COLD _Noreturn void chiSysErr(const char* name) {
+_Noreturn void chiSysErr(const char* name) {
     chiErr("%s failed: %m", name);
 }

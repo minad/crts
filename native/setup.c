@@ -225,22 +225,19 @@ void chiRuntimeDestroy(ChiProcessor* proc) {
 }
 
 void chiRuntimeEnter(ChiRuntime* rt, int argc, char** argv) {
-    ChiRuntimeOption* opt = &rt->option;
-    chiRuntimeOptionValidate(opt);
-
+    chiRuntimeOptionValidate(&rt->option);
     CHI_ASSERT(argc >= 0);
     rt->argc = (uint32_t)argc;
     rt->argv = argv;
-
     chiProcessorEnter(setup(rt));
 }
 
 uint64_t chiCurrentTimeNanos(void) {
-    return CHI_UN(Nanos, chiNanosDelta(chiClock(CHI_CLOCK_REAL_FINE), CHI_CURRENT_RUNTIME->timeRef.start.real));
+    return CHI_UN(Nanos, chiNanosDelta(chiClockMonotonicFine(), CHI_CURRENT_RUNTIME->timeRef.start.real));
 }
 
 uint64_t chiCurrentTimeMillis(void) {
-    return CHI_UN(Millis, chiNanosToMillis(chiNanosDelta(chiClock(CHI_CLOCK_REAL_FAST), CHI_CURRENT_RUNTIME->timeRef.start.real)));
+    return CHI_UN(Millis, chiNanosToMillis(chiNanosDelta(chiClockMonotonicFast(), CHI_CURRENT_RUNTIME->timeRef.start.real)));
 }
 
 void chiRuntimeInit(ChiRuntime* rt, ChiExitHandler exitHandler) {

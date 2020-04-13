@@ -80,7 +80,6 @@
 #define CHI_RET_NONNULL       __attribute__ ((returns_nonnull))
 #define CHI_ASSUME_ALIGNED(n) __attribute__ ((assume_aligned(n)))
 #define CHI_ASSUME_WORD_ALIGNED CHI_ASSUME_ALIGNED(CHI_WORDSIZE)
-#define CHI_COLD              __attribute__ ((cold))
 #define CHI_LOCAL             static __attribute__ ((unused))
 #define CHI_UNUSED(x)         CHI_CAT(_chi_unused, x) __attribute__ ((unused))
 #define CHI_NOWARN_UNUSED(x)  ({ CHI_MUST_BE_VAR(x); (void)x; })

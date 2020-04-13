@@ -41,7 +41,7 @@ bool cbyLibrary(const char* file) {
     return isLibrary(file) || isQualified(file);
 }
 
-CHI_COLD CHI_FMT(1,2) static Chili newErr(ChiProcessor* proc, const char* fmt, ...) {
+CHI_FMT(1,2) static Chili newErr(ChiProcessor* proc, const char* fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
     Chili r = chiFmtStringv(proc, fmt, ap);

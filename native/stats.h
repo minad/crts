@@ -35,8 +35,8 @@ typedef struct ChiSink_ ChiSink;
 
 typedef struct {
     ChiSink* sink;
-    uint32_t state;
     uint32_t cell;
+    uint8_t  state;
     bool     json;
 } ChiStats;
 

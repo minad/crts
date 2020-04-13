@@ -1,11 +1,13 @@
 #include <stdlib.h>
 #include "color.h"
+#include "mem.h"
+#include "num.h"
 #include "sink.h"
 #include "strutil.h"
 
 #if CHI_OPTION_ENABLED
 
-CHI_COLD void chiOptionHelp(const ChiOptionParser* parser) {
+void chiOptionHelp(const ChiOptionParser* parser) {
     int max = 0;
     for (const ChiOptionList* p = parser->list; p->desc; ++p) {
         for (const ChiOption* opt = p->desc; opt->type; ++opt) {

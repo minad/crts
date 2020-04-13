@@ -36,5 +36,5 @@ CHI_INTERN void chiGCService(ChiProcessor*);
 CHI_INTERN void chiGCRoot(ChiRuntime*, Chili);
 CHI_INTERN void chiGCUnroot(ChiRuntime*, Chili);
 CHI_INTERN void chiScavenger(ChiProcessor*, uint32_t, bool, ChiScavengerStats*);
-CHI_INTERN void chiSweepSlice(ChiHeap*, ChiGC*, ChiColorState, ChiSweepStats*, ChiTimeout*);
-CHI_INTERN void chiMarkSlice(ChiGrayVec*, uint32_t, bool, ChiColorState, ChiScanStats*, ChiTimeout*);
+CHI_INTERN void chiSweepSlice(ChiHeap*, ChiGC*, ChiMarkState, ChiSweepStats*, ChiTimeout*);
+CHI_INTERN void chiMarkSlice(ChiGrayVec*, uint32_t, bool, ChiMarkState, ChiScanStats*, ChiTimeout*);

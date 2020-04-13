@@ -1,5 +1,9 @@
+#include "ascii.h"
 #include "color.h"
+#include "debug.h"
+#include "mem.h"
 #include "sink.h"
+#include "stats.h"
 
 enum {
     ROW_LEN   = 10,

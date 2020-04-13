@@ -94,7 +94,7 @@ static void setupDebugData(ChiProcessor* proc) {
     _chiDebugData.ownerMinor = (uintptr_t)&proc->heap.manager;
     _chiDebugData.ownerMinorMask = CHI_ALIGNMASK(proc->rt->option.block.size);
     _chiDebugData.wid = proc->primary.worker.wid;
-    _chiDebugData.colorState = proc->gc.colorState;
+    _chiDebugData.markState = proc->gc.markState;
     _chiDebugData.protect = false;
 }
 #else
@@ -193,8 +193,7 @@ typedef struct {
     ChiRuntime*       rt;
     Chili             thread;
     ChiGCPhase        phase;
-    ChiBarrier        barrier;
-    ChiColorState     colorState;
+    ChiMarkState      markState;
     ChiColor          allocColor;
     int32_t           result;
 } ProcessorArg;
@@ -202,9 +201,8 @@ typedef struct {
 CHI_INL void inheritGCState(ChiProcessor* proc, const ProcessorArg* arg) {
     ChiLocalGC* gc = &proc->gc;
     atomic_store_explicit(&gc->phase, arg->phase, memory_order_relaxed);
-    gc->colorState = arg->colorState;
-    CHI_IF(CHI_POISON_ENABLED, _chiDebugData.colorState = gc->colorState;)
-    gc->barrier = arg->barrier;
+    gc->markState = arg->markState;
+    CHI_IF(CHI_POISON_ENABLED, _chiDebugData.markState = gc->markState;)
     proc->handle.allocColor = arg->allocColor;
 }
 
@@ -237,8 +235,7 @@ bool chiProcessorTryStart(Chili thread) {
     ChiLocalGC* gc = &proc->gc;
     ProcessorArg arg = { .thread = thread, .rt = proc->rt, .result = 0,
                          .phase = atomic_load_explicit(&gc->phase, memory_order_relaxed),
-                         .colorState = gc->colorState,
-                         .barrier = gc->barrier,
+                         .markState = gc->markState,
                          .allocColor = proc->handle.allocColor };
     chiMutexInit(&arg.mutex);
     chiCondInit(&arg.cond);
@@ -293,7 +290,7 @@ static bool initProcessor(ChiProcessor* proc) {
     chiLocalHeapSetup(&proc->heap,
                       opt->block.size, opt->block.chunk,
                       opt->block.nursery, rt);
-    chiHeapHandleSetup(&proc->handle, &rt->heap, proc->gc.colorState.white);
+    chiHeapHandleSetup(&proc->handle, &rt->heap, proc->gc.markState.white);
 
 #if CHI_SYSTEM_HAS_TASK
     CHI_LOCK_MUTEX(&rt->proc.mutex);

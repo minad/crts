@@ -1,13 +1,12 @@
-#include <stdlib.h>
 #include <assert.h>
-#include <time.h>
 #include <gmp.h>
+#include <stdlib.h>
+#include <time.h>
 
-#define Z_BITS             64
-#define Z_ALLOC(x)         malloc(x)
-#define Z_FREE(x)          free(x)
-#define Z_ASSERT(x)        assert(x)
-#define Z_SCRATCH          64
+#define Z_ALLOC(x)  malloc(x)
+#define Z_FREE(x)   free(x)
+#define Z_ASSERT(x) assert(x)
+#define Z_SCRATCH   64
 #include "z.h"
 
 #define TEST_SMALL 200
@@ -19,16 +18,20 @@ typedef z_int (*z_bin_t)(z_int, z_int);
 
 static gmp_randstate_t randstate;
 
-static z_int mpz_to_mp(mpz_srcptr in) {
-    // TODO support GMP_NUMB_BITS!=Z_BITS by allocating new z_int
-    return (z_int){ .size = (z_size)mpz_size(in), .neg = mpz_sgn(in) < 0, .d = in->_mp_d };
+static z_int mpz_to_z(mpz_srcptr in) {
+    z_int out = { .neg = mpz_sgn(in) < 0, .size = _z_digits((z_size)(mpz_size(in) * GMP_NUMB_BITS)) };
+    out.alloc = out.size;
+    out.d = calloc((size_t)out.size, sizeof (z_digit));
+    mpz_export(out.d, 0, -1, Z_BITS/8, 0, 0, in);
+    _z_trim(&out);
+    return out;
 }
 
 static void z_to_mpz(mpz_ptr out, z_int in) {
-    // TODO support GMP_NUMB_BITS!=Z_BITS by allocating new mpz_t
-    out->_mp_size = (int)(in.neg ? -in.size : in.size);
-    out->_mp_alloc = (int)(in.size ? in.size : 1);
-    out->_mp_d = in.d;
+    mpz_init(out);
+    mpz_import(out, (size_t)in.size, -1, Z_BITS/8, 0, 0, in.d);
+    if (in.neg)
+        mpz_neg(out, out);
 }
 
 static void check_bin(const char* name, bool nonzero, mpz_bin_t f1, z_bin_t f2, mpz_ptr a1, mpz_ptr b1) {
@@ -39,24 +42,24 @@ static void check_bin(const char* name, bool nonzero, mpz_bin_t f1, z_bin_t f2, 
     mpz_init(r1);
     f1(r1, a1, b1);
 
-    z_int a2 = mpz_to_mp(a1),
-        b2 = mpz_to_mp(b1),
-        r2 = mpz_to_mp(r1);
+    z_int a2 = mpz_to_z(a1),
+        b2 = mpz_to_z(b1),
+        r2 = mpz_to_z(r1),
+        u2 = f2(a2, b2);
 
-    z_int u2 = f2(a2, b2);
     if (u2.err) {
         gmp_printf("%s errored\n", name);
-    } else {
-        if (z_cmp(u2, r2) != 0) {
-            mpz_t u1;
-            z_to_mpz(u1, u2);
-            gmp_printf("%s returned invalid result\na = %Zd\nb = %Zd\nr = %Zd\nR = %Zd\n",
-                       name, a1, b1, r1, u1);
-        }
-        z_free(u2);
+    } else if (z_cmp(u2, r2) != 0) {
+        mpz_t u1;
+        z_to_mpz(u1, u2);
+        gmp_printf("%s returned invalid result\na = %Zd\nb = %Zd\nr = %Zd\nR = %Zd\n",
+                   name, a1, b1, r1, u1);
+        mpz_clear(u1);
     }
 
     mpz_clear(r1);
+
+    z_frees(a2, b2, r2, u2);
 }
 
 static void check_bin_long(const char* name, bool nonzero, mpz_bin_t f1, z_bin_t f2, long x, long y) {

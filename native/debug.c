@@ -26,7 +26,7 @@ CHI_NOINL void chiPoisonObject(void* p, size_t n) {
 #endif
 
 #ifndef NDEBUG
-static CHI_COLD void debugMsgv(const char* prefix, const char* file, uint32_t line, const char* func, const char* fmt, va_list ap) {
+static void debugMsgv(const char* prefix, const char* file, uint32_t line, const char* func, const char* fmt, va_list ap) {
     char buf[512];
     ChiSinkMem s;
     chiSinkMemInit(&s, buf, sizeof (buf));
@@ -37,21 +37,21 @@ static CHI_COLD void debugMsgv(const char* prefix, const char* file, uint32_t li
     chiSinkWrite(chiStderr, s.buf, s.used);
 }
 
-static CHI_COLD void debugMsg(const char* prefix, const char* file, uint32_t line, const char* func, const char* fmt, ...) {
+static void debugMsg(const char* prefix, const char* file, uint32_t line, const char* func, const char* fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
     debugMsgv(prefix, file, line, func, fmt, ap);
     va_end(ap);
 }
 
-CHI_COLD void chiDebugMsg(const char* file, uint32_t line, const char* func, const char* fmt, ...) {
+void chiDebugMsg(const char* file, uint32_t line, const char* func, const char* fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
     debugMsgv("Debug", file, line, func, fmt, ap);
     va_end(ap);
 }
 
-CHI_COLD void chiDebugBug(const char* file, uint32_t line, const char* func, const char* fmt, ...) {
+void chiDebugBug(const char* file, uint32_t line, const char* func, const char* fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
     debugMsgv("Bug", file, line, func, fmt, ap);
@@ -59,7 +59,7 @@ CHI_COLD void chiDebugBug(const char* file, uint32_t line, const char* func, con
     __builtin_trap();
 }
 
-CHI_COLD void chiDebugAssert(const char* file, uint32_t line, const char* func, const char* cond) {
+void chiDebugAssert(const char* file, uint32_t line, const char* func, const char* cond) {
     debugMsg("Assert", file, line, func, "`%s' failed", cond);
     __builtin_trap();
 }

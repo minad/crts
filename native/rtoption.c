@@ -1,11 +1,13 @@
+#include "chunk.h"
 #include "color.h"
 #include "error.h"
 #include "event.h"
+#include "num.h"
 #include "sink.h"
 #include "strutil.h"
 #include "version.h"
 
-#define FILE_NAMES      "file, stdout, stderr, fd:n"
+#define FILE_NAMES      "file, stdout, stderr, null, fd:n"
 #define FILTER_EXAMPLES "Examples: HELP, -ALL+TICK, THR+GC+TI"
 #define LOGO "  "FgGreen"l"FgDefault"\n "FgRed"("FgRed"`"FgRed"\\"FgDefault"  Chili\n  "FgRed"`.\\"FgDefault"   Native\n     "FgRed"`"FgDefault"\n"
 

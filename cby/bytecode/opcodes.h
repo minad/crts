@@ -2,10 +2,8 @@
 #pragma once
 
 #define CBY_FOREACH_OPCODE(OP) \
-    OP(idx1) \
-    OP(idx2) \
-    OP(idxl1) \
-    OP(idxl2) \
+    OP(idx) \
+    OP(idxl) \
     OP(fset) \
     OP(tset) \
     OP(int8) \
@@ -358,7 +356,7 @@ typedef enum { CBY_FOREACH_OPCODE(_CBY_OPCODE_ENUM) } Opcode;
 #undef _CBY_OPCODE_ENUM
 
 enum {
-    OPCODE_COUNT = 350,
+    OPCODE_COUNT = 348,
     OPCODE_MAXLEN = 7,
-    OPCODE_PRIM = 92
+    OPCODE_PRIM = 90
 };

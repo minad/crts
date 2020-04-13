@@ -3,14 +3,17 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
-#define _z_inl         static inline __attribute__((always_inline))
-#define _z_wu          __attribute__ ((warn_unused_result))
-#define _z_swap(a, b)  ({ typeof(a) _z_swap = a; a = b; b = _z_swap; })
-#define _z_min(a, b)   ({ typeof(a) _z_min1 = (a), _z_min2 = (b); _z_min1 < _z_min2 ? _z_min1 : _z_min2; })
-#define _z_max(a, b)   ({ typeof(a) _z_max1 = (a), _z_max2 = (b); _z_max1 > _z_max2 ? _z_max1 : _z_max2; })
-#define _z_unlikely(x) __builtin_expect(!!(x), false)
+#define _z_inl          static inline __attribute__((always_inline))
+#define _z_wu           __attribute__ ((warn_unused_result))
+#define _z_swap(a, b)   ({ typeof(a) _z_swap = a; a = b; b = _z_swap; })
+#define _z_min(a, b)    ({ typeof(a) _z_min1 = (a), _z_min2 = (b); _z_min1 < _z_min2 ? _z_min1 : _z_min2; })
+#define _z_max(a, b)    ({ typeof(a) _z_max1 = (a), _z_max2 = (b); _z_max1 > _z_max2 ? _z_max1 : _z_max2; })
+#define _z_unlikely(x)  __builtin_expect(!!(x), false)
 #define _z_digits(n)    (((n) + Z_BITS - 1) / Z_BITS)
+#define _z_cpy(d, s, n) memcpy((d), (s), (size_t)(n) * sizeof (z_digit))
+#define _z_clear(d, n)  memset((d), 0, (size_t)(n) * sizeof (z_digit))
 #define z_err           ((z_int){.err=true})
 #define z_zero          ((z_int){.size=0})
 
@@ -189,7 +192,7 @@ _z_inl void z_quorem(z_int* qp, z_int* rp, z_int a, z_int b) {
         r = _z_new(a.err || b.err, a.neg, b.size, b.size);
     if (!r.err && !q.err && !qsize) {
         if (rp) {
-            zd_cpy(r.d, a.d, a.size);
+            _z_cpy(r.d, a.d, a.size);
             r.size = a.size;
         }
     } else if (r.err || q.err || !zd_divmod(q.d, r.d, a.d, a.size, b.d, b.size)) {
@@ -250,7 +253,7 @@ _z_inl _z_wu z_int _z_unsigned_xor(z_int a, z_int b) {
     if (b.size)
         zd_xor_n(r.d, a.d, b.d, b.size);
     if (a.size > b.size)
-        zd_cpy(r.d + b.size, a.d + b.size, a.size - b.size);
+        _z_cpy(r.d + b.size, a.d + b.size, a.size - b.size);
     else
         _z_trim(&r);
     return r;
@@ -272,7 +275,7 @@ _z_inl _z_wu z_int _z_unsigned_andnot(z_int a, z_int b) {
     if (size)
         zd_andnot_n(r.d, a.d, b.d, size);
     if (size < a.size)
-        zd_cpy(r.d + size, a.d + size, a.size - size);
+        _z_cpy(r.d + size, a.d + size, a.size - size);
     _z_trim(&r);
     return r;
 }
@@ -284,7 +287,7 @@ _z_inl _z_wu z_int _z_unsigned_or(z_int a, z_int b) {
     if (b.size)
         zd_or_n(r.d, a.d, b.d, b.size);
     if (a.size > b.size)
-        zd_cpy(r.d + b.size, a.d + b.size, a.size - b.size);
+        _z_cpy(r.d + b.size, a.d + b.size, a.size - b.size);
     return r;
 }
 
@@ -387,8 +390,8 @@ _z_inl _z_wu z_int z_shl(z_int a, uint16_t b) {
     if (b)
         _z_grow(&r, zd_shl(r.d + n, a.d, a.size, b));
     else
-        zd_cpy(r.d + n, a.d, a.size);
-    zd_zero(r.d, n);
+        _z_cpy(r.d + n, a.d, a.size);
+    _z_clear(r.d, n);
     return r;
 }
 
@@ -434,7 +437,7 @@ _z_inl _z_wu z_int z_shr(z_int a, uint16_t b) {
         zd_shr(r.d, a.d + n, r.size, b);
         _z_trim_1(&r);
     } else {
-        zd_cpy(r.d, a.d + n, r.size);
+        _z_cpy(r.d, a.d + n, r.size);
     }
     return r;
 }

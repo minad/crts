@@ -25,7 +25,7 @@ CHI_INL CHI_WU uint64_t chiCpuCycles(void) {
             return (uint64_t)reg * 64;
         }
     }
-    return CHI_UN(Nanos, chiClock(CHI_CLOCK_REAL_FINE));
+    return CHI_UN(Nanos, chiClockMonotonicFine());
 #elif defined(CHI_ARCH_ARM64)
     uint64_t reg;
     __asm__ __volatile__ ("mrs %0, cntvct_el0" : "=r"(reg));
@@ -55,10 +55,10 @@ CHI_INL CHI_WU uint64_t chiCpuCycles(void) {
     tbl &= -(int64_t)(tbu0 == tbu1);
     return (uint64_t)((tbu1 << 32) | tbl);
 #elif defined(CHI_ARCH_WASM32)
-    return CHI_UN(Nanos, chiClock(CHI_CLOCK_REAL_FINE));
+    return CHI_UN(Nanos, chiClockMonotonicFine());
 #else
 #  warning Unsupported architecture. chiCpuCycles uses clock as fallback.
-    return CHI_UN(Nanos, chiClock(CHI_CLOCK_REAL_FINE));
+    return CHI_UN(Nanos, chiClockMonotonicFine());
 #endif
 }
 

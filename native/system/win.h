@@ -48,7 +48,9 @@ CHI_INTERN void chiTimerInstall(ChiTimer*);
 CHI_INTERN void chiTimerRemove(ChiTimer*);
 CHI_INTERN void chiSigInstall(ChiSigHandler*);
 CHI_INTERN void chiSigRemove(ChiSigHandler*);
-CHI_INTERN CHI_WU ChiNanos chiClock(ChiClock);
+CHI_INTERN CHI_WU ChiNanos chiClockMonotonicFine(void);
+CHI_INL CHI_WU ChiNanos chiClockMonotonicFast(void) { return chiClockMonotonicFine(); }
+CHI_INTERN CHI_WU ChiNanos chiClockCpu(void);
 CHI_INTERN CHI_WU ChiNanos chiCondTimedWait(ChiCond*, ChiMutex*, ChiNanos);
 CHI_INTERN CHI_WU ChiTask chiTaskCurrent(void);
 CHI_INTERN CHI_WU ChiFile chiFileOpen(const char*);

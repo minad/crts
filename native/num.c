@@ -91,7 +91,7 @@ uint64_t chiPow(uint64_t a, uint32_t b) {
 
 // Non locale dependent version of strtoull.
 // Also doesn't use errno.
-#define _CHI_READ_UINT(n)                                               \
+#define CHI_READ_UINT(n)                                               \
     bool chiReadUInt##n(uint##n##_t* x, const char** end) {             \
         const char* s = *end;                                           \
         *x = 0;                                                         \
@@ -105,5 +105,6 @@ uint64_t chiPow(uint64_t a, uint32_t b) {
         *end = s;                                                       \
         return true;                                                    \
     }
-_CHI_READ_UINT(64)
-_CHI_READ_UINT(32)
+CHI_READ_UINT(64)
+CHI_READ_UINT(32)
+#undef CHI_READ_UINT

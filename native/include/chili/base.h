@@ -12,9 +12,16 @@ enum {
 
 CHI_NEWTYPE(Color, uint8_t)
 
+typedef enum {
+    _CHI_BARRIER_NONE,
+    _CHI_BARRIER_SYNC,
+    _CHI_BARRIER_ASYNC,
+} ChiBarrier;
+
 typedef struct {
-    ChiColor white, gray, black;
-} ChiColorState;
+    ChiColor   white, gray, black;
+    ChiBarrier barrier : 8;
+} ChiMarkState;
 
 /**
  * Data word
@@ -231,6 +238,7 @@ typedef struct {
     Chili PLOCAL;
     CHI_IF(CHI_TRACEPOINTS_CONT_ENABLED, _Atomic(int32_t) TRACEPOINT;)
     CHI_IF(CHI_FNLOG_ENABLED, bool FNLOG;)
+    uint8_t APPN;
 } ChiAuxRegs;
 
 #include CHI_STRINGIZE(callconv/CHI_CALLCONV.h)
@@ -440,6 +448,18 @@ CHI_EXPORT_CONT_DECL(CHI_PRIVATE(chiPartial2of4))
 CHI_EXPORT_CONT_DECL(CHI_PRIVATE(chiPartial3of4))
 CHI_EXPORT_CONT_DECL(CHI_PRIVATE(chiPartialNofM))
 CHI_EXPORT_CONT_DECL(CHI_PRIVATE(chiProtectEnd))
+
+CHI_LOCAL ChiContFn* const _chiAppTable[] =
+    { CHI_CONT_FN(_chiApp1), CHI_CONT_FN(_chiApp2), CHI_CONT_FN(_chiApp3), CHI_CONT_FN(_chiApp4) };
+CHI_LOCAL const ChiCont _chiOverAppTable[] =
+    { &_chiOverApp1, &_chiOverApp2, &_chiOverApp3, &_chiOverApp4 };
+#define CHI_PARTIAL_TABLE(args, arity, ...)                             \
+    CHI_LOCAL const ChiCont _chiPartialTable##args[CHI_AMAX - args - 1] = \
+        { __VA_ARGS__, [arity - args ... CHI_AMAX - args - 2] = &_chiPartialNofM };
+CHI_PARTIAL_TABLE(1, 4, &_chiPartial1of2, &_chiPartial1of3, &_chiPartial1of4)
+CHI_PARTIAL_TABLE(2, 4, &_chiPartial2of3, &_chiPartial2of4)
+CHI_PARTIAL_TABLE(3, 4, &_chiPartial3of4)
+#undef CHI_PARTIAL_TABLE
 
 CHI_FLAGTYPE(ChiNewFlags,
              CHI_NEW_DEFAULT       = 0,
@@ -658,7 +678,7 @@ CHI_INL CHI_WU ChiColor CHI_PRIVATE(chiObjectColor)(const ChiObject* o) {
     return CHI_WRAP(Color, atomic_load_explicit(&o->color, memory_order_relaxed));
 }
 
-CHI_INL bool CHI_PRIVATE(chiObjectGarbage)(ChiColorState s, ChiObject* obj) {
+CHI_INL bool CHI_PRIVATE(chiObjectGarbage)(ChiMarkState s, ChiObject* obj) {
     uint32_t c = CHI_UN(Color, _chiObjectColor(obj));
     return (c & ~(uint32_t)_CHI_COLOR_SHADED) != CHI_UN(Color, s.white) && c != CHI_UN(Color, s.black);
 }
@@ -667,7 +687,7 @@ CHI_INL bool CHI_PRIVATE(chiObjectGarbage)(ChiColorState s, ChiObject* obj) {
 struct _ChiDebugData {
     uintptr_t ownerMinor, ownerMinorMask;
     uint32_t wid;
-    ChiColorState colorState;
+    ChiMarkState markState;
     bool protect;
 };
 extern CHI_EXPORT _Thread_local struct _ChiDebugData _chiDebugData;
@@ -682,7 +702,7 @@ CHI_INL CHI_WU uint8_t CHI_PRIVATE(chiExpectedObjectOwner)(void) {
     return (uint8_t)(_chiDebugData.wid + 1);
 }
 
-CHI_INL void _chiDebugCheckObjectAlive(ChiColorState s, Chili c) {
+CHI_INL void _chiDebugCheckObjectAlive(ChiMarkState s, Chili c) {
     if (_chiObjectGarbage(s, _chiObjectUnchecked(c)))
         CHI_BUG("Found garbage %C white=%u gray=%u black=%u",
                 c,
@@ -696,7 +716,7 @@ CHI_INL void _chiDebugCheckObject(Chili c) {
     if (_chiGen(c) == CHI_GEN_MAJOR) {
         ChiObject* obj = _chiObjectUnchecked(c);
         if (!_chiDebugData.protect)
-            _chiDebugCheckObjectAlive(_chiDebugData.colorState, c);
+            _chiDebugCheckObjectAlive(_chiDebugData.markState, c);
         if (_chiObjectShared(obj) || _chiObjectOwner(obj) == _chiExpectedObjectOwner())
            return;
     } else if (*(uintptr_t*)((uintptr_t)_chiPtrField(c) & _chiDebugData.ownerMinorMask) == _chiDebugData.ownerMinor) {

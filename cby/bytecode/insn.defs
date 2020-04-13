@@ -1,9 +1,7 @@
-// Load %n fields res[i] <- idxi
-idx1 w8:res r8:var u8:i0 %n=1
-idx2 w8:res r8:var u8:i0 u8:i1 %n=2
-idxl1 w16:res r16:var u16:i0 %n=1
-idxl2 w16:res r16:var u16:i0 u16:i1 %n=2 {
-    res[%i] = chiIdx(var, i%i);
+// Load field res <- var[idx]
+idx w8:res r8:var u8:idx
+idxl w16:res r16:var u16:idx {
+    *res = chiIdx(var, idx);
 }
 
 // Set closure field (used for letrec)

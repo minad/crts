@@ -26,7 +26,7 @@
 static const char* const ffiTypeName[] = { CHI_FOREACH_FFI_TYPE(, _CBY_FFI_TYPE_NAME) };
 #undef _CBY_FFI_TYPE_NAME
 
-CHI_COLD bool cbyDisasm(ChiSink* sink, const CbyCode* codeStart, const CbyCode* codeEnd) {
+bool cbyDisasm(ChiSink* sink, const CbyCode* codeStart, const CbyCode* codeEnd) {
     const CbyCode* init = 0, *IP = codeStart + CBY_MAGIC_SIZE;
     uint32_t constSize = FETCH32;
     IP += constSize;

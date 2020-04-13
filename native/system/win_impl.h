@@ -18,6 +18,7 @@
 #include "interrupt.h"
 
 static HANDLE timer;
+static uint64_t clockScale;
 
 // We use the user defined bit to encode windows errors in errno
 #define CHI_WIN_ERROR (1 << 29)
@@ -35,31 +36,27 @@ static ChiNanos filetimeToNanos(FILETIME f) {
     return chiNanos((((uint64_t)f.dwHighDateTime << 32) | f.dwLowDateTime) * 100);
 }
 
-ChiNanos chiClock(ChiClock c) {
-    if (c == CHI_CLOCK_CPU) {
-        FILETIME creation, exit, system, user;
-        if (!GetProcessTimes(GetCurrentProcess(), &creation, &exit,
-                             &system, &user))
-            winErr("GetProcessTimes");
-        return chiNanosAdd(filetimeToNanos(system), filetimeToNanos(user));
-    }
-    static LARGE_INTEGER freq = { .QuadPart = 0 };
-    if (!freq.QuadPart) {
-        if (!QueryPerformanceFrequency(&freq))
-            winErr("QueryPerformanceFrequency");
-    }
+ChiNanos chiClockCpu(void) {
+    FILETIME creation, exit, system, user;
+    if (!GetProcessTimes(GetCurrentProcess(), &creation, &exit,
+                         &system, &user))
+        winErr("GetProcessTimes");
+    return chiNanosAdd(filetimeToNanos(system), filetimeToNanos(user));
+}
+
+ChiNanos chiClockMonotonicFine(void) {
     LARGE_INTEGER counter;
     if (!QueryPerformanceCounter(&counter))
         winErr("QueryPerformanceCounter");
-    return chiNanos((uint64_t)counter.QuadPart * (UINT64_C(1000000000) / (uint64_t)freq.QuadPart));
+    return chiNanos((uint64_t)counter.QuadPart * clockScale);
 }
 
 ChiNanos chiCondTimedWait(ChiCond* c, ChiMutex* m, ChiNanos ns) {
-    ChiNanos begin = chiClock(CHI_CLOCK_REAL_FINE);
+    ChiNanos begin = chiClockMonotonicFine();
     if (!SleepConditionVariableSRW(CHI_UNP(Cond, c), CHI_UNP(Mutex, m), (DWORD)CHI_UN(Millis, chiNanosToMillis(ns)), 0)
         && GetLastError() != ERROR_TIMEOUT)
         winErr("SleepConditionVariableCS");
-    return chiNanosDelta(chiClock(CHI_CLOCK_REAL_FINE), begin);
+    return chiNanosDelta(chiClockMonotonicFine(), begin);
 }
 
 static WINAPI BOOL ctrlHandler(DWORD type) {
@@ -95,10 +92,18 @@ static void WINAPI timerCallback(void* CHI_UNUSED(param), BOOLEAN CHI_UNUSED(fir
     dispatcherNotify();
 }
 
+static void clockSetup(void) {
+    LARGE_INTEGER freq;
+    if (!QueryPerformanceFrequency(&freq))
+        winErr("QueryPerformanceFrequency");
+    clockScale = UINT64_C(1000000000) / (uint64_t)freq.QuadPart;
+}
+
 void chiSystemSetup(void) {
     CHI_ASSERT_ONCE;
+    clockSetup();
     consoleSetup();
-     if (!CreateTimerQueueTimer(&timer, 0, timerCallback, 0, 0, INFINITE, WT_EXECUTEINTIMERTHREAD))
+    if (!CreateTimerQueueTimer(&timer, 0, timerCallback, 0, 0, INFINITE, WT_EXECUTEINTIMERTHREAD))
         winErr("CreateTimerQueueTimer");
     if (!SetConsoleCtrlHandler(ctrlHandler, TRUE))
         winErr("SetConsoleCtrlHandler");
@@ -164,24 +169,16 @@ void chiVirtFree(void* ptr, size_t CHI_UNUSED(s)) {
 }
 
 uint32_t chiPhysProcessors(void) {
-    static uint32_t cachedProcessors = 0;
-    if (!cachedProcessors) {
-        SYSTEM_INFO info;
-        GetSystemInfo(&info);
-        cachedProcessors = info.dwNumberOfProcessors;
-    }
-    return cachedProcessors;
+    SYSTEM_INFO info;
+    GetSystemInfo(&info);
+    return info.dwNumberOfProcessors;
 }
 
 uint64_t chiPhysMemory(void) {
-    uint64_t physMemory = 0;
-    if (!physMemory) {
-        MEMORYSTATUSEX mem = { .dwLength = sizeof (mem) };
-        if (!GlobalMemoryStatusEx(&mem))
-            winErr("GlobalMemoryStatusEx");
-        physMemory = mem.ullTotalPhys / CHI_MiB(1) * CHI_MiB(1);
-    }
-    return physMemory;
+    MEMORYSTATUSEX mem = { .dwLength = sizeof (mem) };
+    if (!GlobalMemoryStatusEx(&mem))
+        winErr("GlobalMemoryStatusEx");
+    return mem.ullTotalPhys / CHI_MiB(1) * CHI_MiB(1);
 }
 
 bool chiFilePerm(const char* file, int32_t CHI_UNUSED(perm)) {

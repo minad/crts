@@ -32,11 +32,14 @@ CHI_WU CHI_INL bool chiFileTerminal(ChiFile CHI_UNUSED(file)) { return false; }
 CHI_WU CHI_INL bool chiFilePerm(const char* CHI_UNUSED(file), int32_t CHI_UNUSED(mode)) { return false; }
 CHI_INL void chiPager(void) {}
 
-CHI_INL CHI_WU ChiNanos chiClock(ChiClock CHI_UNUSED(c)) {
+CHI_INL CHI_WU ChiNanos chiClockMonotonicFine(void) {
     uint64_t t;
     wasm_clock(&t);
     return (ChiNanos){t};
 }
+
+CHI_INL CHI_WU ChiNanos chiClockMonotonicFast(void) { return chiClockMonotonicFine(); }
+CHI_INL CHI_WU ChiNanos chiClockCpu(void) { return chiClockMonotonicFine(); }
 
 CHI_WU CHI_INL ChiFile chiFileOpen(const char* file) {
     return CHI_WRAP(File, wasm_sink_open(file));

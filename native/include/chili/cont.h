@@ -8,7 +8,6 @@
 // read only registers, since we want to track writes in the code explicitly
 #define HLRW                (_chiReg->hl)
 #define AUX                 (_chiReg->aux)
-#define NA                  ((const uint8_t)NARW)
 #define SL                  ((Chili* const)SLRW)
 #define HL                  ((ChiWord* const)HLRW)
 
@@ -139,67 +138,58 @@
     })
 #define FORCE(t) _CHI_FORCE(CHI_GENSYM, CHI_GENSYM, (t))
 
-#define _CHI_APP(args, args_val)                                \
-    ({                                                          \
-        const size_t args = (args_val);                         \
-        CHI_ASSERT(args < CHI_AMAX);                            \
-        if (args == _chiFnArity(A(0)))                          \
-            JUMP_FN0;                                           \
-        switch (__builtin_constant_p(args_val) ? args : 0) {    \
-        case 1: KNOWN_JUMP(_chiApp1);                           \
-        case 2: KNOWN_JUMP(_chiApp2);                           \
-        case 3: KNOWN_JUMP(_chiApp3);                           \
-        case 4: KNOWN_JUMP(_chiApp4);                           \
-        default: NARW = (uint8_t)args; KNOWN_JUMP(_chiAppN);    \
-        }                                                       \
+#define _CHI_APP(args, args_val)                \
+    ({                                          \
+        const size_t args = (args_val);         \
+        CHI_ASSERT(args < CHI_AMAX);            \
+        if (args == _chiFnArity(A(0)))          \
+            JUMP_FN0;                           \
+        if (args - 1 < CHI_DIM(_chiAppTable))   \
+            JUMP(_chiAppTable[args - 1]);       \
+        AUX.APPN = (uint8_t)args;               \
+        KNOWN_JUMP(_chiAppN);                   \
     })
 #define APP(args) _CHI_APP(CHI_GENSYM, (args))
 
 #define _CHI_OVERAPP(idx, rest, args, arity, args_val, arity_val)       \
     ({                                                                  \
-        const size_t args = (args_val), arity = (arity_val),            \
-            rest = args - arity;                                        \
-        CHI_ASSERT(args > arity);                                       \
-        CHI_ASSUME(rest <= CHI_AMAX);                                   \
+        const size_t args = (args_val), arity = (arity_val), rest = args - arity; \
+        CHI_ASSUME(arity < args);                                       \
+        CHI_ASSUME(rest > 0);                                           \
+        CHI_ASSUME(rest < args);                                        \
         for (size_t idx = 0; idx < rest; ++idx)                         \
             SP[idx] = A(1 + arity + idx);                               \
         SP += rest;                                                     \
-        switch (__builtin_constant_p(args_val) ? rest : 0) {            \
-        case 1: *SP++ = chiFromCont(&_chiOverApp1); break;              \
-        case 2: *SP++ = chiFromCont(&_chiOverApp2); break;              \
-        case 3: *SP++ = chiFromCont(&_chiOverApp3); break;              \
-        case 4: *SP++ = chiFromCont(&_chiOverApp4); break;              \
-        default:                                                        \
+        if ((__builtin_constant_p(args_val) ? args - 2 : rest - 1) < CHI_DIM(_chiOverAppTable)) { \
+            *SP++ = chiFromCont(_chiOverAppTable[rest - 1]);            \
+        } else {                                                        \
             *SP++ = _chiFromUnboxed(rest + 2);                          \
             *SP++ = chiFromCont(&_chiOverAppN);                         \
-            break;                                                      \
         }                                                               \
     })
 
 #define KNOWN_OVERAPP(f, args, arity) ({ _CHI_OVERAPP(CHI_GENSYM, CHI_GENSYM, CHI_GENSYM, CHI_GENSYM, (args), (arity)); KNOWN_JUMP(f); })
 #define OVERAPP(args, arity)          ({ _CHI_OVERAPP(CHI_GENSYM, CHI_GENSYM, CHI_GENSYM, CHI_GENSYM, (args), (arity)); JUMP_FN0; })
 
-#define _CHI_PARTIAL(idx, clos, args, arity, args_val, arity_val)       \
+#define _CHI_PARTIAL(idx, cont, clos, args, arity, args_val, arity_val) \
     ({                                                                  \
         const size_t args = (args_val), arity = (arity_val);            \
         CHI_ASSERT(args < arity);                                       \
         CHI_ASSUME(args <= CHI_AMAX);                                   \
+        ChiCont cont;                                                   \
+        switch (__builtin_constant_p(args_val) ? args : 0) {            \
+        case 1: cont = _chiPartialTable1[arity - 2]; break;             \
+        case 2: cont = _chiPartialTable2[arity - 3]; break;             \
+        case 3: cont = _chiPartialTable3[arity - 4]; break;             \
+        default: cont = &_chiPartialNofM; break;                        \
+        }                                                               \
         NEW(clos, CHI_FN(arity - args), args + 2);                      \
-        NEW_INIT(clos, 0,                                               \
-                 chiFromCont(__builtin_constant_p(args_val) ?           \
-                             (args == 1 && arity == 2 ? &_chiPartial1of2 : \
-                              args == 1 && arity == 3 ? &_chiPartial1of3 : \
-                              args == 1 && arity == 4 ? &_chiPartial1of4 : \
-                              args == 2 && arity == 3 ? &_chiPartial2of3 : \
-                              args == 2 && arity == 4 ? &_chiPartial2of4 : \
-                              args == 3 && arity == 4 ? &_chiPartial3of4 : \
-                              &_chiPartialNofM) :                       \
-                             &_chiPartialNofM));                        \
+        NEW_INIT(clos, 0, chiFromCont(cont));                           \
         for (size_t idx = 0; idx <= args; ++idx)                        \
             NEW_INIT(clos, idx + 1, A(idx));                            \
         RET(clos);                                                      \
     })
-#define PARTIAL(args, arity) _CHI_PARTIAL(CHI_GENSYM, CHI_GENSYM, CHI_GENSYM, CHI_GENSYM, (args), (arity))
+#define PARTIAL(args, arity) _CHI_PARTIAL(CHI_GENSYM, CHI_GENSYM, CHI_GENSYM, CHI_GENSYM, CHI_GENSYM, (args), (arity))
 
 #ifdef CHI_DYNLIB
 

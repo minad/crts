@@ -24,11 +24,11 @@
 #endif
 
 #if defined(CLOCK_MONOTONIC_COARSE)
-#  define _CHI_CLOCK_REAL_FAST CLOCK_MONOTONIC_COARSE
+#  define CHI_CLOCK_MONOTONIC_FAST CLOCK_MONOTONIC_COARSE
 #elif defined(CLOCK_MONOTONIC_FAST)
-#  define _CHI_CLOCK_REAL_FAST CLOCK_MONOTONIC_FAST
+#  define CHI_CLOCK_MONOTONIC_FAST CLOCK_MONOTONIC_FAST
 #else
-#  define _CHI_CLOCK_REAL_FAST CLOCK_MONOTONIC
+#  define CHI_CLOCK_MONOTONIC_FAST CLOCK_MONOTONIC
 #endif
 
 static ChiTask dispatcherTask;
@@ -81,13 +81,11 @@ static void blockSignals(void) {
     setSigMask(SIG_SETMASK, &block);
 }
 
-static long cachedSysconf(int c, long* n) {
-    if (!*n) {
-        *n = sysconf(c);
-        if (*n <= 0)
-            chiSysErr("sysconf");
-    }
-    return *n;
+static long sysconf_err(int c) {
+    long n = sysconf(c);
+    if (n <= 0)
+        chiSysErr("sysconf");
+    return n;
 }
 
 #ifdef __linux__
@@ -118,17 +116,16 @@ static ChiNanos getClock(clockid_t clock) {
     return timespecToNanos(ts);
 }
 
-static clockid_t clockId(ChiClock c) {
-    switch (c) {
-    case CHI_CLOCK_REAL_FINE: return CLOCK_MONOTONIC;
-    case CHI_CLOCK_REAL_FAST: return _CHI_CLOCK_REAL_FAST;
-    case CHI_CLOCK_CPU: return CLOCK_PROCESS_CPUTIME_ID;
-    }
-    CHI_BUG("Invalid clock id");
+ChiNanos chiClockMonotonicFine(void) {
+    return getClock(CLOCK_MONOTONIC);
 }
 
-ChiNanos chiClock(ChiClock c) {
-    return getClock(clockId(c));
+ChiNanos chiClockMonotonicFast(void) {
+    return getClock(CHI_CLOCK_MONOTONIC_FAST);
+}
+
+ChiNanos chiClockCpu(void) {
+    return getClock(CLOCK_PROCESS_CPUTIME_ID);
 }
 
 ChiNanos chiCondTimedWait(ChiCond* c, ChiMutex* m, ChiNanos ns) {
@@ -257,14 +254,12 @@ void chiVirtFree(void* p, size_t s) {
 }
 
 uint32_t chiPhysProcessors(void) {
-    static long nprocessors_onln = 0;
-    return (uint32_t)cachedSysconf(_SC_NPROCESSORS_ONLN, &nprocessors_onln);
+    return (uint32_t)sysconf_err(_SC_NPROCESSORS_ONLN);
 }
 
 uint64_t chiPhysMemory(void) {
-    static long phys_pages = 0, pagesize = 0;
-    return ((uint64_t)cachedSysconf(_SC_PHYS_PAGES, &phys_pages) *
-            (uint64_t)cachedSysconf(_SC_PAGESIZE, &pagesize)) / CHI_MiB(1) * CHI_MiB(1);
+    return ((uint64_t)sysconf_err(_SC_PHYS_PAGES) *
+            (uint64_t)sysconf_err(_SC_PAGESIZE)) / CHI_MiB(1) * CHI_MiB(1);
 }
 
 bool chiFilePerm(const char* file, int32_t perm) {

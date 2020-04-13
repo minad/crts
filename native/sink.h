@@ -46,11 +46,11 @@ typedef struct {
 
 #define chiStdout (&_chiStdout.base)
 #define chiStderr (&_chiStderr.base)
-#define chiSinkNull (&_chiSinkNull)
+#define chiSinkNull CHI_CONST_CAST(&_chiSinkNull, ChiSink*)
 
 CHI_EXTERN _ChiSinkProxy _chiStdout;
 CHI_EXTERN _ChiSinkFile _chiStderr;
-CHI_EXTERN ChiSink _chiSinkNull;
+CHI_EXTERN const ChiSink _chiSinkNull;
 
 CHI_INTERN ChiSink* chiSinkColor(ChiSinkColor);
 CHI_INTERN ChiSink* chiSinkMemInit(ChiSinkMem*, void*, size_t);

@@ -68,12 +68,12 @@ CHI_INL CHI_WU bool chiFrameIdentical(const Chili* p, const Chili* q) {
     return chiIdentical(*p, *q);
 }
 
-CHI_INL CHI_WU uint32_t chiFrameArgs(const Chili* p, Chili regA0, uint8_t regNA) {
-    ChiContInfo* info = chiFrameInfo(p);
+CHI_INL CHI_WU uint32_t chiContArgs(ChiCont c, Chili regA0, uint8_t regAPPN) {
+    ChiContInfo* info = chiContInfo(c);
     uint8_t na = info->na;
     if (na == CHI_VAARGS) {
         if (info->type == CHI_FRAME_APPN)
-            return regNA;
+            return regAPPN;
         return chiFnOrThunkArity(regA0);
     }
     return na;

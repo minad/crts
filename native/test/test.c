@@ -41,12 +41,12 @@ STATIC_CONT(runBench) {
     BenchState state = { .run = 0 };
     chiRandInit(state.rand, randSeed);
 
-    const ChiNanos begin = chiClock(CHI_CLOCK_REAL_FINE);
+    const ChiNanos begin = chiClockMonotonicFine();
     while (state.run < b->runs) {
         b->fn(&state);
         ++state.run;
     }
-    const ChiNanos delta = chiNanosDelta(chiClock(CHI_CLOCK_REAL_FINE), begin);
+    const ChiNanos delta = chiNanosDelta(chiClockMonotonicFine(), begin);
     chiSinkFmt(chiStdout, " │ %8t %8t/run", delta, chiNanos(CHI_UN(Nanos, delta) / b->runs));
     if (i % REPEAT == REPEAT - 1)
         chiSinkPutc(chiStdout, '\n');
@@ -94,7 +94,7 @@ CONT(z_Main) {
         const char* end = rt->argv[1] + 5;
         CHI_IGNORE_RESULT(chiReadUInt64(&randSeed, &end));
     } else {
-        randSeed = CHI_UN(Nanos, chiClock(CHI_CLOCK_REAL_FINE));
+        randSeed = CHI_UN(Nanos, chiClockMonotonicFine());
     }
     chiSinkFmt(chiStdout, "*** Running test suite with TEST_SEED=%ju ***\n", randSeed);
 

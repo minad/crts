@@ -12,12 +12,6 @@ enum {
     CHI_EXIT_FATAL   = 2,
 };
 
-typedef enum {
-    CHI_CLOCK_CPU,
-    CHI_CLOCK_REAL_FINE,
-    CHI_CLOCK_REAL_FAST,
-} ChiClock;
-
 typedef struct {
     ChiNanos real, cpu;
 } ChiTime;
@@ -63,7 +57,7 @@ CHI_DEFINE_AUTO_LOCK(ChiMutex, chiMutexLock, chiMutexUnlock)
 #define CHI_LOCK_MUTEX(m) CHI_AUTO_LOCK(ChiMutex, m)
 
 CHI_INL ChiTime chiTime(void) {
-    return (ChiTime){ .real = chiClock(CHI_CLOCK_REAL_FINE), .cpu = chiClock(CHI_CLOCK_CPU) };
+    return (ChiTime){ .real = chiClockMonotonicFine(), .cpu = chiClockCpu() };
 }
 
 CHI_INL ChiTime chiTimeDelta(ChiTime a, ChiTime b) {

@@ -17,7 +17,7 @@ typedef struct {
     ChiTimeout*   timeout;
     uint32_t      depth;
     bool          collapse;
-    ChiColorState colorState;
+    ChiMarkState markState;
     CHI_IF(CHI_COUNT_ENABLED, ChiScanStats stats;)
 } MarkState;
 
@@ -27,18 +27,18 @@ CHI_INL bool _mark(MarkState* state, Chili c, Chili* collapsed, MarkFlags flags)
     if (chiUnboxed(c) || chiGen(c) != CHI_GEN_MAJOR)
         return false;
 
-    CHI_CHECK_OBJECT_ALIVE(state->colorState, c);
+    CHI_CHECK_OBJECT_ALIVE(state->markState, c);
     ChiType type = chiType(c);
     ChiObject* obj = chiObjectUnchecked(c);
 
     if (chiRaw(type)) {
-        chiObjectSetColor(obj, state->colorState.black);
+        chiObjectSetColor(obj, state->markState.black);
         return false;
     }
 
     ChiColor color = chiObjectColor(obj);
-    if (chiColorEq(color, state->colorState.white)) {
-        chiObjectSetColor(obj, state->colorState.gray);
+    if (chiColorEq(color, state->markState.white)) {
+        chiObjectSetColor(obj, state->markState.gray);
         if ((flags & MARK_RECURSIVE) && state->depth > 0 && chiTimeoutTick(state->timeout)) {
             --state->depth;
             scan(state, c);
@@ -90,7 +90,7 @@ CHI_INL void mark(MarkState* state, Chili* p, MarkFlags flags) {
 }
 
 static void scanStack(MarkState* state, Chili c) {
-    CHI_CHECK_OBJECT_ALIVE(state->colorState, c);
+    CHI_CHECK_OBJECT_ALIVE(state->markState, c);
     ChiObject* obj = chiObjectUnchecked(c);
     /* If we fail to lock the stack, the stack scanning
      * is taken care of by the mutator in chiStackActivate
@@ -98,8 +98,8 @@ static void scanStack(MarkState* state, Chili c) {
      */
     if (chiObjectTryLock(obj)) {
         ChiColor color = chiObjectColor(obj);
-        if (!chiColorEq(color, state->colorState.black)) {
-            chiObjectSetColor(obj, state->colorState.black);
+        if (!chiColorEq(color, state->markState.black)) {
+            chiObjectSetColor(obj, state->markState.black);
             ChiStack* stack = (ChiStack*)obj->payload;
             // mark non recursively since we don't want to keep the stack locked for long
             for (Chili* p = stack->base; p < stack->sp; ++p)
@@ -146,12 +146,12 @@ static void scan(MarkState* state, Chili c) {
     CHI_ASSERT(!chiRaw(chiType(c)));
     CHI_ASSERT(chiGen(c) == CHI_GEN_MAJOR);
 
-    CHI_CHECK_OBJECT_ALIVE(state->colorState, c);
+    CHI_CHECK_OBJECT_ALIVE(state->markState, c);
     ChiObject* obj = chiObjectUnchecked(c);
     ChiColor color = chiObjectColor(obj);
-    if (!chiColorEq(color, state->colorState.gray))
+    if (!chiColorEq(color, state->markState.gray))
         return;
-    chiObjectSetColor(obj, state->colorState.black);
+    chiObjectSetColor(obj, state->markState.black);
 
     switch (chiType(c)) {
     case CHI_ARRAY: scanArray(state, obj); break;
@@ -163,13 +163,13 @@ static void scan(MarkState* state, Chili c) {
     }
 }
 
-void chiMarkSlice(ChiGrayVec* gray, uint32_t depth, bool collapse, ChiColorState colorState,
+void chiMarkSlice(ChiGrayVec* gray, uint32_t depth, bool collapse, ChiMarkState markState,
                   ChiScanStats* stats, ChiTimeout* timeout) {
     MarkState state =
         { .timeout = timeout,
           .depth = depth,
           .collapse = collapse,
-          .colorState = colorState,
+          .markState = markState,
         };
     chiBlockVecInit(&state.gray, gray->vec.manager);
     chiBlockVecJoin(&state.gray, &gray->vec);

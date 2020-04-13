@@ -20,7 +20,6 @@
         CHI_ASSERT(SL == getStackLimit(AUX.THREAD));                        \
         CHI_ASSERT(HP >= chiLocalHeapBumpBase(&CHI_CURRENT_PROCESSOR->heap)); \
         CHI_ASSERT(HP <= chiLocalHeapBumpLimit(&CHI_CURRENT_PROCESSOR->heap)); \
-        CHI_ASSERT(NA < CHI_AMAX);                                      \
         chiStackDebugWalk(AUX.THREAD, SP, SL);                          \
     })
 
@@ -140,8 +139,9 @@ INTERN_CONT(chiRestoreCont, .type = CHI_FRAME_RESTORE, .size = CHI_VASIZE) {
     size_t size = (size_t)chiToUnboxed(SP[-2]);
     SP -= size;
 
-    NARW = (uint8_t)(size - 4);
-    for (size_t i = 0; i <= NA; ++i)
+    size -= 4;
+    AUX.APPN = (uint8_t)size;
+    for (size_t i = 0; i <= size; ++i)
         A(i) = SP[i + 1];
 
     JUMP_FN(SP[0]);
@@ -270,7 +270,7 @@ CONT(chiProtectEnd) {
 
 #if !CHI_SYSTEM_HAS_INTERRUPT
 static void pollTick(ChiProcessor* proc) {
-    ChiNanos time = chiClock(CHI_CLOCK_REAL_FAST);
+    ChiNanos time = chiClockMonotonicFine();
     if (chiNanosLess(proc->trigger.lastTick, time)) {
         chiTrigger(&proc->trigger.interrupt, true);
         chiTrigger(&proc->trigger.tick, true);
@@ -326,7 +326,7 @@ CONT(chiInterrupt, .na = CHI_VAARGS) {
 
     // Ensure that there is enough stack space for restore frame
     // restore frame: cont, a0, ..., a[na], size, chiRestoreCont
-    uint32_t na = chiFrameArgs(SP, A(0), NA);
+    uint32_t na = chiContArgs(chiToCont(*SP), A(0), AUX.APPN);
     newSL = CHI_MAX(newSL, SP + na + 4);
 
     if (newSL != getStackLimit(proc->thread) && // resize requested
@@ -588,77 +588,25 @@ _Noreturn void chiProcessorEnter(ChiProcessor* proc) {
     FIRST_JUMP(returnUnit);
 }
 
-CONT(chiOverAppN, .size = CHI_VASIZE) {
-    PROLOGUE_INVARIANTS(chiOverAppN);
+#define APP_BODY(args, arity)                           \
+    CHI_ASSERT(arity < CHI_AMAX);                       \
+    if (args < arity) {                                 \
+        /*LIMITS(.heap=args + 2);*/                     \
+        LIMITS(.heap=CHI_AMAX + 2);                     \
+        PARTIAL(args, arity);                           \
+    }                                                   \
+    if ((__builtin_constant_p(args) ? args : 2) > 1 && args > arity) {  \
+        /*LIMITS(.stack=args - arity + 2);*/            \
+        LIMITS(.stack=CHI_AMAX + 2);                    \
+        OVERAPP(args, arity);                           \
+    }                                                   \
+    JUMP_FN0
 
-    const size_t rest = (size_t)chiToUnboxed(SP[-2]) - 2;
-    SP -= rest + 2;
-
-    CHI_ASSUME(rest <= CHI_AMAX);
-    for (size_t i = 0; i < rest; ++i)
-        A(i + 1) = SP[i];
-
-    APP(rest);
-}
-
-CONT(chiPartialNofM, .na = CHI_VAARGS) {
-    PROLOGUE_INVARIANTS(chiPartialNofM);
-
-    Chili clos = A(0);
-    const size_t arity = chiFnArity(clos), args = chiSize(clos) - 2;
-
-    CHI_ASSUME(arity <= CHI_AMAX);
-    for (size_t i = arity; i > 0; --i)
-        A(args + i) = A(i);
-
-    CHI_ASSUME(args <= CHI_AMAX - 1);
-    for (size_t i = 0; i <= args; ++i)
-        A(i) = chiIdx(clos, i + 1);
-
-    JUMP_FN0;
-}
-
-CONT(chiAppN, .type = CHI_FRAME_APPN, .na = CHI_VAARGS) {
-    PROLOGUE_INVARIANTS(chiAppN);
-
-    const size_t arity = chiFnArity(A(0));
-    CHI_ASSERT(arity < CHI_AMAX);
-
-    if (NA < arity) {
-        //LIMITS(.heap=(size_t)NA + 2);
-        LIMITS(.heap=CHI_AMAX + 2);
-        PARTIAL(NA, arity);
-    }
-
-    if (NA > arity) {
-        //LIMITS(.stack=(size_t)NA - arity + 2);
-        LIMITS(.stack=CHI_AMAX + 2);
-        OVERAPP(NA, arity);
-    }
-
-    JUMP_FN0;
-}
-
-#define DEFINE_APP(a)                                   \
-    CONT(chiApp##a, .na = a) {                         \
-        PROLOGUE_INVARIANTS(chiApp##a);                 \
-                                                        \
+#define DEFINE_APP(args)                                \
+    CONT(chiApp##args, .na = args) {                    \
+        PROLOGUE_INVARIANTS(chiApp##args);              \
         const size_t arity = chiFnArity(A(0));          \
-        CHI_ASSERT(arity < CHI_AMAX);                   \
-                                                        \
-        if (a < arity) {                                \
-            /*LIMITS(.heap=a + 2);*/                    \
-            LIMITS(.heap=CHI_AMAX + 2);                 \
-            PARTIAL(a, arity);                          \
-        }                                               \
-                                                        \
-        if (a > arity) {                                \
-            /*LIMITS(.stack=a - arity + 2);*/           \
-            LIMITS(.stack=CHI_AMAX + 2);                \
-            OVERAPP(a, arity);                          \
-        }                                               \
-                                                        \
-        JUMP_FN0;                                       \
+        APP_BODY(args, arity);                          \
     }
 
 DEFINE_APP(1)
@@ -666,20 +614,55 @@ DEFINE_APP(2)
 DEFINE_APP(3)
 DEFINE_APP(4)
 
+CONT(chiAppN, .type = CHI_FRAME_APPN, .na = CHI_VAARGS) {
+    PROLOGUE_INVARIANTS(chiAppN);
+    const size_t args = AUX.APPN, arity = chiFnArity(A(0));
+    CHI_ASSERT(args < CHI_AMAX);
+    APP_BODY(args, arity);
+}
+
+#define OVERAPP_BODY(rest)                      \
+    CHI_ASSUME(rest <= CHI_AMAX);               \
+    for (size_t i = 0; i < rest; ++i)           \
+        A(i + 1) = SP[i];                       \
+    APP(rest)
+
+#define DEFINE_OVERAPP(rest)                    \
+    CONT(chiOverApp##rest, .size = rest + 1) {  \
+        PROLOGUE_INVARIANTS(chiOverApp##rest);  \
+        SP -= rest + 1;                         \
+        OVERAPP_BODY(rest);                     \
+    }
+
+DEFINE_OVERAPP(1)
+DEFINE_OVERAPP(2)
+DEFINE_OVERAPP(3)
+DEFINE_OVERAPP(4)
+
+CONT(chiOverAppN, .size = CHI_VASIZE) {
+    PROLOGUE_INVARIANTS(chiOverAppN);
+    const size_t rest = (size_t)chiToUnboxed(SP[-2]) - 2;
+    SP -= rest + 2;
+    OVERAPP_BODY(rest);
+}
+
+#define PARTIAL_BODY(args, delta)               \
+    CHI_ASSERT(chiFnArity(clos) == delta);      \
+    CHI_ASSERT(chiSize(clos) - 2 == args);      \
+    CHI_ASSUME(delta <= CHI_AMAX);              \
+    for (size_t i = delta; i > 0; --i)          \
+        A(args + i) = A(i);                     \
+    CHI_ASSUME(args <= CHI_AMAX - 1);           \
+    for (size_t i = 0; i <= args; ++i)          \
+        A(i) = chiIdx(clos, i + 1);             \
+    JUMP_FN0
+
 #define DEFINE_PARTIAL(args, arity)                             \
     CONT(chiPartial##args##of##arity, .na = arity - args) {     \
         PROLOGUE_INVARIANTS(chiPartial##args##of##arity);       \
-        Chili clos = A(0);                                      \
-        CHI_ASSERT(chiFnArity(clos) == arity - args);           \
-        CHI_ASSERT(chiSize(clos) - 2 == args);                  \
-                                                                \
-        for (size_t i = arity - args; i > 0; --i)               \
-            A(args + i) = A(i);                                 \
-                                                                \
-        for (size_t i = 0; i < args + 1; ++i)                   \
-            A(i) = chiIdx(clos, i + 1);                         \
-                                                                \
-        JUMP_FN0;                                               \
+        const Chili clos = A(0);                                \
+        const size_t delta = arity - args;                      \
+        PARTIAL_BODY(args, delta);                              \
     }
 
 DEFINE_PARTIAL(1, 2)
@@ -689,20 +672,9 @@ DEFINE_PARTIAL(2, 3)
 DEFINE_PARTIAL(2, 4)
 DEFINE_PARTIAL(3, 4)
 
-#define DEFINE_OVERAPP(rest)                    \
-    CONT(chiOverApp##rest, .size = rest + 1) {  \
-        PROLOGUE_INVARIANTS(chiOverApp##rest);  \
-                                                \
-        SP -= rest + 1;                         \
-                                                \
-        CHI_ASSUME(rest <= CHI_AMAX);           \
-        for (size_t i = 0; i < rest; ++i)       \
-            A(i + 1) = SP[i];                   \
-                                                \
-        APP(rest);                              \
-    }
-
-DEFINE_OVERAPP(1)
-DEFINE_OVERAPP(2)
-DEFINE_OVERAPP(3)
-DEFINE_OVERAPP(4)
+CONT(chiPartialNofM, .na = CHI_VAARGS) {
+    PROLOGUE_INVARIANTS(chiPartialNofM);
+    const Chili clos = A(0);
+    const size_t args = chiSize(clos) - 2, delta = chiFnArity(clos);
+    PARTIAL_BODY(args, delta);
+}

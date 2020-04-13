@@ -15,7 +15,7 @@ static void stackInitCanary(Chili c) {
     }
 }
 
-CHI_COLD static Chili stackTraceElement(ChiProcessor* proc, const ChiLocInfo* loc) {
+static Chili stackTraceElement(ChiProcessor* proc, const ChiLocInfo* loc) {
     return chiNewTuple(proc,
                        chiStringNew(proc, loc->file),
                        chiStringNew(proc, loc->fn),
@@ -97,7 +97,7 @@ Chili chiStackTryResize(ChiProcessor* proc, Chili* sp, Chili* newLimit) {
     return newStackObj;
 }
 
-CHI_COLD void chiStackDump(ChiSink* sink, ChiProcessor* proc, Chili* sp) {
+void chiStackDump(ChiSink* sink, ChiProcessor* proc, Chili* sp) {
     const ChiRuntimeOption* opt = &proc->rt->option;
     ChiStack* stack = chiToStack(chiThreadStack(proc->thread));
     ChiStackWalk w = chiStackWalkInit(stack, sp, opt->stack.trace, opt->stack.traceCycles);
@@ -123,7 +123,7 @@ static uint32_t stackDepth(ChiStack* stack, Chili* sp, uint32_t max, bool cycles
     return w.depth;
 }
 
-CHI_COLD Chili chiStackGetTrace(ChiProcessor* proc, Chili* sp) {
+Chili chiStackGetTrace(ChiProcessor* proc, Chili* sp) {
     const ChiRuntimeOption* opt = &proc->rt->option;
     if (!opt->stack.trace)
         return CHI_FALSE;
@@ -239,10 +239,10 @@ static void migrateStack(ChiProcessor* CHI_UNUSED(proc), Chili CHI_UNUSED(stack)
 #endif
 
 static bool scanActivatedStack(ChiLocalGC* gc, ChiObject* obj) {
-    if (gc->phase != CHI_GC_ASYNC ||
-        chiColorEq(chiObjectColor(obj), gc->colorState.black))
+    if (atomic_load_explicit(&gc->phase, memory_order_relaxed) != CHI_GC_ASYNC ||
+        chiColorEq(chiObjectColor(obj), gc->markState.black))
         return false;
-    chiObjectSetColor(obj, gc->colorState.black);
+    chiObjectSetColor(obj, gc->markState.black);
     ChiStack* stack = (ChiStack*)obj->payload;
     for (Chili* p = stack->base; p < stack->sp; ++p)
         chiGrayMarkUnboxed(gc, *p);

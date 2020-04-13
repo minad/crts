@@ -40,14 +40,12 @@ CHI_INL void _chiBarrierDirty(ChiProcessor* proc, Chili dst, Chili val) {
     }
 }
 
-CHI_INL void _chiBarrierMark(ChiProcessor* proc, Chili old, Chili val) {
-    ChiLocalGC* gc = &proc->gc;
-    if (gc->barrier) {
-        chiGrayMarkUnboxed(gc, old);
-        if (gc->barrier == CHI_BARRIER_SYNC)
-            chiGrayMarkUnboxed(gc, val);
-    }
-}
+// Must be a macro, since old value must not be fetched if barrier is disabled
+#define _CHI_BARRIER_MARK(proc, old, val)                       \
+    ({                                                          \
+        if (CHI_UNLIKELY((proc)->gc.markState.barrier))         \
+            chiGrayMarkBarrier(&(proc)->gc, (old), (val));      \
+    })
 
 CHI_INL void chiFieldWriteMajor(ChiProcessor* proc, Chili dst, ChiField* field, Chili val) {
     CHI_ASSERT(_chiBarrierMutable(chiType(dst)));
@@ -55,7 +53,7 @@ CHI_INL void chiFieldWriteMajor(ChiProcessor* proc, Chili dst, ChiField* field, 
     CHI_ASSERT(chiGen(dst) == CHI_GEN_MAJOR);
 
     if (!chiUnboxed(val)) {
-        if (chiObjectShared(chiObject(dst))) {
+        if (CHI_UNLIKELY(chiObjectShared(chiObject(dst)))) {
             CHI_ASSERT(!chiObjectDirty(chiObject(dst)));
             chiPromoteShared(proc, &val);
         } else {
@@ -63,7 +61,7 @@ CHI_INL void chiFieldWriteMajor(ChiProcessor* proc, Chili dst, ChiField* field, 
         }
     }
 
-    _chiBarrierMark(proc, chiFieldRead(field), val);
+    _CHI_BARRIER_MARK(proc, chiFieldRead(field), val);
     chiAtomicWrite(field, val);
 }
 
@@ -81,19 +79,19 @@ CHI_INL bool chiFieldCasMajor(ChiProcessor* proc, Chili dst, ChiField* field, Ch
     CHI_ASSERT(_chiBarrierMutable(chiType(dst)));
     CHI_ASSERT(chiGen(dst) == CHI_GEN_MAJOR);
 
-    if (chiObjectShared(chiObject(dst))) {
+    if (CHI_UNLIKELY(chiObjectShared(chiObject(dst)))) {
         CHI_ASSERT(!chiObjectDirty(chiObject(dst)));
         if (!chiUnboxed(val))
             chiPromoteShared(proc, &val);
 
-        _chiBarrierMark(proc, old, val);
+        _CHI_BARRIER_MARK(proc, old, val);
         return chiAtomicCas(field, old, val);
     }
 
     if (chiIdentical(chiFieldRead(field), old)) {
         if (!chiUnboxed(val))
             _chiBarrierDirty(proc, dst, val);
-        _chiBarrierMark(proc, old, val);
+        _CHI_BARRIER_MARK(proc, old, val);
         chiAtomicWrite(field, val);
         return true;
     }

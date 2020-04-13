@@ -6,32 +6,32 @@
 #include "timeout.h"
 #include "tracepoint.h"
 
-static void markSlice(ChiWorker* worker, ChiGrayVec* gray, ChiColorState colorState, ChiTimeout* timeout) {
+static void markSlice(ChiWorker* worker, ChiGrayVec* gray, ChiMarkState markState, ChiTimeout* timeout) {
     chiEvent0(worker, GC_MARK_SLICE_BEGIN);
 
     ChiScanStats stats;
     const ChiRuntimeOption* opt = &worker->rt->option;
-    chiMarkSlice(gray, opt->heap.scanDepth, !opt->gc.major.noCollapse, colorState, &stats, timeout);
+    chiMarkSlice(gray, opt->heap.scanDepth, !opt->gc.major.noCollapse, markState, &stats, timeout);
 
     CHI_TTW(worker, .name = "runtime;gc;mark");
     chiEventStruct(worker, GC_MARK_SLICE_END, &stats);
 }
 
-static void sweepSlice(ChiWorker* worker, ChiColorState colorState, ChiTimeout* timeout) {
+static void sweepSlice(ChiWorker* worker, ChiMarkState markState, ChiTimeout* timeout) {
     chiEvent0(worker, GC_SWEEP_SLICE_BEGIN);
     ChiSweepStats stats;
-    chiSweepSlice(&worker->rt->heap, &worker->rt->gc, colorState, &stats, timeout);
+    chiSweepSlice(&worker->rt->heap, &worker->rt->gc, markState, &stats, timeout);
     chiEventStruct(worker, GC_SWEEP_SLICE_END, &stats);
     CHI_TTW(worker, .name = "runtime;gc;sweep");
 }
 
-static void gcSlice(ChiWorker* worker, ChiGrayVec* gray, ChiColorState colorState, ChiMicros slice) {
+static void gcSlice(ChiWorker* worker, ChiGrayVec* gray, ChiMarkState markState, ChiMicros slice) {
     ChiTimeout timeout;
     chiTimeoutStart(&timeout, slice);
     if (chiTriggered(&worker->rt->gc.sweep.needed))
-        sweepSlice(worker, colorState, &timeout);
+        sweepSlice(worker, markState, &timeout);
     if (chiTimeoutTick(&timeout) && atomic_load_explicit(&worker->rt->gc.phase, memory_order_relaxed) == CHI_GC_ASYNC && !chiGrayNull(gray))
-        markSlice(worker, gray, colorState, &timeout);
+        markSlice(worker, gray, markState, &timeout);
     chiTimeoutStop(&timeout);
 }
 
@@ -50,7 +50,7 @@ struct ChiGCWorker_ {
     ChiTimeout     timeout;
     ChiGrayVec     gray;
     GCWorkerStatus status;
-    ChiColorState  colorState;
+    ChiMarkState  markState;
 };
 
 static bool gcWorkerSync(ChiGCWorker* w) {
@@ -64,7 +64,7 @@ static bool gcWorkerSync(ChiGCWorker* w) {
             return false;
 
         if (w->status == WORKER_EPOCH) {
-            chiColorStateEpoch(&w->colorState);
+            chiMarkStateEpoch(&w->markState);
             w->status = WORKER_RUN;
         }
 
@@ -86,13 +86,13 @@ CHI_TASK(gcWorkerRun, arg) {
     chiWorkerBegin(&worker, w->rt, "gc");
     while (gcWorkerSync(w)) {
         CHI_TTW(&worker, .name = "runtime;suspend");
-        gcSlice(&worker, &w->gray, w->colorState, CHI_TIMEOUT_INFINITE);
+        gcSlice(&worker, &w->gray, w->markState, CHI_TIMEOUT_INFINITE);
     }
     chiWorkerEnd(&worker);
     return 0;
 }
 
-static void gcWorkerStart(ChiRuntime* rt, ChiColorState colorState) {
+static void gcWorkerStart(ChiRuntime* rt, ChiMarkState markState) {
     ChiGC* gc = &rt->gc;
     CHI_LOCK_MUTEX(&gc->mutex);
     uint32_t numWorker = rt->option.gc.major.worker;
@@ -103,7 +103,7 @@ static void gcWorkerStart(ChiRuntime* rt, ChiColorState colorState) {
         w->rt = rt;
         chiCondInit(&w->cond);
         chiGrayInit(&w->gray, &gc->gray.manager);
-        w->colorState = colorState;
+        w->markState = markState;
         w->task = chiTaskTryCreate(gcWorkerRun, w);
         if (chiTaskNull(w->task))
             break;
@@ -181,7 +181,7 @@ static void gcWorkerGrayPush(ChiRuntime* rt, ChiGrayVec* gray) {
     chiEvent0(rt, GC_NOTIFY);
 }
 #else
-static void gcWorkerStart(ChiRuntime* CHI_UNUSED(rt), ChiColorState CHI_UNUSED(colorState)) {}
+static void gcWorkerStart(ChiRuntime* CHI_UNUSED(rt), ChiMarkState CHI_UNUSED(markState)) {}
 static void gcWorkerDestroy(ChiRuntime* CHI_UNUSED(rt)) {}
 static void gcWorkerEpochSync(ChiRuntime* CHI_UNUSED(rt)) {}
 static bool gcWorkerEpochAck(ChiRuntime* CHI_UNUSED(rt)) { return true; }
@@ -325,7 +325,7 @@ static void gcControl(ChiProcessor* proc) {
     case CHI_GC_SYNC2:
         if (gcGlobalTransition(proc, CHI_GC_SYNC2, CHI_GC_ASYNC)) {
             chiEvent0(rt, GC_MARK_PHASE_BEGIN);
-            gcWorkerStart(rt, proc->gc.colorState);
+            gcWorkerStart(rt, proc->gc.markState);
         }
         break;
     case CHI_GC_ASYNC:
@@ -383,7 +383,7 @@ static void gcIncSlice(ChiProcessor* proc) {
         CHI_LOCK_MUTEX(&gc->mutex);
         chiGrayJoin(&lgc->gray, &gc->gray.vec);
     }
-    gcSlice(proc->worker, &lgc->gray, lgc->colorState, rt->option.gc.major.slice);
+    gcSlice(proc->worker, &lgc->gray, lgc->markState, rt->option.gc.major.slice);
 }
 
 static void gcHandshake(ChiProcessor* proc) {
@@ -394,26 +394,27 @@ static void gcHandshake(ChiProcessor* proc) {
     switch (atomic_load_explicit(&rt->gc.phase, memory_order_relaxed)) {
     case CHI_GC_SYNC1:
         if (gcLocalTransition(proc, CHI_GC_IDLE, CHI_GC_SYNC1))
-            gc->barrier = CHI_BARRIER_SYNC;
+            gc->markState.barrier = _CHI_BARRIER_SYNC;
         break;
     case CHI_GC_SYNC2:
         gcLocalTransition(proc, CHI_GC_SYNC1, CHI_GC_SYNC2);
         break;
     case CHI_GC_ASYNC:
-        CHI_ASSERT(gc->phase == CHI_GC_SYNC2 || gc->phase == CHI_GC_ASYNC);
-        if (gc->phase == CHI_GC_SYNC2) {
+        if (atomic_load_explicit(&gc->phase, memory_order_relaxed) == CHI_GC_SYNC2) {
             snapshot = true;
-            proc->handle.allocColor = gc->colorState.black;
-            gc->barrier = CHI_BARRIER_ASYNC;
+            proc->handle.allocColor = gc->markState.black;
+            gc->markState.barrier = _CHI_BARRIER_ASYNC;
             markRoots(proc);
+        } else {
+            CHI_ASSERT(atomic_load_explicit(&gc->phase, memory_order_relaxed) == CHI_GC_ASYNC);
         }
         break;
     case CHI_GC_IDLE:
         if (gcLocalTransition(proc, CHI_GC_ASYNC, CHI_GC_IDLE)) {
             CHI_ASSERT(chiGrayNull(&gc->gray));
-            gc->barrier = CHI_BARRIER_NONE;
-            chiColorStateEpoch(&gc->colorState);
-            CHI_IF(CHI_POISON_ENABLED, _chiDebugData.colorState = gc->colorState;)
+            gc->markState.barrier = _CHI_BARRIER_NONE;
+            chiMarkStateEpoch(&gc->markState);
+            CHI_IF(CHI_POISON_ENABLED, _chiDebugData.markState = gc->markState;)
         }
         break;
     }
@@ -446,7 +447,7 @@ void chiGCService(ChiProcessor* proc) {
 
 void chiLocalGCSetup(ChiLocalGC* lgc, ChiGC* gc) {
     chiGrayInit(&lgc->gray, &gc->gray.manager);
-    chiColorStateInit(&lgc->colorState);
+    chiMarkStateInit(&lgc->markState);
 }
 
 void chiLocalGCDestroy(ChiLocalGC* lgc, ChiGC* gc) {
@@ -455,4 +456,11 @@ void chiLocalGCDestroy(ChiLocalGC* lgc, ChiGC* gc) {
         chiGrayJoin(&gc->gray.vec, &lgc->gray);
     }
     CHI_POISON_STRUCT(lgc, CHI_POISON_DESTROYED);
+}
+
+void chiGrayMarkBarrier(ChiLocalGC* gc, Chili old, Chili val) {
+    CHI_ASSERT(gc->markState.barrier);
+    chiGrayMarkUnboxed(gc, old);
+    if (gc->markState.barrier == _CHI_BARRIER_SYNC)
+        chiGrayMarkUnboxed(gc, val);
 }

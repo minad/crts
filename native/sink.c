@@ -8,6 +8,8 @@
 typedef _ChiSinkFile SinkFile;
 typedef _ChiSinkProxy SinkProxy;
 
+enum { SINKBUFSZ = 256 };
+
 typedef struct {
     SinkProxy proxy;
     size_t    capacity, used;
@@ -161,7 +163,7 @@ static ChiSink* sinkFileNew(ChiFile handle, void (*close)(ChiSink*)) {
 }
 
 static CHI_WU bool sinkColorWrite(ChiSink* sink, const void* buf, size_t size) {
-    char staticDst[512], *dst = size <= sizeof (staticDst) ? staticDst : (char*)chiAlloc(size), *t = dst;
+    char staticDst[SINKBUFSZ], *dst = size <= sizeof (staticDst) ? staticDst : (char*)chiAlloc(size), *t = dst;
     const char* q = (const char*)buf, *end = q + size;
     while (q < end) {
         char* p = (char*)memccpy(t, q, '\033', (size_t)(end - q));
@@ -230,6 +232,9 @@ ChiSink* chiSinkFileTryNew(const char* file, size_t buffer, bool locked, ChiSink
     ChiFile handle;
     bool close = true;
 
+    if (streq(file, "null"))
+        return chiSinkNull;
+
     if (streq(file, "stdout")) {
         handle = CHI_FILE_STDOUT;
         close = false;
@@ -282,7 +287,7 @@ static CHI_WU bool sinkStderrInit(ChiSink* sink, const void* buf, size_t size) {
     return sinkStderrWrite(sink, buf, size);
 }
 
-CHI_INTERN ChiSink _chiSinkNull =
+CHI_INTERN const ChiSink _chiSinkNull =
     { .write = sinkNullWrite,
       .flush = sinkNullFlush,
       .close = sinkNullClose };
@@ -388,7 +393,7 @@ void chiSinkClose(ChiSink* sink) {
  * Control characters are escaped. UTF-8 characters are not escaped.
  */
 size_t chiSinkWriteq(ChiSink* sink, const uint8_t* bytes, size_t size) {
-    char out[512] = { '"' };
+    char out[SINKBUFSZ] = { '"' };
     size_t n = 1, written = 0;
     for (size_t i = 0; i < size; ++i) {
         if (n + 5 > sizeof (out)) {
@@ -427,7 +432,7 @@ size_t chiSinkWriteq(ChiSink* sink, const uint8_t* bytes, size_t size) {
 }
 
 size_t chiSinkWriteh(ChiSink* sink, const void* buf, size_t size) {
-    char out[512] = { '"' };
+    char out[SINKBUFSZ] = { '"' };
     size_t n = 1;
     for (const uint8_t *p = (const uint8_t*)buf; p < (const uint8_t*)buf + size; ++p) {
         if (n + 3 > sizeof (out)) {
@@ -449,8 +454,8 @@ size_t chiSinkPutu(ChiSink* sink, uint64_t x) {
     return n;
 }
 
-CHI_COLD void chiSinkWarnv(ChiSink* sink, const char* fmt, va_list ap) {
-    char buf[256];
+void chiSinkWarnv(ChiSink* sink, const char* fmt, va_list ap) {
+    char buf[SINKBUFSZ];
     ChiSinkMem s;
     chiSinkMemInit(&s, buf, sizeof (buf));
     chiSinkPuts(&s.base, "Error: ");
@@ -460,7 +465,7 @@ CHI_COLD void chiSinkWarnv(ChiSink* sink, const char* fmt, va_list ap) {
     chiSinkWrite(sink, s.buf, s.used);
 }
 
-CHI_COLD void chiSinkWarn(ChiSink* sink, const char* fmt, ...) {
+void chiSinkWarn(ChiSink* sink, const char* fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
     chiSinkWarnv(sink, fmt, ap);
