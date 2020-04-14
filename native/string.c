@@ -77,17 +77,18 @@ Chili chiStringTrySlice(Chili a, uint32_t i, uint32_t j) {
     CHI_ASSERT(i <= s.size);
     CHI_ASSERT(j <= s.size);
     CHI_ASSERT(j >= i);
-    return newStringFromBytes(CHI_CURRENT_PROCESSOR, s.bytes + i, j - i, CHI_NEW_TRY);
+    return chiStringFromBytesFlags(CHI_CURRENT_PROCESSOR, s.bytes + i, j - i, CHI_NEW_TRY);
 }
 
-Chili _chiStringNew(ChiProcessor* proc, ChiStringRef r) {
-    CHI_ASSERT(chiUtf8Valid(r.bytes, r.size));
-    return chiFitsSmallString(r.size) ? chiFromSmallString(r.bytes, r.size)
-        : newStringFromBytes(proc, r.bytes, r.size, CHI_NEW_DEFAULT);
+Chili chiStringFromBytesFlags(ChiProcessor* proc, const uint8_t* b, uint32_t n, ChiNewFlags flags) {
+    CHI_ASSERT(!(flags & (CHI_NEW_LOCAL | CHI_NEW_SHARED | CHI_NEW_UNINITIALIZED))); // disallowed flags
+    CHI_ASSERT(chiUtf8Valid(b, n));
+    return chiFitsSmallString(n) ? chiFromSmallString(b, n)
+        : newStringFromBytes(proc, b, n, flags);
 }
 
-Chili chiStringFromRef(ChiStringRef r) {
-    return _chiStringNew(CHI_CURRENT_PROCESSOR, r);
+Chili chiStringFromBytes(const uint8_t* b, uint32_t n) {
+    return chiStringFromBytesFlags(CHI_CURRENT_PROCESSOR, b, n, CHI_NEW_DEFAULT);
 }
 
 Chili chiStaticString(const ChiStaticBytes* s) {
@@ -95,25 +96,6 @@ Chili chiStaticString(const ChiStaticBytes* s) {
     CHI_ASSERT(!chiFitsSmallString(s->size));
     CHI_ASSERT(chiUtf8Valid(s->bytes, s->size));
     return newStringFromBytes(CHI_CURRENT_PROCESSOR, s->bytes, s->size, CHI_NEW_DEFAULT);
-}
-
-bool chiStringRefEq(ChiStringRef a, ChiStringRef b) {
-    return a.size == b.size && memeq(a.bytes, b.bytes, a.size);
-}
-
-bool chiStringEq(Chili a, Chili b) {
-    return chiStringRefEq(chiStringRef(&a), chiStringRef(&b));
-}
-
-int32_t chiStringRefCmp(ChiStringRef a, ChiStringRef b) {
-    const int cmp = memcmp(a.bytes, b.bytes, CHI_MIN(a.size, b.size));
-    if (!cmp)
-        return CHI_CMP(a.size, b.size);
-    return cmp > 0 ? 1 : -1;
-}
-
-int32_t chiStringCmp(Chili a, Chili b) {
-    return chiStringRefCmp(chiStringRef(&a), chiStringRef(&b));
 }
 
 Chili chiStringBuilderTryNew(uint32_t cap) {
@@ -202,15 +184,15 @@ Chili chiStringPin(Chili c) {
     ChiProcessor* proc = CHI_CURRENT_PROCESSOR;
 
     if (CHI_STRING_UNBOXING && chiUnboxed63(c)) {
-        const uint8_t* s = (const uint8_t*)&c;
-        uint32_t size = s[CHI_SMALL_STRING_MAX];
-        CHI_ASSERT(size <= CHI_SMALL_STRING_MAX);
+        const uint8_t *s = (const uint8_t*)&c, *src = s + CHI_SMALLSTRING_BYTES;
+        uint32_t size = s[CHI_SMALLSTRING_SIZE];
+        CHI_ASSERT(size <= CHI_SMALLSTRING_MAX);
         Chili d = newStringUninitialized(proc, size, CHI_NEW_SHARED | CHI_NEW_CLEAN);
-        uint8_t* bytes = (uint8_t*)chiRawPayload(d);
-        for (uint32_t i = 0; i < CHI_SMALL_STRING_MAX; ++i) {
+        uint8_t* dst = (uint8_t*)chiRawPayload(d);
+        for (uint32_t i = 0; i < CHI_SMALLSTRING_MAX; ++i) {
             if (size) {
                 --size;
-                bytes[i] = s[i];
+                dst[i] = src[i];
             }
         }
         return d;

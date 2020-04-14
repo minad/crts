@@ -307,7 +307,7 @@ app5 r8:fn r8:a0 r8:a1 r8:a2 r8:a3 r8:a4 %n=5 {
 
 // Check limit (safepoint!)
 limit u8:lim {
-      LIMITS_SAVE(({ INSN_LEAVE; goto SAVE_FN; }), .stack = lim);
+      LIMITS_SAVE(({ INSN_LEAVE; goto SAVE_FN; }), .interrupt = true, .stack = lim);
 }
 
 // Check limit and load closure with %n fields (safepoint!)
@@ -330,11 +330,11 @@ clos u8:nargs u16:lim u16:size {
         SP[nargs + i] = clos[i];
 }
 
-// Enter continuation, shift register window
+// Enter continuation, shift register window (safepoint!)
 enter u8:top u8:lim
 enterl u16:top u16:lim {
     int32_t slim = lim - CBY_CONTEXT_SIZE - top;
-    LIMITS_SAVE(({ INSN_LEAVE; goto SAVE_CONT; }), .stack = slim < 0 ? 0U : (uint32_t)slim);
+    LIMITS_SAVE(({ INSN_LEAVE; goto SAVE_CONT; }), .interrupt = true, .stack = slim < 0 ? 0U : (uint32_t)slim);
     REG = SP - CBY_CONTEXT_SIZE - top;
     REG[top] = SP[0];
     SP -= chiToUnboxed(SP[-2]);

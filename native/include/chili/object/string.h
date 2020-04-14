@@ -1,4 +1,13 @@
-enum { CHI_SMALL_STRING_MAX = CHI_WORDSIZE - 1 };
+enum {
+    CHI_SMALLSTRING_MAX = CHI_WORDSIZE - 1,
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+    CHI_SMALLSTRING_SIZE = CHI_SMALLSTRING_MAX,
+    CHI_SMALLSTRING_BYTES = 0,
+#else
+    CHI_SMALLSTRING_SIZE = 0,
+    CHI_SMALLSTRING_BYTES = 1,
+#endif
+};
 
 #define CHI_STRINGREF(s)    ((ChiStringRef){ .size = CHI_STRSIZE(s), .bytes = (const uint8_t*)(s) })
 #define CHI_EMPTY_STRINGREF CHI_STRINGREF("")
@@ -67,19 +76,19 @@ CHI_NEWTYPE(Char, uint32_t)
      __builtin_choose_expr(__builtin_types_compatible_p(typeof(x), const char[]),           _chiCStringToStringRef, \
                            _chiStringRefToStringRef))))))))(x))
 
-CHI_EXPORT CHI_WU Chili     chiStringNewFlags(uint32_t, ChiNewFlags);
-CHI_EXPORT CHI_WU bool      chiStringEq(Chili, Chili);
-CHI_EXPORT CHI_WU bool      chiStringRefEq(ChiStringRef, ChiStringRef);
-CHI_EXPORT CHI_WU int32_t   chiStringCmp(Chili, Chili);
-CHI_EXPORT CHI_WU int32_t   chiStringRefCmp(ChiStringRef, ChiStringRef);
-CHI_EXPORT CHI_WU Chili     chiStringBuilderTryNew(uint32_t);
-CHI_EXPORT CHI_WU Chili     chiStringFromRef(ChiStringRef);
-CHI_EXPORT CHI_WU Chili     chiStringBuilderBuild(Chili);
-CHI_EXPORT CHI_WU Chili     chiStringPin(Chili);
-CHI_EXPORT CHI_WU Chili     chiStringTrySlice(Chili, uint32_t, uint32_t);
-CHI_EXPORT CHI_WU bool      chiUtf8Valid(const uint8_t*, uint32_t);
-CHI_EXPORT CHI_WU bool      CHI_PRIVATE(chiStringBuilderTryGrow)(Chili, uint32_t);
-CHI_EXPORT CHI_WU Chili     CHI_PRIVATE(chiStaticString)(const ChiStaticString*);
+CHI_EXPORT CHI_WU Chili chiStringNewFlags(uint32_t, ChiNewFlags);
+CHI_EXPORT CHI_WU Chili chiStringFromBytes(const uint8_t*, uint32_t);
+CHI_EXPORT CHI_WU Chili chiStringBuilderTryNew(uint32_t);
+CHI_EXPORT CHI_WU Chili chiStringBuilderBuild(Chili);
+CHI_EXPORT CHI_WU Chili chiStringPin(Chili);
+CHI_EXPORT CHI_WU Chili chiStringTrySlice(Chili, uint32_t, uint32_t);
+CHI_EXPORT CHI_WU bool  chiUtf8Valid(const uint8_t*, uint32_t);
+CHI_EXPORT CHI_WU bool  CHI_PRIVATE(chiStringBuilderTryGrow)(Chili, uint32_t);
+CHI_EXPORT CHI_WU Chili CHI_PRIVATE(chiStaticString)(const ChiStaticString*);
+
+CHI_INL CHI_WU Chili chiStringFromRef(ChiStringRef r) {
+    return chiStringFromBytes(r.bytes, r.size);
+}
 
 CHI_INL CHI_WU ChiChar chiChr(uint32_t c) {
     return CHI_WRAP(Char, c);
@@ -171,8 +180,8 @@ CHI_INL CHI_WU uint32_t CHI_PRIVATE(chiStringTrailSize)(const uint8_t* bytes, si
 CHI_INL CHI_WU ChiStringRef _chiToStringRef(const Chili* c) {
     if (CHI_STRING_UNBOXING && _chiUnboxed63(*c)) {
         const uint8_t* s = (const uint8_t*)c;
-        CHI_ASSERT(s[CHI_SMALL_STRING_MAX] <= CHI_SMALL_STRING_MAX);
-        return (ChiStringRef) { .bytes = s, .size = s[CHI_SMALL_STRING_MAX] };
+        CHI_ASSERT(s[CHI_SMALLSTRING_SIZE] <= CHI_SMALLSTRING_MAX);
+        return (ChiStringRef) { .bytes = s + CHI_SMALLSTRING_BYTES, .size = s[CHI_SMALLSTRING_SIZE] };
     }
     if (!CHI_STRING_UNBOXING && !chiTrue(*c))
         return CHI_EMPTY_STRINGREF;
@@ -186,7 +195,7 @@ CHI_INL CHI_WU ChiStringRef _chiCStringToStringRef(const char* s) {
 }
 
 CHI_INL CHI_WU bool CHI_PRIVATE(chiFitsSmallString)(uint32_t size) {
-    return CHI_STRING_UNBOXING ? size <= CHI_SMALL_STRING_MAX : !size;
+    return CHI_STRING_UNBOXING ? size <= CHI_SMALLSTRING_MAX : !size;
 }
 
 CHI_INL CHI_WU Chili CHI_PRIVATE(chiFromSmallString)(const uint8_t* bytes, uint32_t size) {
@@ -195,14 +204,15 @@ CHI_INL CHI_WU Chili CHI_PRIVATE(chiFromSmallString)(const uint8_t* bytes, uint3
             return CHI_FALSE;
         CHI_BUG("CHI_STRING_UNBOXING is disabled");
     }
-    CHI_ASSUME(size <= CHI_SMALL_STRING_MAX);
+    CHI_ASSUME(size <= CHI_SMALLSTRING_MAX);
+    // Size must be stored in the highest byte.
     ChiWord w = (ChiWord)size << 56;
-    CHI_ASSERT(((uint8_t*)&w)[CHI_SMALL_STRING_MAX] == size); // Little endian
-    for (uint32_t i = 0; i < CHI_SMALL_STRING_MAX; ++i) {
+    CHI_ASSERT(((uint8_t*)&w)[CHI_SMALLSTRING_SIZE] == size); // endianness check
+    for (uint32_t i = 0; i < CHI_SMALLSTRING_MAX; ++i) {
         if (size) {
             --size;
             w |= (ChiWord)bytes[i] << (8 * i);
-            CHI_ASSERT(((uint8_t*)&w)[i] == bytes[i]);
+            CHI_ASSERT(((uint8_t*)&w)[CHI_SMALLSTRING_BYTES + i] == bytes[i]); // endianness check
         }
     }
     CHI_ASSERT(size == 0);
@@ -235,16 +245,31 @@ CHI_INL CHI_WU ChiChar chiToChar(Chili c) {
     return chiChr(chiToUInt32(c));
 }
 
-CHI_INL CHI_WU Chili chiStringFromBytes(const uint8_t* b, uint32_t n) {
-    return chiStringFromRef((ChiStringRef){ .bytes = b, .size = n });
-}
-
 CHI_INL Chili chiCharToString(ChiChar c) {
     ChiWord w = 0;
     uint8_t* s = (uint8_t*)&w;
     uint8_t n = _chiUtf8Encode(chiOrd(c), s);
-    s[CHI_SMALL_STRING_MAX] = n;
-    return CHI_STRING_UNBOXING ? _chiFromUnboxed(w) : chiStringFromBytes(s, n);
+    s[CHI_SMALLSTRING_SIZE] = n;
+    return CHI_STRING_UNBOXING ? _chiFromUnboxed(w) : chiStringFromBytes(s + CHI_SMALLSTRING_BYTES, n);
+}
+
+CHI_INL CHI_WU bool chiStringRefEq(ChiStringRef a, ChiStringRef b) {
+    return a.size == b.size && !memcmp(a.bytes, b.bytes, a.size);
+}
+
+CHI_INL CHI_WU bool chiStringEq(Chili a, Chili b) {
+    return chiStringRefEq(chiStringRef(&a), chiStringRef(&b));
+}
+
+CHI_INL CHI_WU int32_t chiStringRefCmp(ChiStringRef a, ChiStringRef b) {
+    const int cmp = memcmp(a.bytes, b.bytes, CHI_MIN(a.size, b.size));
+    if (!cmp)
+        return CHI_CMP(a.size, b.size);
+    return cmp > 0 ? 1 : -1;
+}
+
+CHI_INL CHI_WU int32_t chiStringCmp(Chili a, Chili b) {
+    return chiStringRefCmp(chiStringRef(&a), chiStringRef(&b));
 }
 
 CHI_INL uint32_t chiStringNext(Chili s, uint32_t i) {

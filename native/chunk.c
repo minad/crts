@@ -66,6 +66,14 @@ static bool chunkAligned(void* start, size_t align) {
     return !((uintptr_t)start & (align - 1));
 }
 
+static void chunkInit(ChiChunk* chunk, void* start, size_t size) {
+    CHI_IF(CHI_CHUNK_ARENA_ENABLED, chunk->_used = false; addrListPoison(chunk));
+    chiChunkListPoison(chunk);
+    chunk->size = size;
+    chunk->start = start;
+    CHI_IF(CHI_UNMAP_TASK_ENABLED, chunk->_unmapTimeout = chiMillis(0));
+}
+
 static ChiChunk* vaGetHandle(VirtAllocator*, void*, size_t);
 static ChiChunk* vaSplitBegin(VirtAllocator*, ChiChunk*, size_t);
 static ChiChunk* vaSplitEnd(VirtAllocator*, ChiChunk*, size_t);
@@ -139,10 +147,9 @@ static void vaSetupArena(VirtAllocator* va, uintptr_t arenaStart, size_t arenaSi
     for (uint32_t i = 0; i <= CHI_CHUNK_MAX; ++i)
         chiChunkListInit(va->sizeList + i);
 
-    chiPoolPut(&va->handlePool, &va->arena);
-    ChiChunk* chunk = vaGetHandle(va, (void*)arenaStart, arenaSize);
-    chiChunkListAppend(va->sizeList + chunkClassSmaller(chunk->size), chunk);
-    addrListAppend(&va->addrList, chunk);
+    chunkInit(&va->arena, (void*)arenaStart, arenaSize);
+    chiChunkListAppend(va->sizeList + chunkClassSmaller(arenaSize), &va->arena);
+    addrListAppend(&va->addrList, &va->arena);
 }
 
 static ChiChunk* vaFindSize(VirtAllocator* va, const size_t size) {
@@ -276,11 +283,7 @@ static bool vaNeedHandles(VirtAllocator* va, size_t needed) {
 
 static ChiChunk* vaGetHandle(VirtAllocator* va, void* start, size_t size) {
     ChiChunk* chunk = (ChiChunk*)chiPoolGet(&va->handlePool);
-    CHI_IF(CHI_CHUNK_ARENA_ENABLED, chunk->_used = false; addrListPoison(chunk));
-    chiChunkListPoison(chunk);
-    chunk->size = size;
-    chunk->start = start;
-    CHI_IF(CHI_UNMAP_TASK_ENABLED, chunk->_unmapTimeout = chiMillis(0));
+    chunkInit(chunk, start, size);
     return chunk;
 }
 

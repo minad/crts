@@ -842,12 +842,12 @@ OP_BEGIN(app5)
 OP_END
 OP_BEGIN(limit)
     const uint8_t lim = FETCH8;
-      LIMITS_SAVE(({ INSN_LEAVE; goto SAVE_FN; }), .stack = lim);
+      LIMITS_SAVE(({ INSN_LEAVE; goto SAVE_FN; }), .interrupt = true, .stack = lim);
 OP_END
 OP_BEGIN(clos1)
     const uint8_t nargs = FETCH8;
     const uint8_t lim = FETCH8;
-    {      LIMITS_SAVE(({ INSN_LEAVE; goto SAVE_FN; }), .stack = lim);
+    {      LIMITS_SAVE(({ INSN_LEAVE; goto SAVE_FN; }), .interrupt = true, .stack = lim);
 }
     CHI_ASSERT(chiFnOrThunkArity(CURRFN) == nargs);
     const Chili* clos = chiToCbyFn(CURRFN)->clos;
@@ -856,7 +856,7 @@ OP_END
 OP_BEGIN(clos2)
     const uint8_t nargs = FETCH8;
     const uint8_t lim = FETCH8;
-    {      LIMITS_SAVE(({ INSN_LEAVE; goto SAVE_FN; }), .stack = lim);
+    {      LIMITS_SAVE(({ INSN_LEAVE; goto SAVE_FN; }), .interrupt = true, .stack = lim);
 }
     CHI_ASSERT(chiFnOrThunkArity(CURRFN) == nargs);
     const Chili* clos = chiToCbyFn(CURRFN)->clos;
@@ -866,7 +866,7 @@ OP_END
 OP_BEGIN(clos3)
     const uint8_t nargs = FETCH8;
     const uint8_t lim = FETCH8;
-    {      LIMITS_SAVE(({ INSN_LEAVE; goto SAVE_FN; }), .stack = lim);
+    {      LIMITS_SAVE(({ INSN_LEAVE; goto SAVE_FN; }), .interrupt = true, .stack = lim);
 }
     CHI_ASSERT(chiFnOrThunkArity(CURRFN) == nargs);
     const Chili* clos = chiToCbyFn(CURRFN)->clos;
@@ -877,7 +877,7 @@ OP_END
 OP_BEGIN(clos4)
     const uint8_t nargs = FETCH8;
     const uint8_t lim = FETCH8;
-    {      LIMITS_SAVE(({ INSN_LEAVE; goto SAVE_FN; }), .stack = lim);
+    {      LIMITS_SAVE(({ INSN_LEAVE; goto SAVE_FN; }), .interrupt = true, .stack = lim);
 }
     CHI_ASSERT(chiFnOrThunkArity(CURRFN) == nargs);
     const Chili* clos = chiToCbyFn(CURRFN)->clos;
@@ -890,7 +890,7 @@ OP_BEGIN(clos)
     const uint8_t nargs = FETCH8;
     const uint16_t lim = FETCH16;
     const uint16_t size = FETCH16;
-    {      LIMITS_SAVE(({ INSN_LEAVE; goto SAVE_FN; }), .stack = lim);
+    {      LIMITS_SAVE(({ INSN_LEAVE; goto SAVE_FN; }), .interrupt = true, .stack = lim);
 }
     CHI_ASSERT(chiFnOrThunkArity(CURRFN) == nargs);
     const Chili* clos = chiToCbyFn(CURRFN)->clos;
@@ -901,7 +901,7 @@ OP_BEGIN(enter)
     const uint8_t top = FETCH8;
     const uint8_t lim = FETCH8;
     int32_t slim = lim - CBY_CONTEXT_SIZE - top;
-    LIMITS_SAVE(({ INSN_LEAVE; goto SAVE_CONT; }), .stack = slim < 0 ? 0U : (uint32_t)slim);
+    LIMITS_SAVE(({ INSN_LEAVE; goto SAVE_CONT; }), .interrupt = true, .stack = slim < 0 ? 0U : (uint32_t)slim);
     REG = SP - CBY_CONTEXT_SIZE - top;
     REG[top] = SP[0];
     SP -= chiToUnboxed(SP[-2]);
@@ -910,7 +910,7 @@ OP_BEGIN(enterl)
     const uint16_t top = FETCH16;
     const uint16_t lim = FETCH16;
     int32_t slim = lim - CBY_CONTEXT_SIZE - top;
-    LIMITS_SAVE(({ INSN_LEAVE; goto SAVE_CONT; }), .stack = slim < 0 ? 0U : (uint32_t)slim);
+    LIMITS_SAVE(({ INSN_LEAVE; goto SAVE_CONT; }), .interrupt = true, .stack = slim < 0 ? 0U : (uint32_t)slim);
     REG = SP - CBY_CONTEXT_SIZE - top;
     REG[top] = SP[0];
     SP -= chiToUnboxed(SP[-2]);

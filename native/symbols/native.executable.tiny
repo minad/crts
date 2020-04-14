@@ -77,13 +77,9 @@ T chiProcessorTryStart
 T chiStackTrace
 T chiStringBuilderBuild
 T chiStringBuilderTryNew
-T chiStringCmp
-T chiStringEq
-T chiStringFromRef
+T chiStringFromBytes
 T chiStringNewFlags
 T chiStringPin
-T chiStringRefCmp
-T chiStringRefEq
 T chiStringTrySlice
 T chiThreadInitState
 T chiThreadNew

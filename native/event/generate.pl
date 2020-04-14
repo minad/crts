@@ -73,32 +73,32 @@ sub writeField {
         foreach my $f (@fields) {
             ++$i;
             if ($$f[1][0] eq 'ptr' && $$f[1][1][0] eq 'struct') {
-                $ret .= "${ind}WBLOCK_BEGIN($$f[0]);\n";
+                $ret .= "${ind}SBLOCK_BEGIN($$f[0]);\n";
                 $ret .= writeField($indent + 4, $$f[1], "$ptr$$f[0]");
-                $ret .= "${ind}WBLOCK_END($$f[0]);\n";
+                $ret .= "${ind}SBLOCK_END($$f[0]);\n";
             } elsif ($$f[1][0] eq 'struct') {
                 my @subfields = @{$$f[1][1]};
                 if ($#subfields > 0) {
-                    $ret .= "${ind}WBLOCK_BEGIN($$f[0]);\n";
+                    $ret .= "${ind}SBLOCK_BEGIN($$f[0]);\n";
                     $ret .= writeField($indent + 4, $$f[1], "$ptr$$f[0].");
-                    $ret .= "${ind}WBLOCK_END($$f[0]);\n";
+                    $ret .= "${ind}SBLOCK_END($$f[0]);\n";
                 } else {
-                    $ret .= "${ind}WFIELD($$f[0], " . writeField(0, $subfields[0][1], "$ptr$$f[0].$subfields[0][0]") . ");\n";
+                    $ret .= "${ind}SFIELD($$f[0], " . writeField(0, $subfields[0][1], "$ptr$$f[0].$subfields[0][0]") . ");\n";
                 }
             } else {
-                $ret .= "${ind}WFIELD($$f[0], " . writeField(0, $$f[1], "$ptr$$f[0]") . ");\n";
+                $ret .= "${ind}SFIELD($$f[0], " . writeField(0, $$f[1], "$ptr$$f[0]") . ");\n";
             }
         }
         return $ret;
     }
-    return "${ind}WDEC(CHI_UN($$type[1], $ptr))" if ($t eq "newtype");
-    return "${ind}WDEC($ptr)" if ($t eq "ChiWid");
-    return "${ind}WENUM($$type[1], $ptr)" if ($t eq "enum");
-    return "${ind}WBOOL($ptr)" if ($t =~ /^bool$/);
-    return "${ind}WHEX($ptr)" if ($t =~ /^uintptr_t$/);
-    return "${ind}WDEC($ptr)" if ($t =~ /^(size_t|uint\d+_t)$/);
-    return "${ind}WSTR($ptr)" if ($t eq 'ChiStringRef');
-    return "${ind}WBYTES($ptr)" if ($t eq 'ChiBytesRef');
+    return "${ind}SDEC(CHI_UN($$type[1], $ptr))" if ($t eq "newtype");
+    return "${ind}SDEC($ptr)" if ($t eq "ChiWid");
+    return "${ind}SENUM($$type[1], $ptr)" if ($t eq "enum");
+    return "${ind}SBOOL($ptr)" if ($t =~ /^bool$/);
+    return "${ind}SHEX($ptr)" if ($t =~ /^uintptr_t$/);
+    return "${ind}SDEC($ptr)" if ($t =~ /^(size_t|uint\d+_t)$/);
+    return "${ind}SSTR($ptr)" if ($t eq 'ChiStringRef');
+    return "${ind}SBYTES($ptr)" if ($t eq 'ChiBytesRef');
     die "Invalid type $t";
 }
 
@@ -146,8 +146,8 @@ my $fns = "";
 foreach my $name (sort(keys %type)) {
     if ($name =~ /^ChiEvent(\w+)$/) {
         my $field = writeField 4, $type{$name}, "d->";
-        $fns .= "WPAYLOAD_BEGIN($1, $name* d)
-${field}WPAYLOAD_END
+        $fns .= "SPAYLOAD_BEGIN($1, $name* d)
+${field}SPAYLOAD_END
 
 ";
     }
@@ -161,11 +161,11 @@ while ($defs =~ /(DURATION|INSTANT)\s+(\w+)\s+(\w+)\s+(\w+)\s*/g) {
     if ($cls eq "DURATION") {
         $mainFn .= "   case CHI_EVENT_${name}_BEGIN: break;\n";
         $mainFn .= "   case CHI_EVENT_${name}_END:";
-        $mainFn .= " WPAYLOAD($payload, &e->payload->${name}_END);" if $payload ne "0";
+        $mainFn .= " SPAYLOAD($payload, &e->payload->${name}_END);" if $payload ne "0";
         $mainFn .= " break;\n";
     } else {
         $mainFn .= "   case CHI_EVENT_$name:";
-        $mainFn .= " WPAYLOAD($payload, &e->payload->$name);" if $payload ne "0";
+        $mainFn .= " SPAYLOAD($payload, &e->payload->$name);" if $payload ne "0";
         $mainFn .= " break;\n";
     }
 }
@@ -173,33 +173,33 @@ while ($defs =~ /(DURATION|INSTANT)\s+(\w+)\s+(\w+)\s+(\w+)\s*/g) {
 write_text "runtime/native/event/serialize.h",
         qq(// $generated
 
-${fns}WEVENT_BEGIN
-   WFIELD(ts, WDEC(CHI_UN(Nanos, e->ts)));
+${fns}SEVENT_BEGIN
+   SFIELD(ts, SDEC(CHI_UN(Nanos, e->ts)));
    if (eventDesc[e->type].cls == CLASS_END)
-       WFIELD(dur, WDEC(CHI_UN(Nanos, e->dur)));
+       SFIELD(dur, SDEC(CHI_UN(Nanos, e->dur)));
    if (eventDesc[e->type].ctx != CTX_RUNTIME)
-       WFIELD(wid, WDEC(e->wid));
+       SFIELD(wid, SDEC(e->wid));
    if (eventDesc[e->type].ctx == CTX_THREAD)
-       WFIELD(tid, WDEC(e->tid));
+       SFIELD(tid, SDEC(e->tid));
    switch (e->type) {
 $mainFn   default: break;
    }
-WEVENT_END
+SEVENT_END
 
-#undef WBLOCK_BEGIN
-#undef WBLOCK_END
-#undef WBOOL
-#undef WBYTES
-#undef WENUM
-#undef WEVENT_BEGIN
-#undef WEVENT_END
-#undef WFIELD
-#undef WDEC
-#undef WHEX
-#undef WPAYLOAD
-#undef WPAYLOAD_BEGIN
-#undef WPAYLOAD_END
-#undef WSTR
+#undef SBLOCK_BEGIN
+#undef SBLOCK_END
+#undef SBOOL
+#undef SBYTES
+#undef SENUM
+#undef SEVENT_BEGIN
+#undef SEVENT_END
+#undef SFIELD
+#undef SDEC
+#undef SHEX
+#undef SPAYLOAD
+#undef SPAYLOAD_BEGIN
+#undef SPAYLOAD_END
+#undef SSTR
 );
 
 my $lttng = "";

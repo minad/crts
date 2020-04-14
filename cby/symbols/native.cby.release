@@ -121,15 +121,11 @@ T chiSortModuleRegistry
 T chiStackTrace
 T chiStringBuilderBuild
 T chiStringBuilderTryNew
-T chiStringCmp
-T chiStringEq
-T chiStringFromRef
+T chiStringFromBytes
 T chiStringMemcpy
 T chiStringNewFlags
 T chiStringPin
 T chiStringPinnedBytes
-T chiStringRefCmp
-T chiStringRefEq
 T chiStringSize
 T chiStringTrySlice
 T chiSuccess

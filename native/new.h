@@ -17,13 +17,15 @@
 #define chiNewTaggedFlags(proc, tag, flags, ...) chiNewVariadicFlags((proc), CHI_TAG(tag), (flags), ##__VA_ARGS__)
 #define chiNewTupleFlags(proc, flags, ...)       chiNewTaggedFlags((proc), 0, (flags), ##__VA_ARGS__)
 #define chiNewFnFlags(proc, arity, cont, ...)    chiNewVariadicFlags((proc), CHI_FN(arity), (flags), chiFromCont(cont), ##__VA_ARGS__)
-#define chiStringNew(proc, s)                    _chiStringNew((proc), chiStringRef(s))
+
+#define _chiStringNew(r, proc, s)                ({ ChiStringRef r = chiStringRef(s); chiStringFromBytesFlags((proc), r.bytes, r.size, CHI_NEW_DEFAULT); })
+#define chiStringNew(proc, s)                    _chiStringNew(CHI_GENSYM, (proc), (s))
 
 typedef struct ChiProcessor_ ChiProcessor;
 
 CHI_INTERN CHI_WU Chili chiArrayNewUninitialized(ChiProcessor*, uint32_t, ChiNewFlags);
 CHI_INTERN CHI_WU Chili chiBufferNewUninitialized(ChiProcessor*, uint32_t, ChiNewFlags);
-CHI_INTERN CHI_WU Chili _chiStringNew(ChiProcessor*, ChiStringRef);
+CHI_INTERN CHI_WU Chili chiStringFromBytesFlags(ChiProcessor*, const uint8_t*, uint32_t, ChiNewFlags);
 CHI_INTERN CHI_WU Chili chiNewMajorClean(ChiProcessor*, ChiType, size_t, ChiNewFlags);
 CHI_INTERN CHI_WU Chili chiNewMajorDirty(ChiProcessor*, ChiType, size_t, ChiNewFlags);
 

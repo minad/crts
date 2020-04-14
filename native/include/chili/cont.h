@@ -101,12 +101,15 @@
 
 #define _CHI_LIMITS_SAVE(sl, hl, params, save, param1, ...)             \
     ({                                                                  \
-        const struct { size_t stack, heap; } params = { param1, ##__VA_ARGS__ }; \
+        const struct { size_t stack, heap; bool interrupt; } params = { param1, ##__VA_ARGS__ }; \
         CHI_ASSERT(params.heap <= CHI_BLOCK_MINLIMIT);                  \
+        CHI_ASSERT(!params.interrupt || !params.heap);                  \
         if (params.heap) TRACE_ALLOC(params.heap);                      \
         Chili* sl = SP + params.stack;                                  \
         ChiWord* hl = HP + params.heap;                                 \
-        if (CHI_UNLIKELY((params.stack && sl > SL) || (params.heap && hl > HL))) { \
+        if (CHI_UNLIKELY((params.stack && sl > SL)                      \
+                         || (params.interrupt && !HL)                   \
+                         || (params.heap && hl > HL))) {                \
             if (params.stack) SLRW = sl;                                \
             if (params.heap) HLRW = hl;                                 \
             save;                                                       \

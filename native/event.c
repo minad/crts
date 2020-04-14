@@ -11,43 +11,52 @@
 
 #if CHI_EVENT_ENABLED
 
-#define WRITE_RAWBYTES(s)     WRITE_CHECK(writeRawBytes, (s))
-#define WRITE_RAWSTR(s)       WRITE_CHECK(writeRawString, chiStringRef(s))
-#define WRITE_ESCAPEBYTES(s)  WRITE_CHECK(writeEscapeBytes, (s))
-#define WRITE_ESCAPESTR(s)    WRITE_CHECK(writeEscapeString, chiStringRef(s))
-#define WRITE_DEC(x)          WRITE_CHECK(writeDec, (x))
-#define WRITE_HEX(x)          WRITE_CHECK(writeHex, (x))
-#define WRITE_LEB128(x)       WRITE_CHECK(writeLeb128, (x))
-#define WRITE_CHAR(x)         WRITE_CHECK(writeByte, (x))
-#define WRITE_BYTE(x)         WRITE_CHECK(writeByte, (x))
-#define WRITE_CHECK(fn, ...)  ({ dst = fn(dst, end, ##__VA_ARGS__); if (!dst) return 0; })
+#define WRITE_RAWBYTES(s)     WRITE_OP(RawBytes, (s))
+#define WRITE_RAWSTR(s)       WRITE_OP(RawString, chiStringRef(s))
+#define WRITE_ESCBYTES(s)     WRITE_OP(EscBytes, (s))
+#define WRITE_ESCSTR(s)       WRITE_OP(EscString, chiStringRef(s))
+#define WRITE_DEC(x)          WRITE_OP(Dec, (x))
+#define WRITE_HEX(x)          WRITE_OP(Hex, (x))
+#define WRITE_LEB128(x)       WRITE_OP(Leb128, (x))
+#define WRITE_CHAR(x)         WRITE_OP(Byte, (x))
+#define WRITE_BYTE(x)         WRITE_OP(Byte, (x))
+#define WRITE_OP(fn, x)       ({ dst = CHI_CAT(WRITE_MODE, fn)(dst, (x)); })
 
-static CHI_WU uint8_t* writeBytes(uint8_t* dst, uint8_t* end, const void* s, size_t n) {
-    if (CHI_UNLIKELY(dst + n > end))
-        return 0;
-    memcpy(dst, s, n);
-    return dst + n;
+static CHI_WU uint8_t* writeRawString(uint8_t* dst, ChiStringRef s) {
+    memcpy(dst, s.bytes, s.size);
+    return dst + s.size;
 }
 
-static CHI_WU uint8_t* writeRawString(uint8_t* dst, uint8_t* end, ChiStringRef s) {
-    return writeBytes(dst, end, s.bytes, s.size);
+static CHI_WU uint8_t* estimateRawString(uint8_t* dst, ChiStringRef s) {
+    return dst + s.size;
 }
 
-static CHI_WU uint8_t* writeRawBytes(uint8_t* dst, uint8_t* end, ChiBytesRef s) {
-    return writeBytes(dst, end, s.bytes, s.size);
+static CHI_WU uint8_t* writeRawBytes(uint8_t* dst, ChiBytesRef s) {
+    memcpy(dst, s.bytes, s.size);
+    return dst + s.size;
 }
 
-static CHI_WU uint8_t* writeDec(uint8_t* dst, uint8_t* end, uint64_t n) {
-    return CHI_LIKELY(dst + CHI_INT_BUFSIZE <= end) ? (uint8_t*)chiShowUInt((char*)dst, n) : 0;
+static CHI_WU uint8_t* estimateRawBytes(uint8_t* dst, ChiBytesRef s) {
+    return dst + s.size;
 }
 
-static CHI_WU uint8_t* writeHex(uint8_t* dst, uint8_t* end, uint64_t n) {
-    return CHI_LIKELY(dst + CHI_INT_BUFSIZE <= end) ? (uint8_t*)chiShowHexUInt((char*)dst, n) : 0;
+static CHI_WU uint8_t* writeDec(uint8_t* dst, uint64_t n) {
+    return (uint8_t*)chiShowUInt((char*)dst, n);
 }
 
-static CHI_WU uint8_t* writeLeb128(uint8_t* dst, uint8_t* end, uint64_t n) {
-    if (CHI_UNLIKELY(dst + 10 > end))
-        return 0;
+static CHI_WU uint8_t* estimateDec(uint8_t* dst, uint64_t CHI_UNUSED(n)) {
+    return dst + CHI_INT_BUFSIZE;
+}
+
+static CHI_WU uint8_t* writeHex(uint8_t* dst, uint64_t n) {
+    return (uint8_t*)chiShowHexUInt((char*)dst, n);
+}
+
+static CHI_WU uint8_t* estimateHex(uint8_t* dst, uint64_t CHI_UNUSED(n)) {
+    return dst + CHI_INT_BUFSIZE;
+}
+
+static CHI_WU uint8_t* writeLeb128(uint8_t* dst, uint64_t n) {
     do {
         uint8_t b = (uint8_t)(n & 0x7F);
         n >>= 7;
@@ -56,15 +65,21 @@ static CHI_WU uint8_t* writeLeb128(uint8_t* dst, uint8_t* end, uint64_t n) {
     return dst;
 }
 
-static CHI_WU uint8_t* writeByte(uint8_t* dst, uint8_t* end, uint32_t x) {
-    CHI_ASSERT(x <= 0xFF);
-    uint8_t b = (uint8_t)x;
-    return writeBytes(dst, end, &b, 1);
+static CHI_WU uint8_t* estimateLeb128(uint8_t* dst, uint64_t CHI_UNUSED(n)) {
+    return dst + 10;
 }
 
-static CHI_WU uint8_t* writeEscapeString(uint8_t* dst, uint8_t* end, ChiStringRef s) {
-    if (CHI_UNLIKELY(dst + 2 * s.size > end))
-        return 0;
+static CHI_WU uint8_t* writeByte(uint8_t* dst, uint32_t x) {
+    CHI_ASSERT(x <= 0xFF);
+    *dst++ = (uint8_t)x;
+    return dst;
+}
+
+static CHI_WU uint8_t* estimateByte(uint8_t* dst, uint32_t CHI_UNUSED(x)) {
+    return dst + 1;
+}
+
+static CHI_WU uint8_t* writeEscString(uint8_t* dst, ChiStringRef s) {
     for (size_t i = 0; i < s.size; ++i) {
         switch ((char)s.bytes[i]) {
         case '"': *dst++ = '\\'; *dst++ = '"'; break;
@@ -76,14 +91,20 @@ static CHI_WU uint8_t* writeEscapeString(uint8_t* dst, uint8_t* end, ChiStringRe
     return dst;
 }
 
-static CHI_WU uint8_t* writeEscapeBytes(uint8_t* dst, uint8_t* end, ChiBytesRef s) {
-    if (CHI_UNLIKELY(dst + 2 * s.size > end))
-        return 0;
+static CHI_WU uint8_t* estimateEscString(uint8_t* dst, ChiStringRef s) {
+    return dst + 2 * s.size;
+}
+
+static CHI_WU uint8_t* writeEscBytes(uint8_t* dst, ChiBytesRef s) {
     for (size_t i = 0; i < s.size; ++i) {
         *dst++ = (uint8_t)chiHexDigits[(s.bytes[i] / 16) & 15];
         *dst++ = (uint8_t)chiHexDigits[s.bytes[i] & 15];
     }
     return dst;
+}
+
+static CHI_WU uint8_t* estimateEscBytes(uint8_t* dst, ChiBytesRef s) {
+    return dst + 2 * s.size;
 }
 
 typedef enum {
@@ -184,22 +205,33 @@ static void bufferRelease(ChiEventState* CHI_UNUSED(s), ChiWorker* CHI_UNUSED(w)
 static void bufferDestroy(ChiEventState* CHI_UNUSED(s)) {}
 #endif
 
+#define WRITE_MODE estimate
 // lint: no-sort
 #include "event/write_pretty.h"
 #include "event/serialize.h"
 #include "event/write_bin.h"
 #include "event/serialize.h"
+#undef WRITE_MODE
+
+#define WRITE_MODE write
+// lint: no-sort
+#include "event/write_pretty.h"
+#include "event/serialize.h"
+#include "event/write_bin.h"
+#include "event/serialize.h"
+#undef WRITE_MODE
 
 static void eventWrite(ChiRuntime* rt, ChiWorker* worker, const Event* e) {
     ChiEventState* state = rt->eventState;
     const ChiRuntimeOption* opt = &rt->option;
-    Buffer* buf = bufferAcquire(state, worker, opt->event.msgSize);
-    uint8_t* end = buf->buf + opt->event.msgSize - sizeof (Buffer);
-    end = CHI_AND(CHI_EVENT_PRETTY_ENABLED, opt->event.pretty) ? writePrettyEvent(buf->buf, end, e) : writeBinEvent(buf->buf, end, e);
-    if (end)
-        chiSinkWrite(state->sink, buf->buf, (size_t)(end - buf->buf));
-    else
+    size_t size = (size_t)(CHI_AND(CHI_EVENT_PRETTY_ENABLED, opt->event.pretty) ? estimatePrettyEvent(0, e) : estimateBinEvent(0, e));
+    if (size > opt->event.msgSize - sizeof (Buffer)) {
         chiWarn("Discarded overly long event of type %s.", chiEventName[e->type]);
+        return;
+    }
+    Buffer* buf = bufferAcquire(state, worker, opt->event.msgSize);
+    uint8_t* end = CHI_AND(CHI_EVENT_PRETTY_ENABLED, opt->event.pretty) ? writePrettyEvent(buf->buf, e) : writeBinEvent(buf->buf, e);
+    chiSinkWrite(state->sink, buf->buf, (size_t)(end - buf->buf));
     bufferRelease(state, worker, buf);
 }
 
@@ -241,10 +273,22 @@ static CHI_WU const uint8_t* readLeb128(const uint8_t* src, const uint8_t* end, 
 // lint: no-sort
 #include "event/read_bin.h"
 #include "event/serialize.h"
+
+#define WRITE_MODE estimate
+// lint: no-sort
 #include "event/write_csv.h"
 #include "event/serialize.h"
 #include "event/write_json.h"
 #include "event/serialize.h"
+#undef WRITE_MODE
+
+#define WRITE_MODE write
+// lint: no-sort
+#include "event/write_csv.h"
+#include "event/serialize.h"
+#include "event/write_json.h"
+#include "event/serialize.h"
+#undef WRITE_MODE
 
 void chiEventConvert(const char* inName, ChiFile in, ChiSink* out, ChiEventFormat fmt, size_t bufSize) {
     CHI_AUTO_ALLOC(uint8_t, inBuf, bufSize);
@@ -275,27 +319,33 @@ void chiEventConvert(const char* inName, ChiFile in, ChiSink* out, ChiEventForma
             }
             inPos = (size_t)(inPtr - inBuf);
 
-            for (;;) {
-                uint8_t* outPtr = 0;
-                switch (fmt) {
-                case CHI_EVFMT_JSON: outPtr = writeJsonEvent(outBuf + outPos, outBuf + bufSize - outPos, &e); break;
-                case CHI_EVFMT_CSV: outPtr = writeCsvEvent(outBuf + outPos, outBuf + bufSize - outPos, &e); break;
-                case CHI_EVFMT_PRETTY: outPtr = writePrettyEvent(outBuf + outPos, outBuf + bufSize - outPos, &e); break;
-                case CHI_EVFMT_BIN: outPtr = writeBinEvent(outBuf + outPos, outBuf + bufSize - outPos, &e); break;
-                case CHI_EVFMT_NONE: // fall through
-                default: CHI_BUG("Invalid event format");
-                }
-
-                if (outPtr) {
-                    outPos = (size_t)(outPtr - outBuf);
-                    break;
-                }
-
-                if (outPos == 0)
-                    chiErr("Message too long to write in '%s'", inName);
-                chiSinkWrite(out, outBuf, outPos);
-                outPos = 0;
+            size_t size = 0;
+            switch (fmt) {
+            case CHI_EVFMT_JSON: size = (size_t)estimateJsonEvent(0, &e); break;
+            case CHI_EVFMT_CSV: size = (size_t)estimateCsvEvent(0, &e); break;
+            case CHI_EVFMT_PRETTY: size = (size_t)estimatePrettyEvent(0, &e); break;
+            case CHI_EVFMT_BIN: size = (size_t)estimateBinEvent(0, &e); break;
+            case CHI_EVFMT_NONE: default: CHI_BUG("Invalid event format");
             }
+
+            if (size > bufSize - outPos) {
+                if (outPos) {
+                    chiSinkWrite(out, outBuf, outPos);
+                    outPos = 0;
+                }
+                if (size > bufSize)
+                    chiErr("Message too long to write in '%s'", inName);
+            }
+
+            uint8_t* outPtr = 0;
+            switch (fmt) {
+            case CHI_EVFMT_JSON: outPtr = writeJsonEvent(outBuf + outPos, &e); break;
+            case CHI_EVFMT_CSV: outPtr = writeCsvEvent(outBuf + outPos, &e); break;
+            case CHI_EVFMT_PRETTY: outPtr = writePrettyEvent(outBuf + outPos, &e); break;
+            case CHI_EVFMT_BIN: outPtr = writeBinEvent(outBuf + outPos, &e); break;
+            case CHI_EVFMT_NONE: default: CHI_BUG("Invalid event format");
+            }
+            outPos = (size_t)(outPtr - outBuf);
         }
     }
 }

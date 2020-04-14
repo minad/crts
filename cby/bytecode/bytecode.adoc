@@ -79,8 +79,8 @@
 |75|clos3|u8:nargs u8:lim|Check limit and load closure with 3 fields (safepoint!)
 |76|clos4|u8:nargs u8:lim|Check limit and load closure with 4 fields (safepoint!)
 |77|clos|u8:nargs u16:lim u16:size|Check limit and load closure with variable number of fields
-|78|enter|u8:top u8:lim|Enter continuation, shift register window
-|79|enterl|u16:top u16:lim|Enter continuation, shift register window
+|78|enter|u8:top u8:lim|Enter continuation, shift register window (safepoint!)
+|79|enterl|u16:top u16:lim|Enter continuation, shift register window (safepoint!)
 |80|ffiget|w16:res ffiref|Get foreign variable
 |81|ffiset|r16:var ffiref|Set foreign variable
 |82|ffitail|ffiref u8:nargs args[nargs](r16:a)|Foreign call in tail position

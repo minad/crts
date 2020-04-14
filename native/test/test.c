@@ -24,7 +24,7 @@ static uint64_t randSeed;
 
 STATIC_CONT(runBench) {
     PROLOGUE(runBench);
-    LIMITS(.heap = 1); // force safepoint
+    LIMITS(.interrupt = true); // force safepoint
 
     uint32_t i = chiToUInt32(A(0));
 
@@ -58,7 +58,7 @@ STATIC_CONT(runBench) {
 
 STATIC_CONT(runTest, .na = 1) {
     PROLOGUE(runTest);
-    LIMITS(.heap = 1); // force safepoint
+    LIMITS(.interrupt = true); // force safepoint
 
     uint32_t i = chiToUInt32(A(0));
     uint32_t failed = chiToUInt32(A(1));
