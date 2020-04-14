@@ -34,7 +34,9 @@
 
 // check prefix data
 #define _CHI_CONT_PREFIX_VALID0(n)  true
-#define _CHI_CONT_PREFIX_VALID1(n)  ({ __volatile__ bool valid = CHI_CHOICE(CHI_CONT_PREFIX_SECTION, ((const uint8_t*)&CHI_CAT(n, _info) == ((const uint8_t*)n - CHI_CONT_PREFIX_ALIGN)), true); valid; })
+#define _CHI_CONT_PREFIX_VALID1(n)  ({ const void* __volatile__ addr1 = CHI_CHOICE(CHI_CONT_PREFIX_SECTION, &CHI_CAT(n, _info), 0); \
+                                       const void* __volatile__ addr2 = CHI_CHOICE(CHI_CONT_PREFIX_SECTION, (const uint8_t*)n - CHI_CONT_PREFIX_ALIGN, 0); \
+                                       (const uint8_t*)addr1 == (const uint8_t*)addr2; })
 
 // Use prefix data
 #define _CHI_CONT1(n, static_cont, attr_fn, ...)                        \
