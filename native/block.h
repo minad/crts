@@ -66,7 +66,7 @@ struct ChiBlockManager_ {
     ChiChunkList chunkList;
     ChiRuntime*  rt;
     ChiMutex     mutex;
-    bool         shared;
+    bool         shared, allocHookEnabled;
 };
 
 CHI_INTERN void chiBlockManagerSetup(ChiBlockManager*, size_t, size_t, bool, ChiRuntime*);
@@ -76,8 +76,9 @@ CHI_INTERN void chiBlockManagerFree(ChiBlockManager*, ChiBlock*);
 CHI_INTERN void chiBlockManagerFreeList(ChiBlockManager*, ChiBlockList*);
 
 // call outs
-CHI_INTERN CHI_WU ChiChunk* chiBlockManagerChunkNew(ChiRuntime*, size_t, size_t);
-CHI_INTERN void chiBlockManagerChunkFree(ChiRuntime*, ChiChunk*);
+CHI_INTERN CHI_WU ChiChunk* chiBlockManagerChunkNew(ChiBlockManager*, size_t, size_t);
+CHI_INTERN void chiBlockManagerChunkFree(ChiBlockManager*, ChiChunk*);
+CHI_INTERN void chiBlockManagerAllocHook(ChiBlockManager*);
 
 CHI_INL CHI_WU ChiBlock* chiBlock(ChiBlockManager* bm, void* p) {
     ChiBlock* b = (ChiBlock*)((uintptr_t)p & bm->blockMask);

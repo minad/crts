@@ -34,7 +34,7 @@ static void fmtDouble(ChiStringRef* field, char* buf, uint32_t prec, char fmt, d
         }
     } else if (a < 1e-99 || (a >= 1 && a < 10) || (fmt == 'f' && a < 1e12)) {
         // Precise fix point formatting for small doubles (Locale independent!)
-        prec = CHI_MIN(prec, 19);
+        CHI_SETMIN(&prec, 19);
         int64_t s = (int64_t)a;
         uint64_t r = chiPow10[prec], f = (uint64_t)((a - (double)s) * (double)r + 0.5);
         if (f >= r) {
@@ -67,7 +67,7 @@ static void fmtNanos(ChiStringRef* field, char* buf, uint32_t prec, uint32_t* wi
 }
 
 static uint32_t fmtChili(char* buf, Chili c) {
-    if (chiUnboxed(c))
+    if (!chiRef(c))
         return (uint32_t)chiFmt(buf, FMTBUFSZ, "U%jx", chiToUnboxed(c));
     ChiGen gen = chiGen(c);
     ChiType type = chiType(c);
@@ -79,18 +79,18 @@ static uint32_t fmtChili(char* buf, Chili c) {
     if (gen == CHI_GEN_MAJOR) {
         ChiObject* obj = chiObjectUnchecked(c);
         return (uint32_t)chiFmt(buf, FMTBUFSZ,
-                                "%s[id=%lu,size=%zu,%s%s,color=%u" CHI_IF(CHI_POISON_ENABLED, ",owner=%u") "%s%s]",
-                                chiTypeName(type), chiAddress(c), chiObjectSize(obj), tag,
+                                "%s[addr=%lx,size=%zu,%s%s,color=%u" CHI_IF(CHI_POISON_ENABLED, ",owner=%u") "%s%s]",
+                                chiTypeName(type), chiAddress(c), obj->size, tag,
                                 chiObjectShared(obj) ? "major-shared" : "major-local",
                                 CHI_UN(Color, chiObjectColor(obj)),
                                 CHI_IF(CHI_POISON_ENABLED, chiObjectOwner(obj) - 1,)
-                                chiObjectDirty(obj) ? ",dirty" : "",
+                                obj->flags.dirty ? ",dirty" : "",
                                 chiObjectLocked(obj) ? ",locked" : "");
     }
     return (uint32_t)chiFmt(buf, FMTBUFSZ,
-                            "%s[id=%lu,size=%zu,%sgen=%u]",
+                            "%s[addr=%lx,size=%zu,%sgen=%u]",
                             chiTypeName(type), chiAddress(c),
-                            chiSizeField(c), tag, gen);
+                            chiSizeSmall(c), tag, gen);
 }
 
 static uint32_t fmtSize(char* buf, size_t size) {

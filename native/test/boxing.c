@@ -25,7 +25,7 @@ TEST(Wrap) {
         Chili c = chiWrap(p, s, t, g);
         ASSERT(chiType(c) == t);
         ASSERT(chiGen(c) == g);
-        ASSERT(chiSizeField(c) == s);
+        ASSERT(_chiSizeField(c) == s);
         ASSERT(_chiPtrField(c) == p);
         ASSERT(!chiEmpty(c));
     }
@@ -42,36 +42,30 @@ TEST(Bool) {
     ASSERT(chiToBool(chiFromBool(42)));
     ASSERT(!chiToBool(chiFromBool(0)));
 
-    ASSERT(chiUnboxed(chiFromBool(false)));
-    ASSERT(chiUnboxed(chiFromBool(true)));
-    ASSERT(chiUnboxed(chiFromBool(0)));
-    ASSERT(chiUnboxed(chiFromBool(42)));
+    ASSERT(!chiRef(chiFromBool(false)));
+    ASSERT(!chiRef(chiFromBool(true)));
+    ASSERT(!chiRef(chiFromBool(0)));
+    ASSERT(!chiRef(chiFromBool(42)));
 
     ASSERT(chiTrue(chiWrap((void*)CHI_CHUNK_START, 1, CHI_PRESTRING, CHI_GEN_NURSERY)));
     ASSERT(chiTrue(chiWrap((void*)CHI_CHUNK_START, 1, CHI_PRESTRING, CHI_GEN_NURSERY)) == true);
 }
 
-TEST(Fail) {
-    ASSERT(!chiUnboxed(CHI_FAIL));
-    ASSERT(chiEmpty(CHI_FAIL));
-    ASSERT(chiType(CHI_FAIL) == CHI_FAIL_TAG);
-}
-
 TEST(Poison) {
-    ASSERT(!chiUnboxed(_CHILI_POISON));
+    ASSERT(chiRef(_CHILI_POISON));
     ASSERT(chiEmpty(_CHILI_POISON));
     ASSERT(chiType(_CHILI_POISON) == CHI_POISON_TAG);
 }
 
 TEST(Empty) {
-    ASSERT(chiUnboxed(chiNewEmpty(CHI_TAG(0))));
+    ASSERT(!chiRef(chiNewEmpty(CHI_TAG(0))));
     ASSERT(chiEmpty(chiNewEmpty(CHI_TAG(0))));
 }
 
 TEST(Int8) {
     for (int64_t i = INT8_MIN; i <= INT8_MAX; ++i) {
         int8_t x = (int8_t)i;
-        ASSERT(chiUnboxed(chiFromInt8(x)));
+        ASSERT(!chiRef(chiFromInt8(x)));
         ASSERTEQ(chiToInt8(chiFromInt8(x)), x);
     }
 }
@@ -79,7 +73,7 @@ TEST(Int8) {
 TEST(UInt8) {
     for (uint64_t i = 0; i <= UINT8_MAX; ++i) {
         uint8_t x = (uint8_t)i;
-        ASSERT(chiUnboxed(chiFromUInt8(x)));
+        ASSERT(!chiRef(chiFromUInt8(x)));
         ASSERTEQ(chiToUInt8(chiFromUInt8(x)), x);
     }
 }
@@ -87,7 +81,7 @@ TEST(UInt8) {
 TEST(Int16) {
     for (int64_t i = INT16_MIN; i <= INT16_MAX; ++i) {
         int16_t x = (int16_t)i;
-        ASSERT(chiUnboxed(chiFromInt16(x)));
+        ASSERT(!chiRef(chiFromInt16(x)));
         ASSERTEQ(chiToInt16(chiFromInt16(x)), x);
     }
 }
@@ -95,7 +89,7 @@ TEST(Int16) {
 TEST(UInt16) {
     for (uint64_t i = 0; i <= UINT16_MAX; ++i) {
         uint16_t x = (uint16_t)i;
-        ASSERT(chiUnboxed(chiFromUInt16(x)));
+        ASSERT(!chiRef(chiFromUInt16(x)));
         ASSERTEQ(chiToUInt16(chiFromUInt16(x)), x);
     }
 }
@@ -103,7 +97,7 @@ TEST(UInt16) {
 TEST(Int32) {
     for (uint32_t i = 0; i < SAMPLES; ++i) {
         int32_t x = (int32_t)RAND;
-        ASSERT(chiUnboxed(chiFromInt32(x)));
+        ASSERT(!chiRef(chiFromInt32(x)));
         ASSERTEQ(chiToInt32(chiFromInt32(x)), x);
     }
 }
@@ -111,7 +105,7 @@ TEST(Int32) {
 TEST(UInt32) {
     for (uint32_t i = 0; i < SAMPLES; ++i) {
         uint32_t x = (uint32_t)RAND;
-        ASSERT(chiUnboxed(chiFromUInt32(x)));
+        ASSERT(!chiRef(chiFromUInt32(x)));
         ASSERTEQ(chiToUInt32(chiFromUInt32(x)), x);
     }
 }
@@ -121,12 +115,12 @@ TEST(Int64) {
         int64_t x = (int64_t)RAND;
         ASSERTEQ(chiToInt64(chiFromInt64(x)), x);
     }
-    ASSERT(chiUnboxed(chiFromInt64(0)));
-    ASSERT(chiUnboxed(chiFromInt64(1)));
-    ASSERT(chiUnboxed(chiFromInt64(-1)));
-    ASSERT(chiUnboxed(chiFromInt64((INT64_C(1) << 62) - 1)));
+    ASSERT(!chiRef(chiFromInt64(0)));
+    ASSERT(!chiRef(chiFromInt64(1)));
+    ASSERT(!chiRef(chiFromInt64(-1)));
+    ASSERT(!chiRef(chiFromInt64((INT64_C(1) << 62) - 1)));
     ASSERT(chiType(chiFromInt64(INT64_C(1) << 62)) == CHI_BOX);
-    ASSERT(chiUnboxed(chiFromInt64(-(INT64_C(1) << 62))));
+    ASSERT(!chiRef(chiFromInt64(-(INT64_C(1) << 62))));
     ASSERT(chiType(chiFromInt64(-(INT64_C(1) << 62) - 1)) == CHI_BOX);
 }
 
@@ -135,9 +129,9 @@ TEST(UInt64) {
         uint64_t x = RAND;
         ASSERTEQ(chiToUInt64(chiFromUInt64(x)), x);
     }
-    ASSERT(chiUnboxed(chiFromUInt64(0)));
-    ASSERT(chiUnboxed(chiFromUInt64(42)));
-    ASSERT(chiUnboxed(chiFromUInt64((UINT64_C(1) << 63) - 1U)));
+    ASSERT(!chiRef(chiFromUInt64(0)));
+    ASSERT(!chiRef(chiFromUInt64(42)));
+    ASSERT(!chiRef(chiFromUInt64((UINT64_C(1) << 63) - 1U)));
     ASSERT(chiType(chiFromUInt64(~UINT64_C(1))) == CHI_BOX);
     ASSERT(chiType(chiFromUInt64(UINT64_C(1) << 63)) == CHI_BOX);
 }
@@ -145,7 +139,7 @@ TEST(UInt64) {
 #define CHECK_FLOAT32(x)                                                \
     ({                                                                  \
         float _x = (x);                                                 \
-        ASSERT(chiUnboxed(chiFromFloat32(_x)));                     \
+        ASSERT(!chiRef(chiFromFloat32(_x)));                     \
         if (_x != _x) {                                                 \
             float y = chiToFloat32(chiFromFloat32(_x));             \
             ASSERT(y != y);                                             \
@@ -165,7 +159,7 @@ TEST(Float32) {
 #define CHECK_FLOAT64(x)                                                \
     ({                                                                  \
         double _x = (x);                                                \
-        ASSERT(CHI_NANBOXING_ENABLED == chiUnboxed(chiFromFloat64(_x))); \
+        ASSERT(CHI_NANBOXING_ENABLED == !chiRef(chiFromFloat64(_x))); \
         if (_x != _x) {                                                 \
             double y = chiToFloat64(chiFromFloat64(_x));                \
             ASSERT(y != y);                                             \

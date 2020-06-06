@@ -3,25 +3,23 @@
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/Instructions.h>
-#include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/Module.h>
+#include <llvm/IR/PassManager.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/Pass.h>
+#include <llvm/Passes/PassBuilder.h>
+#include <llvm/Passes/PassPlugin.h>
 #include <llvm/Transforms/IPO/PassManagerBuilder.h>
 #include <llvm/Transforms/Utils/BasicBlockUtils.h>
 #pragma GCC diagnostic push
 
-using namespace llvm;
-
 namespace {
 
-struct TailPrefixPass : public ModulePass {
-    static char ID;
-    TailPrefixPass() : ModulePass(ID) {}
-    bool runOnModule(Module&) override;
-};
+using namespace llvm;
 
-char TailPrefixPass::ID = 0;
+struct TailPrefixPass : public PassInfoMixin<TailPrefixPass> {
+    PreservedAnalyses run(Module&, ModuleAnalysisManager&);
+};
 
 static void filterUsedList(Module &M, StringRef name) {
     auto GV = M.getGlobalVariable("llvm.used");
@@ -44,9 +42,10 @@ static void filterUsedList(Module &M, StringRef name) {
     GV = new llvm::GlobalVariable(M, ATy, false, GlobalValue::AppendingLinkage,
                                   ConstantArray::get(ATy, Init), "llvm.used");
     GV->setSection("llvm.metadata");
+
 }
 
-bool TailPrefixPass::runOnModule(Module& module) {
+PreservedAnalyses TailPrefixPass::run(Module& module, ModuleAnalysisManager& mam) {
     CallingConv::ID callconv = module.getTargetTriple().find("x86_64") != std::string::npos
         ? CallingConv::GHC : CallingConv::Fast;
 
@@ -120,14 +119,17 @@ bool TailPrefixPass::runOnModule(Module& module) {
     verifyModule(module, &errs());
     //outs() << module;
 
-    return true;
+    return PreservedAnalyses::none();
 }
 
-void registerTailPrefix(const PassManagerBuilder&, legacy::PassManagerBase& pm) {
-    pm.add(new TailPrefixPass());
+extern "C" LLVM_ATTRIBUTE_WEAK PassPluginLibraryInfo llvmGetPassPluginInfo() {
+    return { LLVM_PLUGIN_API_VERSION,
+             "tailcall_prefix_data",
+             LLVM_VERSION_STRING,
+             [](PassBuilder &pb) {
+                 pb.registerPipelineStartEPCallback([](ModulePassManager &mpm) { mpm.addPass(TailPrefixPass()); });
+             }
+    };
 }
-
-RegisterStandardPasses register0(PassManagerBuilder::EP_ModuleOptimizerEarly, registerTailPrefix);
-RegisterStandardPasses register1(PassManagerBuilder::EP_EnabledOnOptLevel0, registerTailPrefix);
 
 } // anonymous namespace

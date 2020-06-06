@@ -23,7 +23,7 @@ void insnStats(CbyInterpreter*, const countData*, const cyclesData*);
 void insnStats(CbyInterpreter* interp, const countData* count, const cyclesData* cycles) {
     ChiRuntime* rt = &interp->rt;
     const bool cyclesEnabled = cycles && CBY_BACKEND_CYCLES_ENABLED;
-    const ChiTime delta = chiTimeDelta(rt->timeRef.end, rt->timeRef.start);
+    const ChiNanos delta = chiNanosDelta(rt->timeRef.end, rt->timeRef.start);
     uint32_t overhead = chiCpuCyclesOverhead();
     uint64_t totalCount = 0, totalCycles = 0;
     CHI_AUTO_ZALLOC(Insn, insn, OPCODE_COUNT);
@@ -52,7 +52,7 @@ void insnStats(CbyInterpreter* interp, const countData* count, const cyclesData*
 
     chiStatsRow(stats, "insn");
     chiStatsIntUnit(stats, "executed", totalCount, true, 0);
-    chiStatsFloatUnit(stats, "rate", chiPerSec(totalCount, delta.cpu), true, "/s");
+    chiStatsFloatUnit(stats, "rate", chiPerSec(totalCount, delta), true, "/s");
 
     if (cycles)
         sortInsnByCycles(insn, OPCODE_COUNT);
@@ -83,13 +83,6 @@ void insnStats(CbyInterpreter* interp, const countData* count, const cyclesData*
 
     ChiStatsColumn column[8], *col = column;
     if (cyclesEnabled) {
-        uint64_t cyclesDelta = chiCpuCycles() - cycles->begin;
-        double interpTime = (double)cycles->interp * (double)CHI_UN(Nanos, delta.real) / (double)cyclesDelta;
-
-        chiStatsRow(stats, "interp");
-        chiStatsTime(stats, "time", (ChiNanos){(uint64_t)interpTime});
-        chiStatsPercent(stats, "ratio", interpTime / (double)CHI_UN(Nanos, delta.cpu));
-
         chiStatsRow(stats, "cycles");
         chiStatsFloat(stats, "cy/insn", totalCount ? CHI_MAX((double)totalCycles / (double)totalCount - overhead, 0) : 0);
         chiStatsInt(stats, "overhead/insn", overhead);

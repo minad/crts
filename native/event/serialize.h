@@ -10,7 +10,6 @@ SPAYLOAD_END
 SPAYLOAD_BEGIN(Exception, ChiEventException* d)
     SFIELD(name, SSTR(d->name));
     SFIELD(trace, SSTR(d->trace));
-    SFIELD(handled, SBOOL(d->handled));
 SPAYLOAD_END
 
 SPAYLOAD_BEGIN(FFI, ChiEventFFI* d)
@@ -39,27 +38,20 @@ SPAYLOAD_BEGIN(HeapAlloc, ChiEventHeapAlloc* d)
     SFIELD(size, SDEC(d->size));
 SPAYLOAD_END
 
-SPAYLOAD_BEGIN(HeapLimit, ChiEventHeapLimit* d)
-    SFIELD(heapSize, SDEC(d->heapSize));
-    SFIELD(softLimit, SDEC(d->softLimit));
-    SFIELD(hardLimit, SDEC(d->hardLimit));
-    SFIELD(limit, SENUM(ChiHeapLimit, d->limit));
-SPAYLOAD_END
-
 SPAYLOAD_BEGIN(HeapUsage, ChiEventHeapUsage* d)
     SBLOCK_BEGIN(small);
-        SFIELD(allocWords, SDEC(d->small.allocWords));
-        SFIELD(totalWords, SDEC(d->small.totalWords));
+        SFIELD(allocSize, SDEC(d->small.allocSize));
+        SFIELD(totalSize, SDEC(d->small.totalSize));
     SBLOCK_END(small);
     SBLOCK_BEGIN(medium);
-        SFIELD(allocWords, SDEC(d->medium.allocWords));
-        SFIELD(totalWords, SDEC(d->medium.totalWords));
+        SFIELD(allocSize, SDEC(d->medium.allocSize));
+        SFIELD(totalSize, SDEC(d->medium.totalSize));
     SBLOCK_END(medium);
     SBLOCK_BEGIN(large);
-        SFIELD(allocWords, SDEC(d->large.allocWords));
-        SFIELD(totalWords, SDEC(d->large.totalWords));
+        SFIELD(allocSize, SDEC(d->large.allocSize));
+        SFIELD(totalSize, SDEC(d->large.totalSize));
     SBLOCK_END(large);
-    SFIELD(totalChunkWords, SDEC(d->totalChunkWords));
+    SFIELD(totalSize, SDEC(d->totalSize));
 SPAYLOAD_END
 
 SPAYLOAD_BEGIN(Mark, ChiEventMark* d)
@@ -101,6 +93,10 @@ SPAYLOAD_BEGIN(ProcMsgSend, ChiEventProcMsgSend* d)
     SFIELD(message, SENUM(ChiProcessorMessage, d->message));
 SPAYLOAD_END
 
+SPAYLOAD_BEGIN(ProcNotify, ChiEventProcNotify* d)
+    SFIELD(notifyWid, SDEC(d->notifyWid));
+SPAYLOAD_END
+
 SPAYLOAD_BEGIN(ProcRequest, ChiEventProcRequest* d)
     SFIELD(request, SENUM(ChiProcessorRequest, d->request));
 SPAYLOAD_END
@@ -110,7 +106,6 @@ SPAYLOAD_BEGIN(ProcStall, ChiEventProcStall* d)
 SPAYLOAD_END
 
 SPAYLOAD_BEGIN(ProcSuspend, ChiEventProcSuspend* d)
-    SFIELD(suspendWid, SDEC(d->suspendWid));
     SFIELD(ms, SDEC(d->ms));
 SPAYLOAD_END
 
@@ -128,14 +123,18 @@ SPAYLOAD_BEGIN(Scavenger, ChiEventScavenger* d)
     SBLOCK_END(promoted);
     SBLOCK_BEGIN(scavenger);
         SBLOCK_BEGIN(dirty);
-            SBLOCK_BEGIN(major);
-                SFIELD(count, SDEC(d->scavenger.dirty.major.count));
-                SFIELD(words, SDEC(d->scavenger.dirty.major.words));
-            SBLOCK_END(major);
-            SBLOCK_BEGIN(stacks);
-                SFIELD(count, SDEC(d->scavenger.dirty.stacks.count));
-                SFIELD(words, SDEC(d->scavenger.dirty.stacks.words));
-            SBLOCK_END(stacks);
+            SBLOCK_BEGIN(object);
+                SFIELD(count, SDEC(d->scavenger.dirty.object.count));
+                SFIELD(words, SDEC(d->scavenger.dirty.object.words));
+            SBLOCK_END(object);
+            SBLOCK_BEGIN(stack);
+                SFIELD(count, SDEC(d->scavenger.dirty.stack.count));
+                SFIELD(words, SDEC(d->scavenger.dirty.stack.words));
+            SBLOCK_END(stack);
+            SBLOCK_BEGIN(card);
+                SFIELD(count, SDEC(d->scavenger.dirty.card.count));
+                SFIELD(words, SDEC(d->scavenger.dirty.card.words));
+            SBLOCK_END(card);
         SBLOCK_END(dirty);
         SBLOCK_BEGIN(raw);
             SBLOCK_BEGIN(promoted);
@@ -162,12 +161,12 @@ SPAYLOAD_BEGIN(Scavenger, ChiEventScavenger* d)
         SFIELD(snapshot, SBOOL(d->scavenger.snapshot));
     SBLOCK_END(scavenger);
     SBLOCK_BEGIN(minorHeapBefore);
-        SFIELD(usedWords, SDEC(d->minorHeapBefore.usedWords));
-        SFIELD(totalWords, SDEC(d->minorHeapBefore.totalWords));
+        SFIELD(usedSize, SDEC(d->minorHeapBefore.usedSize));
+        SFIELD(totalSize, SDEC(d->minorHeapBefore.totalSize));
     SBLOCK_END(minorHeapBefore);
     SBLOCK_BEGIN(minorHeapAfter);
-        SFIELD(usedWords, SDEC(d->minorHeapAfter.usedWords));
-        SFIELD(totalWords, SDEC(d->minorHeapAfter.totalWords));
+        SFIELD(usedSize, SDEC(d->minorHeapAfter.usedSize));
+        SFIELD(totalSize, SDEC(d->minorHeapAfter.totalSize));
     SBLOCK_END(minorHeapAfter);
 SPAYLOAD_END
 
@@ -175,18 +174,15 @@ SPAYLOAD_BEGIN(Signal, ChiEventSignal* d)
     SFIELD(sig, SENUM(ChiSig, d->sig));
 SPAYLOAD_END
 
-SPAYLOAD_BEGIN(StackActive, ChiEventStackActive* d)
+SPAYLOAD_BEGIN(Stack, ChiEventStack* d)
     SFIELD(stack, SHEX(d->stack));
-    SFIELD(scanned, SBOOL(d->scanned));
 SPAYLOAD_END
 
 SPAYLOAD_BEGIN(StackSize, ChiEventStackSize* d)
-    SFIELD(oldStack, SHEX(d->oldStack));
-    SFIELD(newStack, SHEX(d->newStack));
-    SFIELD(reqSize, SDEC(d->reqSize));
-    SFIELD(oldSize, SDEC(d->oldSize));
-    SFIELD(newSize, SDEC(d->newSize));
-    SFIELD(usedSize, SDEC(d->usedSize));
+    SFIELD(stack, SHEX(d->stack));
+    SFIELD(size, SDEC(d->size));
+    SFIELD(step, SDEC(d->step));
+    SFIELD(copied, SDEC(d->copied));
 SPAYLOAD_END
 
 SPAYLOAD_BEGIN(StackTrace, ChiEventStackTrace* d)
@@ -230,9 +226,11 @@ SPAYLOAD_END
 SPAYLOAD_BEGIN(SystemStats, ChiEventSystemStats* d)
     SFIELD(cpuTimeUser, SDEC(CHI_UN(Nanos, d->cpuTimeUser)));
     SFIELD(cpuTimeSystem, SDEC(CHI_UN(Nanos, d->cpuTimeSystem)));
-    SFIELD(residentSize, SDEC(d->residentSize));
+    SFIELD(maxResidentSize, SDEC(d->maxResidentSize));
+    SFIELD(currResidentSize, SDEC(d->currResidentSize));
     SFIELD(pageFault, SDEC(d->pageFault));
-    SFIELD(contextSwitch, SDEC(d->contextSwitch));
+    SFIELD(voluntaryContextSwitch, SDEC(d->voluntaryContextSwitch));
+    SFIELD(involuntaryContextSwitch, SDEC(d->involuntaryContextSwitch));
 SPAYLOAD_END
 
 SPAYLOAD_BEGIN(ThreadEnqueue, ChiEventThreadEnqueue* d)
@@ -312,6 +310,7 @@ SEVENT_BEGIN
    case CHI_EVENT_BLOCK_CHUNK_FREE: SPAYLOAD(Chunk, &e->payload->BLOCK_CHUNK_FREE); break;
    case CHI_EVENT_BLOCK_CHUNK_NEW: SPAYLOAD(Chunk, &e->payload->BLOCK_CHUNK_NEW); break;
    case CHI_EVENT_ENTRY_BLACKHOLE: break;
+   case CHI_EVENT_ENTRY_NOTIFY_INT: break;
    case CHI_EVENT_ENTRY_START: break;
    case CHI_EVENT_ENTRY_TIMER_INT: break;
    case CHI_EVENT_ENTRY_UNHANDLED: break;
@@ -323,14 +322,14 @@ SEVENT_BEGIN
    case CHI_EVENT_FNLOG_ENTER_JMP: SPAYLOAD(FnLog, &e->payload->FNLOG_ENTER_JMP); break;
    case CHI_EVENT_FNLOG_FFI: SPAYLOAD(FnLogFFI, &e->payload->FNLOG_FFI); break;
    case CHI_EVENT_FNLOG_LEAVE: SPAYLOAD(FnLog, &e->payload->FNLOG_LEAVE); break;
-   case CHI_EVENT_GC_NOTIFY: break;
    case CHI_EVENT_GC_PHASE_GLOBAL: SPAYLOAD(GCPhase, &e->payload->GC_PHASE_GLOBAL); break;
    case CHI_EVENT_GC_PHASE_LOCAL: SPAYLOAD(GCPhase, &e->payload->GC_PHASE_LOCAL); break;
    case CHI_EVENT_GC_TRIGGER: break;
    case CHI_EVENT_HEAP_ALLOC_FAILED: SPAYLOAD(HeapAlloc, &e->payload->HEAP_ALLOC_FAILED); break;
    case CHI_EVENT_HEAP_CHUNK_FREE: SPAYLOAD(Chunk, &e->payload->HEAP_CHUNK_FREE); break;
    case CHI_EVENT_HEAP_CHUNK_NEW: SPAYLOAD(Chunk, &e->payload->HEAP_CHUNK_NEW); break;
-   case CHI_EVENT_HEAP_LIMIT: SPAYLOAD(HeapLimit, &e->payload->HEAP_LIMIT); break;
+   case CHI_EVENT_HEAP_LIMIT_GC: break;
+   case CHI_EVENT_HEAP_LIMIT_OVERFLOW: break;
    case CHI_EVENT_HEAP_USAGE: SPAYLOAD(HeapUsage, &e->payload->HEAP_USAGE); break;
    case CHI_EVENT_LOG_BEGIN: break;
    case CHI_EVENT_LOG_END: break;
@@ -341,6 +340,7 @@ SEVENT_BEGIN
    case CHI_EVENT_PROC_INIT: break;
    case CHI_EVENT_PROC_MSG_RECV: SPAYLOAD(ProcMsgRecv, &e->payload->PROC_MSG_RECV); break;
    case CHI_EVENT_PROC_MSG_SEND: SPAYLOAD(ProcMsgSend, &e->payload->PROC_MSG_SEND); break;
+   case CHI_EVENT_PROC_NOTIFY: SPAYLOAD(ProcNotify, &e->payload->PROC_NOTIFY); break;
    case CHI_EVENT_PROC_REQUEST: SPAYLOAD(ProcRequest, &e->payload->PROC_REQUEST); break;
    case CHI_EVENT_PROC_STALL: SPAYLOAD(ProcStall, &e->payload->PROC_STALL); break;
    case CHI_EVENT_PROC_SUSPEND: SPAYLOAD(ProcSuspend, &e->payload->PROC_SUSPEND); break;
@@ -348,9 +348,11 @@ SEVENT_BEGIN
    case CHI_EVENT_PROF_ENABLED: break;
    case CHI_EVENT_PROF_TRACE: SPAYLOAD(StackTrace, &e->payload->PROF_TRACE); break;
    case CHI_EVENT_SIGNAL: SPAYLOAD(Signal, &e->payload->SIGNAL); break;
-   case CHI_EVENT_STACK_ACTIVATE: SPAYLOAD(StackActive, &e->payload->STACK_ACTIVATE); break;
-   case CHI_EVENT_STACK_DEACTIVATE: SPAYLOAD(StackActive, &e->payload->STACK_DEACTIVATE); break;
-   case CHI_EVENT_STACK_RESIZE: SPAYLOAD(StackSize, &e->payload->STACK_RESIZE); break;
+   case CHI_EVENT_STACK_ACTIVATE: SPAYLOAD(Stack, &e->payload->STACK_ACTIVATE); break;
+   case CHI_EVENT_STACK_DEACTIVATE: SPAYLOAD(Stack, &e->payload->STACK_DEACTIVATE); break;
+   case CHI_EVENT_STACK_GROW: SPAYLOAD(StackSize, &e->payload->STACK_GROW); break;
+   case CHI_EVENT_STACK_SCANNED: SPAYLOAD(Stack, &e->payload->STACK_SCANNED); break;
+   case CHI_EVENT_STACK_SHRINK: SPAYLOAD(StackSize, &e->payload->STACK_SHRINK); break;
    case CHI_EVENT_STACK_TRACE: SPAYLOAD(StackTrace, &e->payload->STACK_TRACE); break;
    case CHI_EVENT_STRBUILDER_OVERFLOW: break;
    case CHI_EVENT_SYSTEM_STATS: SPAYLOAD(SystemStats, &e->payload->SYSTEM_STATS); break;
@@ -362,7 +364,6 @@ SEVENT_BEGIN
    case CHI_EVENT_THREAD_TAKEOVER: SPAYLOAD(ThreadMigrate, &e->payload->THREAD_TAKEOVER); break;
    case CHI_EVENT_THREAD_TERMINATED: break;
    case CHI_EVENT_THREAD_YIELD: SPAYLOAD(ThreadYield, &e->payload->THREAD_YIELD); break;
-   case CHI_EVENT_TICK: break;
    case CHI_EVENT_USER_BUFFER: SPAYLOAD(UserBuffer, &e->payload->USER_BUFFER); break;
    case CHI_EVENT_USER_STRING: SPAYLOAD(UserString, &e->payload->USER_STRING); break;
    case CHI_EVENT_WORKER_DESTROY: break;

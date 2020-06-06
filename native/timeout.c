@@ -31,7 +31,7 @@ void chiTimeoutStart(ChiTimeout* t, ChiMicros us) {
         t->_slice = 0;
         t->_ticks = INT32_MAX;
     } else {
-        t->_time = chiClockMonotonicFine();
+        t->_time = chiClockFine();
         t->_slice = t->_ticks = 10;
         t->_timeout = chiNanosAdd(t->_time, chiMicrosToNanos(us));
     }
@@ -48,7 +48,7 @@ bool chiTimeoutPoll(ChiTimeout* t) {
         t->_ticks = INT32_MAX;
         return true;
     }
-    ChiNanos time = chiClockMonotonicFine();
+    ChiNanos time = chiClockFine();
     if (chiNanosLess(t->_timeout, time)) {
         chiTrigger(&t->_trigger, true);
         return false;

@@ -30,8 +30,9 @@ static z_digit* chi_get_digit(Chili c) {
 
 static Chili chi_try_from_z(z_int z) {
     if (CHI_UNLIKELY(z.err)) {
-        chiEvent0(CHI_CURRENT_PROCESSOR, BIGINT_OVERFLOW);
-        return CHI_FAIL;
+        ChiProcessor* proc = CHI_CURRENT_PROCESSOR;
+        chiEvent0(proc, BIGINT_OVERFLOW);
+        return proc->rt->fail;
     }
 
     if (!z.size) // Zero
@@ -132,9 +133,9 @@ Chili _chiSlowBigIntTryNeg(Chili c) {
     if (!CHI_BIGINT_UNBOXING && chiEmpty(c)) // zero
         return c;
     size_t size = chiSize(c);
-    /* TODO: Instead we could just change the type of `c`.
-     * However this would break object identity assumptions
-     * in the scavenger and also of chiIdentical.
+    /* We might consider only changing the type of `c`.
+     * However this would break object identity invariant
+     * in the scavenger forwarding code.
      */
     Chili d = chiNewFlags(chiType(c) == CHI_BIGINT_POS ? CHI_BIGINT_NEG : CHI_BIGINT_POS, size, CHI_NEW_TRY);
     if (chiSuccess(d))

@@ -5,7 +5,6 @@
 typedef struct ChiProcessor_ ChiProcessor;
 
 CHI_INTERN CHI_WU Chili chiThreadNewUninitialized(ChiProcessor*);
-CHI_INTERN void chiThreadSetErrno(ChiProcessor*, int32_t);
 CHI_INTERN void chiThreadSetInterruptible(ChiProcessor*, bool);
 CHI_INTERN CHI_WU Chili chiThreadName(Chili);
 CHI_INTERN CHI_WU bool chiThreadInterruptible(Chili);

@@ -3,15 +3,13 @@
 
 #define SMALL_BINS CHI_MAX_UNPINNED
 
-CHI_INL void objectInit(ChiObject* obj, size_t size, ChiColor color, bool dirty, bool shared) {
+CHI_INL void objectInit(ChiObject* obj, size_t size, ChiColor color, ChiNewFlags flags) {
     CHI_ASSERT(size <= UINT32_MAX);
-    atomic_store_explicit(&obj->size, (uint32_t)size, memory_order_relaxed);
+    obj->size = (uint32_t)size;
+    obj->flags = (ChiObjectFlags){.dirty = !(flags & CHI_NEW_CLEAN),
+                                  CHI_IF(CHI_SYSTEM_HAS_TASK, .shared = !!(flags & CHI_NEW_SHARED)) };
     atomic_store_explicit(&obj->color, CHI_UN(Color, color), memory_order_relaxed);
     atomic_store_explicit(&obj->lock, 0, memory_order_relaxed);
-    atomic_store_explicit(&obj->flags,
-                          (uint8_t)((dirty ? _CHI_OBJECT_DIRTY : 0) |
-                                    (CHI_SYSTEM_HAS_TASK && shared ? _CHI_OBJECT_SHARED : 0)),
-                          memory_order_relaxed);
     CHI_IF(CHI_POISON_ENABLED, atomic_store_explicit(&obj->owner, chiExpectedObjectOwner(), memory_order_relaxed);)
     CHI_ASSERT((atomic_load_explicit(&obj->header, memory_order_relaxed) & 0xFF) == CHI_UN(Color, color));
     chiPoisonObject(obj->payload, size);
@@ -19,12 +17,12 @@ CHI_INL void objectInit(ChiObject* obj, size_t size, ChiColor color, bool dirty,
 
 void chiHeapUsage(ChiHeap* heap, ChiHeapUsage* usage) {
     CHI_LOCK_MUTEX(&heap->mutex);
-    usage->small.allocWords = CHI_AND(CHI_COUNT_ENABLED, heap->small.allocWords);
-    usage->medium.allocWords = CHI_AND(CHI_COUNT_ENABLED, heap->medium.allocWords);
-    usage->large.allocWords = CHI_AND(CHI_COUNT_ENABLED, heap->large.allocWords);
-    usage->small.totalWords = heap->small.total * heap->small.segmentWords;
-    usage->medium.totalWords = heap->medium.total * heap->medium.segmentWords;
-    usage->large.totalWords = heap->large.totalWords;
+    usage->small.allocSize = CHI_WORDSIZE * CHI_AND(CHI_COUNT_ENABLED, heap->small.allocWords);
+    usage->medium.allocSize = CHI_WORDSIZE * CHI_AND(CHI_COUNT_ENABLED, heap->medium.allocWords);
+    usage->large.allocSize = CHI_WORDSIZE * CHI_AND(CHI_COUNT_ENABLED, heap->large.allocWords);
+    usage->small.totalSize = CHI_WORDSIZE * heap->small.total * heap->small.segmentWords;
+    usage->medium.totalSize = CHI_WORDSIZE * heap->medium.total * heap->medium.segmentWords;
+    usage->large.totalSize = CHI_WORDSIZE * heap->large.totalWords;
 }
 
 static bool classLimitReached(const ChiHeapClass* cls) {
@@ -71,7 +69,7 @@ static void segmentAcquireExisting(ChiHeapClass* cls, ChiHeapSegmentHandle* sh) 
 static ChiHeapSegment* segmentNewChunk(ChiHeap* heap, ChiHeapClass* cls) {
     ChiChunk* c = chiHeapChunkNew(heap, cls->segmentWords * CHI_WORDSIZE, CHI_NEW_DEFAULT);
 
-    size_t pageOff = CHI_ROUNDUP(sizeof (ChiHeapSegment) + sizeof (void*) * cls->bins, sizeof (ChiHeapPage));
+    size_t pageOff = CHI_CEIL(sizeof (ChiHeapSegment) + sizeof (void*) * cls->bins, sizeof (ChiHeapPage));
     ChiHeapSegment* s = (ChiHeapSegment*)chiZalloc(pageOff + cls->pagesPerSegment * sizeof (ChiHeapPage));
     chiHeapSegmentListPoison(s);
     s->chunk = c;
@@ -149,7 +147,7 @@ static ChiHeapPage* pageFindFree(ChiHeap* heap, ChiHeapSegmentHandle* sh) {
         ChiHeapClass* cls = s->cls;
         ChiHeapPage* p = s->freePageList;
         if (p) {
-            s->freePageList = p->nextIndex == UINT32_MAX ? 0 : s->firstPage + (p->nextIndex & ~CHI_HEAP_PAGE_FREE);
+            s->freePageList = CHI_UN(HeapPage, *p) == UINT32_MAX ? 0 : s->firstPage + (CHI_UN(HeapPage, *p) & ~CHI_HEAP_PAGE_FREE);
         } else {
             if (s->endIndex == cls->pagesPerSegment) {
                 segmentFull(heap, sh);
@@ -168,9 +166,9 @@ static void pageAlloc(ChiHeap* heap, ChiHeapSegmentHandle* sh, size_t size, uint
     ChiHeapClass* cls = s->cls;
     ChiWord *ptr = (ChiWord*)s->chunk->start + cls->pageWords * (size_t)(p - s->firstPage),
             *end = ptr + cls->pageWords;
-    uint32_t objectSize = p->objectSize = cls->linear
+    uint32_t objectSize = CHI_UN(HeapPage, *p) = cls->linear
              ? (uint32_t)size + _CHI_OBJECT_HEADER_SIZE
-             : 1U << chiLog2RoundUp(size + _CHI_OBJECT_HEADER_SIZE);
+             : 1U << chiLog2Ceil(size + _CHI_OBJECT_HEADER_SIZE);
     CHI_ASSERT(objectSize > _CHI_OBJECT_HEADER_SIZE);
     while (ptr + objectSize <= end) {
         ChiObject* obj = (ChiObject*)ptr;
@@ -195,7 +193,7 @@ CHI_INL void* segmentNew(ChiHeap* heap, ChiHeapSegmentHandle* sh,
     ChiHeapSegment* s = sh->segment;
     CHI_ASSERT(s);
     CHI_ASSERT(!s->cls->linear || bin == (uint32_t)size - 1);
-    CHI_ASSERT(s->cls->linear || bin == chiLog2(size));
+    CHI_ASSERT(s->cls->linear || bin == chiLog2Floor(size));
     CHI_ASSERT(bin < s->cls->bins);
 
     ChiObject* obj = s->freeObjectList[bin];
@@ -204,7 +202,7 @@ CHI_INL void* segmentNew(ChiHeap* heap, ChiHeapSegmentHandle* sh,
     else
         obj = segmentAlloc(heap, sh, size, bin);
 
-    objectInit(obj, size, allocColor, !(flags & CHI_NEW_CLEAN), !!(flags & CHI_NEW_SHARED));
+    objectInit(obj, size, allocColor, flags);
     chiCount(sh->allocWords, size + _CHI_OBJECT_HEADER_SIZE);
     return obj->payload;
 }
@@ -217,7 +215,7 @@ static void* largeNew(ChiHeap* heap, size_t size, ChiNewFlags flags, ChiColor al
         return 0;
 
     ChiObject* obj = (ChiObject*)c->start;
-    objectInit(obj, size, allocColor, !(flags & CHI_NEW_CLEAN), !!(flags & CHI_NEW_SHARED));
+    objectInit(obj, size, allocColor, flags);
     bool limit;
     {
         CHI_LOCK_MUTEX(&heap->mutex);
@@ -231,15 +229,6 @@ static void* largeNew(ChiHeap* heap, size_t size, ChiNewFlags flags, ChiColor al
         chiHeapLimitReached(heap);
     return obj->payload;
 }
-
-/* TODO
-  CHI_ASSERT(!chiRaw(type) || (flags & CHI_NEW_SHARED)); // raw must be allocated shared
-  CHI_ASSERT(!chiRaw(type) || (flags & CHI_NEW_CLEAN));  // raw must be allocated clean
-  // Stacks must be allocated clean, such that they do not end up wrongly
-  // in the dirty list of the allocating processor.
-  // chiStackDectivate will take care of marking stacks dirty.
-  CHI_ASSERT(type != CHI_STACK || (flags & CHI_NEW_CLEAN));
-*/
 
 #define HEAP_NEW_CHECK(size, flags)                                     \
     ({                                                                  \
@@ -270,7 +259,7 @@ void* chiHeapHandleNew(ChiHeapHandle* handle, size_t size, ChiNewFlags flags) {
     if (CHI_LIKELY(size <= SMALL_BINS))
         return segmentNew(heap, &handle->small, size, flags, (uint32_t)size - 1, handle->allocColor);
     if (CHI_LIKELY(size < heap->medium.pageWords))
-        return segmentNew(heap, &handle->medium, size, flags, chiLog2(size), handle->allocColor);
+        return segmentNew(heap, &handle->medium, size, flags, chiLog2Floor(size), handle->allocColor);
     return largeNew(heap, size, flags, handle->allocColor);
 }
 
@@ -289,7 +278,7 @@ void chiHeapSetup(ChiHeap* heap,
                SMALL_BINS, true);
 
     classSetup(&heap->medium, mediumChunkSize, mediumPageSize, limitFull, limitInit,
-               chiLog2(mediumPageSize - _CHI_OBJECT_HEADER_SIZE), false);
+               chiLog2Floor(mediumPageSize - _CHI_OBJECT_HEADER_SIZE), false);
 }
 
 void chiHeapDestroy(ChiHeap* heap) {
@@ -352,8 +341,8 @@ const char* chiTypeName(ChiType type) {
     switch (type) {
     case CBY_INTERP_MODULE:            return "INTERP_MODULE";
     case CBY_NATIVE_MODULE:            return "NATIVE_MODULE";
-    case CHI_ARRAY:                    return "ARRAY";
-    case CHI_THUNK_FN:                  return "THUNK_FN";
+    case CHI_ARRAY_SMALL:              return "ARRAY_SMALL";
+    case CHI_ARRAY_LARGE:              return "ARRAY_LARGE";
     case CHI_STRINGBUILDER:            return "STRINGBUILDER";
     case CHI_PRESTRING:                return "PRESTRING";
     case CHI_THREAD:                   return "THREAD";
@@ -367,7 +356,7 @@ const char* chiTypeName(ChiType type) {
     case CHI_BOX:                      return "BOX";
     case CHI_FIRST_TAG...CHI_LAST_TAG: return "DATA";
     case CHI_FIRST_FN...CHI_LAST_FN:   return "FN";
-    case CHI_FAIL_TAG:                 return "FAIL";
+    case CHI_FAIL:                     return "FAIL";
     case CHI_POISON_TAG:               return "POISON";
     default: CHI_BUG("Invalid type");
     }

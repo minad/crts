@@ -1,352 +1,357 @@
 |===
 |Id|Opcode|Operands|Description
 
-|0|idx|w8:res r8:var u8:idx|Load field res <- var[idx]
-|1|idxl|w16:res r16:var u16:idx|Load field res <- var[idx]
-|2|fset|r16:var u16:i r16:field|Set closure field (used for letrec)
-|3|tset|r16:var u16:i r16:field|Set thunk field (used for letrec)
-|4|int8|w8:res i8:val|Load Int8 immediate
-|5|int32|w16:res i32:val|Load Int32 immediate
-|6|int64|w16:res i64:val|Load Int64 immediate
-|7|uint8|w8:res u8:val|Load UInt8 immediate
-|8|uint32|w16:res u32:val|Load UInt32 immediate
-|9|uint64|w16:res u64:val|Load UInt64 immediate
-|10|float32|w16:res f32:val|Load Float32 immediate
-|11|float64|w16:res f64:val|Load Float64 immediate
-|12|string|w16:res strref|Load String from constant store
-|13|buffer|w16:res bytesref|Load Buffer from constant store
-|14|xint|w16:res bytesref|Load Int from constant store
-|15|xintn|w16:res bytesref|Load negative Int from constant store
-|16|xint8|w8:res i8:val|Load Int immediate
-|17|xint64|w16:res i64:val|Load Int immediate
-|18|movc2|w8:res w8:src|Move consecutive registers res[i] <- src[i]
-|19|movc3|w8:res w8:src|Move consecutive registers res[i] <- src[i]
-|20|movc4|w8:res w8:src|Move consecutive registers res[i] <- src[i]
-|21|movcl2|w16:res w16:src|Move consecutive registers res[i] <- src[i]
-|22|movcl3|w16:res w16:src|Move consecutive registers res[i] <- src[i]
-|23|movcl4|w16:res w16:src|Move consecutive registers res[i] <- src[i]
-|24|mov1|w8:res r8:src0|Move registers res[i] <- srci
-|25|mov2|w8:res r8:src0 r8:src1|Move registers res[i] <- srci
-|26|mov3|w8:res r8:src0 r8:src1 r8:src2|Move registers res[i] <- srci
-|27|mov4|w8:res r8:src0 r8:src1 r8:src2 r8:src3|Move registers res[i] <- srci
-|28|movl1|w16:res r16:src0|Move registers res[i] <- srci
-|29|movl2|w16:res r16:src0 r16:src1|Move registers res[i] <- srci
-|30|thk|w16:res fnref u16:nclos clos[nclos](r16:a)|Thunk with variable number of bound variables
-|31|thk0|w8:res fnref|New thunk with 0 bound variables
-|32|thk1|w8:res w8:c0 fnref|New thunk with 1 bound variables
-|33|thk2|w8:res w8:c0 w8:c1 fnref|New thunk with 2 bound variables
-|34|thk3|w8:res w8:c0 w8:c1 w8:c2 fnref|New thunk with 3 bound variables
-|35|thk4|w8:res w8:c0 w8:c1 w8:c2 w8:c3 fnref|New thunk with 4 bound variables
-|36|fn|w16:res fnref u8:arity u16:nclos clos[nclos](r16:a)|Closure with variable number of bound variables
-|37|fn0|w8:res u8:arity fnref|New closure with 0 bound variables
-|38|fn1|w8:res u8:arity w8:c0 fnref|New closure with 1 bound variables
-|39|fn2|w8:res u8:arity w8:c0 w8:c1 fnref|New closure with 2 bound variables
-|40|fn3|w8:res u8:arity w8:c0 w8:c1 w8:c2 fnref|New closure with 3 bound variables
-|41|fn4|w8:res u8:arity w8:c0 w8:c1 w8:c2 w8:c3 fnref|New closure with 4 bound variables
-|42|con|w16:res u16:tag u16:nargs args[nargs](r16:a)|New value with variable number of fields
-|43|con0|w8:res u8:tag|New empty value
-|44|conl0|w16:res u16:tag|New empty value
-|45|con1|w8:res u8:tag r8:a0|New value with 1 fields
-|46|con2|w8:res u8:tag r8:a0 r8:a1|New value with 2 fields
-|47|con3|w8:res u8:tag r8:a0 r8:a1 r8:a2|New value with 3 fields
-|48|con4|w8:res u8:tag r8:a0 r8:a1 r8:a2 r8:a3|New value with 4 fields
-|49|casetbl|r16:scrut u32:lo u32:hi table[hi - lo + 1](u32:target)|Case branching using table lookup
-|50|case|r16:scrut u16:nalts table[nalts](u32:val u32:target)|Case branching using binary search
-|51|cont|w8:top u8:off|Create continuation frame
-|52|contl|w16:top u32:off|Create continuation frame
-|53|ret|r8:var|Return value
-|54|retl|r16:var|Return value
-|55|retif|r8:scrut r8:var|Conditional return
-|56|retifn|r8:scrut r8:var|Conditional return
-|57|if|r8:scrut u8:off|Conditional branch
-|58|ifl|r16:scrut u32:off|Conditional branch
-|59|jmp|r16:fn fnref|Jump to known function (arguments already in place)
-|60|jmp1|r8:fn r8:a0 fnref|Jump to known function
-|61|jmp2|r8:fn r8:a0 r8:a1 fnref|Jump to known function
-|62|jmp3|r8:fn r8:a0 r8:a1 r8:a2 fnref|Jump to known function
-|63|jmp4|r8:fn r8:a0 r8:a1 r8:a2 r8:a3 fnref|Jump to known function
-|64|jmp5|r8:fn r8:a0 r8:a1 r8:a2 r8:a3 r8:a4 fnref|Jump to known function
-|65|app|r8:fn u8:nargs|Apply unknown function (arguments already in place)
-|66|appn|r16:fn u8:nargs args[nargs](r16:a)|Apply unknown function
-|67|app1|r8:fn r8:a0|Apply unknown function
-|68|app2|r8:fn r8:a0 r8:a1|Apply unknown function
-|69|app3|r8:fn r8:a0 r8:a1 r8:a2|Apply unknown function
-|70|app4|r8:fn r8:a0 r8:a1 r8:a2 r8:a3|Apply unknown function
-|71|app5|r8:fn r8:a0 r8:a1 r8:a2 r8:a3 r8:a4|Apply unknown function
-|72|limit|u8:lim|Check limit (safepoint!)
-|73|clos1|u8:nargs u8:lim|Check limit and load closure with 1 fields (safepoint!)
-|74|clos2|u8:nargs u8:lim|Check limit and load closure with 2 fields (safepoint!)
-|75|clos3|u8:nargs u8:lim|Check limit and load closure with 3 fields (safepoint!)
-|76|clos4|u8:nargs u8:lim|Check limit and load closure with 4 fields (safepoint!)
-|77|clos|u8:nargs u16:lim u16:size|Check limit and load closure with variable number of fields
-|78|enter|u8:top u8:lim|Enter continuation, shift register window (safepoint!)
-|79|enterl|u16:top u16:lim|Enter continuation, shift register window (safepoint!)
-|80|ffiget|w16:res ffiref|Get foreign variable
-|81|ffiset|r16:var ffiref|Set foreign variable
-|82|ffitail|ffiref u8:nargs args[nargs](r16:a)|Foreign call in tail position
-|83|ffiinl|w16:res ffiref u8:nargs args[nargs](r16:a)|Inline foreign call
-|84|ffiprot|ffiref u8:nargs args[nargs](r16:a)|Protected foreign call
-|85|thread|w16:res|Get current thread
-|86|proc|w16:res|Get current processor
-|87|plocal|w16:res|Get processor local
-|88|tstate|w16:res r16:thr|Get thread state
-|89|evfilt|w16:res r16:f r16:n|Event filter enabled
-|90|bitsToFloat32|w8:res r8:a0|Inline primitive
-|91|bitsToFloat64|w8:res r8:a0|Inline primitive
-|92|charEq|w8:res r8:a0 r8:a1|Inline primitive
-|93|charLe|w8:res r8:a0 r8:a1|Inline primitive
-|94|charLt|w8:res r8:a0 r8:a1|Inline primitive
-|95|charNe|w8:res r8:a0 r8:a1|Inline primitive
-|96|charToString|w8:res r8:a0|Inline primitive
-|97|charToUInt32|w8:res r8:a0|Inline primitive
-|98|float32Abs|w8:res r8:a0|Inline primitive
-|99|float32Acos|w8:res r8:a0|Inline primitive
-|100|float32Add|w8:res r8:a0 r8:a1|Inline primitive
-|101|float32Asin|w8:res r8:a0|Inline primitive
-|102|float32Atan|w8:res r8:a0|Inline primitive
-|103|float32Ceil|w8:res r8:a0|Inline primitive
-|104|float32Cos|w8:res r8:a0|Inline primitive
-|105|float32Cosh|w8:res r8:a0|Inline primitive
-|106|float32Div|w8:res r8:a0 r8:a1|Inline primitive
-|107|float32Eq|w8:res r8:a0 r8:a1|Inline primitive
-|108|float32Exp|w8:res r8:a0|Inline primitive
-|109|float32Expm1|w8:res r8:a0|Inline primitive
-|110|float32Floor|w8:res r8:a0|Inline primitive
-|111|float32Le|w8:res r8:a0 r8:a1|Inline primitive
-|112|float32Log|w8:res r8:a0|Inline primitive
-|113|float32Log1p|w8:res r8:a0|Inline primitive
-|114|float32Lt|w8:res r8:a0 r8:a1|Inline primitive
-|115|float32Max|w8:res r8:a0 r8:a1|Inline primitive
-|116|float32Min|w8:res r8:a0 r8:a1|Inline primitive
-|117|float32Mul|w8:res r8:a0 r8:a1|Inline primitive
-|118|float32Ne|w8:res r8:a0 r8:a1|Inline primitive
-|119|float32Neg|w8:res r8:a0|Inline primitive
-|120|float32Pow|w8:res r8:a0 r8:a1|Inline primitive
-|121|float32Round|w8:res r8:a0|Inline primitive
-|122|float32Sin|w8:res r8:a0|Inline primitive
-|123|float32Sinh|w8:res r8:a0|Inline primitive
-|124|float32Sqrt|w8:res r8:a0|Inline primitive
-|125|float32Sub|w8:res r8:a0 r8:a1|Inline primitive
-|126|float32Tan|w8:res r8:a0|Inline primitive
-|127|float32Tanh|w8:res r8:a0|Inline primitive
-|128|float32ToBits|w8:res r8:a0|Inline primitive
-|129|float32ToFloat64|w8:res r8:a0|Inline primitive
-|130|float32ToInt|w8:res r8:a0|Inline primitive
-|131|float32ToInt32|w8:res r8:a0|Inline primitive
-|132|float32ToInt64|w8:res r8:a0|Inline primitive
-|133|float32ToUInt32|w8:res r8:a0|Inline primitive
-|134|float32ToUInt64|w8:res r8:a0|Inline primitive
-|135|float32Trunc|w8:res r8:a0|Inline primitive
-|136|float64Abs|w8:res r8:a0|Inline primitive
-|137|float64Acos|w8:res r8:a0|Inline primitive
-|138|float64Add|w8:res r8:a0 r8:a1|Inline primitive
-|139|float64Asin|w8:res r8:a0|Inline primitive
-|140|float64Atan|w8:res r8:a0|Inline primitive
-|141|float64Ceil|w8:res r8:a0|Inline primitive
-|142|float64Cos|w8:res r8:a0|Inline primitive
-|143|float64Cosh|w8:res r8:a0|Inline primitive
-|144|float64Div|w8:res r8:a0 r8:a1|Inline primitive
-|145|float64Eq|w8:res r8:a0 r8:a1|Inline primitive
-|146|float64Exp|w8:res r8:a0|Inline primitive
-|147|float64Expm1|w8:res r8:a0|Inline primitive
-|148|float64Floor|w8:res r8:a0|Inline primitive
-|149|float64Le|w8:res r8:a0 r8:a1|Inline primitive
-|150|float64Log|w8:res r8:a0|Inline primitive
-|151|float64Log1p|w8:res r8:a0|Inline primitive
-|152|float64Lt|w8:res r8:a0 r8:a1|Inline primitive
-|153|float64Max|w8:res r8:a0 r8:a1|Inline primitive
-|154|float64Min|w8:res r8:a0 r8:a1|Inline primitive
-|155|float64Mul|w8:res r8:a0 r8:a1|Inline primitive
-|156|float64Ne|w8:res r8:a0 r8:a1|Inline primitive
-|157|float64Neg|w8:res r8:a0|Inline primitive
-|158|float64Pow|w8:res r8:a0 r8:a1|Inline primitive
-|159|float64Round|w8:res r8:a0|Inline primitive
-|160|float64Sin|w8:res r8:a0|Inline primitive
-|161|float64Sinh|w8:res r8:a0|Inline primitive
-|162|float64Sqrt|w8:res r8:a0|Inline primitive
-|163|float64Sub|w8:res r8:a0 r8:a1|Inline primitive
-|164|float64Tan|w8:res r8:a0|Inline primitive
-|165|float64Tanh|w8:res r8:a0|Inline primitive
-|166|float64ToBits|w8:res r8:a0|Inline primitive
-|167|float64ToFloat32|w8:res r8:a0|Inline primitive
-|168|float64ToInt|w8:res r8:a0|Inline primitive
-|169|float64ToInt32|w8:res r8:a0|Inline primitive
-|170|float64ToInt64|w8:res r8:a0|Inline primitive
-|171|float64ToUInt32|w8:res r8:a0|Inline primitive
-|172|float64ToUInt64|w8:res r8:a0|Inline primitive
-|173|float64Trunc|w8:res r8:a0|Inline primitive
-|174|int16ToInt32|w8:res r8:a0|Inline primitive
-|175|int32Add|w8:res r8:a0 r8:a1|Inline primitive
-|176|int32And|w8:res r8:a0 r8:a1|Inline primitive
-|177|int32Div|w8:res r8:a0 r8:a1|Inline primitive
-|178|int32Eq|w8:res r8:a0 r8:a1|Inline primitive
-|179|int32Le|w8:res r8:a0 r8:a1|Inline primitive
-|180|int32Lt|w8:res r8:a0 r8:a1|Inline primitive
-|181|int32Mod|w8:res r8:a0 r8:a1|Inline primitive
-|182|int32Mul|w8:res r8:a0 r8:a1|Inline primitive
-|183|int32Ne|w8:res r8:a0 r8:a1|Inline primitive
-|184|int32Neg|w8:res r8:a0|Inline primitive
-|185|int32Not|w8:res r8:a0|Inline primitive
-|186|int32Or|w8:res r8:a0 r8:a1|Inline primitive
-|187|int32Quo|w8:res r8:a0 r8:a1|Inline primitive
-|188|int32Rem|w8:res r8:a0 r8:a1|Inline primitive
-|189|int32Shl|w8:res r8:a0 r8:a1|Inline primitive
-|190|int32Shr|w8:res r8:a0 r8:a1|Inline primitive
-|191|int32Sub|w8:res r8:a0 r8:a1|Inline primitive
-|192|int32ToFloat32|w8:res r8:a0|Inline primitive
-|193|int32ToFloat64|w8:res r8:a0|Inline primitive
-|194|int32ToInt|w8:res r8:a0|Inline primitive
-|195|int32ToInt16|w8:res r8:a0|Inline primitive
-|196|int32ToInt64|w8:res r8:a0|Inline primitive
-|197|int32ToInt8|w8:res r8:a0|Inline primitive
-|198|int32ToUInt32|w8:res r8:a0|Inline primitive
-|199|int32ToUInt64|w8:res r8:a0|Inline primitive
-|200|int32Xor|w8:res r8:a0 r8:a1|Inline primitive
-|201|int64Add|w8:res r8:a0 r8:a1|Inline primitive
-|202|int64And|w8:res r8:a0 r8:a1|Inline primitive
-|203|int64Div|w8:res r8:a0 r8:a1|Inline primitive
-|204|int64Eq|w8:res r8:a0 r8:a1|Inline primitive
-|205|int64Le|w8:res r8:a0 r8:a1|Inline primitive
-|206|int64Lt|w8:res r8:a0 r8:a1|Inline primitive
-|207|int64Mod|w8:res r8:a0 r8:a1|Inline primitive
-|208|int64Mul|w8:res r8:a0 r8:a1|Inline primitive
-|209|int64Ne|w8:res r8:a0 r8:a1|Inline primitive
-|210|int64Neg|w8:res r8:a0|Inline primitive
-|211|int64Not|w8:res r8:a0|Inline primitive
-|212|int64Or|w8:res r8:a0 r8:a1|Inline primitive
-|213|int64Quo|w8:res r8:a0 r8:a1|Inline primitive
-|214|int64Rem|w8:res r8:a0 r8:a1|Inline primitive
-|215|int64Shl|w8:res r8:a0 r8:a1|Inline primitive
-|216|int64Shr|w8:res r8:a0 r8:a1|Inline primitive
-|217|int64Sub|w8:res r8:a0 r8:a1|Inline primitive
-|218|int64ToFloat32|w8:res r8:a0|Inline primitive
-|219|int64ToFloat64|w8:res r8:a0|Inline primitive
-|220|int64ToInt|w8:res r8:a0|Inline primitive
-|221|int64ToInt32|w8:res r8:a0|Inline primitive
-|222|int64ToUInt32|w8:res r8:a0|Inline primitive
-|223|int64ToUInt64|w8:res r8:a0|Inline primitive
-|224|int64Xor|w8:res r8:a0 r8:a1|Inline primitive
-|225|int8ToInt32|w8:res r8:a0|Inline primitive
-|226|intAdd|w8:res r8:a0 r8:a1|Inline primitive
-|227|intAnd|w8:res r8:a0 r8:a1|Inline primitive
-|228|intCmp|w8:res r8:a0 r8:a1|Inline primitive
-|229|intDiv|w8:res r8:a0 r8:a1|Inline primitive
-|230|intEq|w8:res r8:a0 r8:a1|Inline primitive
-|231|intLe|w8:res r8:a0 r8:a1|Inline primitive
-|232|intLt|w8:res r8:a0 r8:a1|Inline primitive
-|233|intMod|w8:res r8:a0 r8:a1|Inline primitive
-|234|intMul|w8:res r8:a0 r8:a1|Inline primitive
-|235|intNe|w8:res r8:a0 r8:a1|Inline primitive
-|236|intNeg|w8:res r8:a0|Inline primitive
-|237|intNot|w8:res r8:a0|Inline primitive
-|238|intOr|w8:res r8:a0 r8:a1|Inline primitive
-|239|intQuo|w8:res r8:a0 r8:a1|Inline primitive
-|240|intRem|w8:res r8:a0 r8:a1|Inline primitive
-|241|intShl|w8:res r8:a0 r8:a1|Inline primitive
-|242|intShr|w8:res r8:a0 r8:a1|Inline primitive
-|243|intSub|w8:res r8:a0 r8:a1|Inline primitive
-|244|intToFloat32|w8:res r8:a0|Inline primitive
-|245|intToFloat64|w8:res r8:a0|Inline primitive
-|246|intToInt32|w8:res r8:a0|Inline primitive
-|247|intToInt64|w8:res r8:a0|Inline primitive
-|248|intToUInt32|w8:res r8:a0|Inline primitive
-|249|intToUInt64|w8:res r8:a0|Inline primitive
-|250|intXor|w8:res r8:a0 r8:a1|Inline primitive
-|251|stringCmp|w8:res r8:a0 r8:a1|Inline primitive
-|252|stringCursorBegin|w8:res r8:a0|Inline primitive
-|253|stringCursorEnd|w8:res r8:a0|Inline primitive
-|254|stringCursorEq|w8:res r8:a0 r8:a1|Inline primitive
-|255|stringCursorLe|w8:res r8:a0 r8:a1|Inline primitive
-|256|stringCursorLt|w8:res r8:a0 r8:a1|Inline primitive
-|257|stringCursorNe|w8:res r8:a0 r8:a1|Inline primitive
-|258|stringCursorGet|w8:res r8:a0 r8:a1|Inline primitive
-|259|stringCursorNext|w8:res r8:a0 r8:a1|Inline primitive
-|260|stringCursorPrev|w8:res r8:a0 r8:a1|Inline primitive
-|261|stringEq|w8:res r8:a0 r8:a1|Inline primitive
-|262|stringLe|w8:res r8:a0 r8:a1|Inline primitive
-|263|stringLt|w8:res r8:a0 r8:a1|Inline primitive
-|264|stringNe|w8:res r8:a0 r8:a1|Inline primitive
-|265|stringNull|w8:res r8:a0|Inline primitive
-|266|stringSlice|w8:res r8:a0 r8:a1 r8:a2|Inline primitive
-|267|uint16ToUInt32|w8:res r8:a0|Inline primitive
-|268|uint32Add|w8:res r8:a0 r8:a1|Inline primitive
-|269|uint32And|w8:res r8:a0 r8:a1|Inline primitive
-|270|uint32Div|w8:res r8:a0 r8:a1|Inline primitive
-|271|uint32Eq|w8:res r8:a0 r8:a1|Inline primitive
-|272|uint32Le|w8:res r8:a0 r8:a1|Inline primitive
-|273|uint32Lt|w8:res r8:a0 r8:a1|Inline primitive
-|274|uint32Mod|w8:res r8:a0 r8:a1|Inline primitive
-|275|uint32Mul|w8:res r8:a0 r8:a1|Inline primitive
-|276|uint32Ne|w8:res r8:a0 r8:a1|Inline primitive
-|277|uint32Neg|w8:res r8:a0|Inline primitive
-|278|uint32Not|w8:res r8:a0|Inline primitive
-|279|uint32Or|w8:res r8:a0 r8:a1|Inline primitive
-|280|uint32Shl|w8:res r8:a0 r8:a1|Inline primitive
-|281|uint32Shr|w8:res r8:a0 r8:a1|Inline primitive
-|282|uint32Sub|w8:res r8:a0 r8:a1|Inline primitive
-|283|uint32ToChar|w8:res r8:a0|Inline primitive
-|284|uint32ToFloat32|w8:res r8:a0|Inline primitive
-|285|uint32ToFloat64|w8:res r8:a0|Inline primitive
-|286|uint32ToInt|w8:res r8:a0|Inline primitive
-|287|uint32ToInt32|w8:res r8:a0|Inline primitive
-|288|uint32ToInt64|w8:res r8:a0|Inline primitive
-|289|uint32ToUInt16|w8:res r8:a0|Inline primitive
-|290|uint32ToUInt64|w8:res r8:a0|Inline primitive
-|291|uint32ToUInt8|w8:res r8:a0|Inline primitive
-|292|uint32Xor|w8:res r8:a0 r8:a1|Inline primitive
-|293|uint64Add|w8:res r8:a0 r8:a1|Inline primitive
-|294|uint64And|w8:res r8:a0 r8:a1|Inline primitive
-|295|uint64Div|w8:res r8:a0 r8:a1|Inline primitive
-|296|uint64Eq|w8:res r8:a0 r8:a1|Inline primitive
-|297|uint64Le|w8:res r8:a0 r8:a1|Inline primitive
-|298|uint64Lt|w8:res r8:a0 r8:a1|Inline primitive
-|299|uint64Mod|w8:res r8:a0 r8:a1|Inline primitive
-|300|uint64Mul|w8:res r8:a0 r8:a1|Inline primitive
-|301|uint64Ne|w8:res r8:a0 r8:a1|Inline primitive
-|302|uint64Neg|w8:res r8:a0|Inline primitive
-|303|uint64Not|w8:res r8:a0|Inline primitive
-|304|uint64Or|w8:res r8:a0 r8:a1|Inline primitive
-|305|uint64Shl|w8:res r8:a0 r8:a1|Inline primitive
-|306|uint64Shr|w8:res r8:a0 r8:a1|Inline primitive
-|307|uint64Sub|w8:res r8:a0 r8:a1|Inline primitive
-|308|uint64ToFloat32|w8:res r8:a0|Inline primitive
-|309|uint64ToFloat64|w8:res r8:a0|Inline primitive
-|310|uint64ToInt|w8:res r8:a0|Inline primitive
-|311|uint64ToInt32|w8:res r8:a0|Inline primitive
-|312|uint64ToInt64|w8:res r8:a0|Inline primitive
-|313|uint64ToUInt32|w8:res r8:a0|Inline primitive
-|314|uint64Xor|w8:res r8:a0 r8:a1|Inline primitive
-|315|uint8ToUInt32|w8:res r8:a0|Inline primitive
-|316|lazyForce|r8:a0|Primitive in tail position
-|317|stringBuilderNew|w8:res r8:a0|Inline primitive
-|318|stringBuilderChar|w8:res r8:a0 r8:a1|Inline primitive
-|319|stringBuilderString|w8:res r8:a0 r8:a1|Inline primitive
-|320|stringBuilderBuild|w8:res r8:a0|Inline primitive
-|321|bufferSize|w8:res r8:a0|Inline primitive
-|322|arraySize|w8:res r8:a0|Inline primitive
-|323|arrayCas|w8:res r8:a0 r8:a1 r8:a2 r8:a3|Inline primitive
-|324|arrayClone|w8:res r8:a0 r8:a1 r8:a2|Inline primitive
-|325|arrayCopy|w8:res r8:a0 r8:a1 r8:a2 r8:a3 r8:a4|Inline primitive
-|326|arrayNew|w8:res r8:a0 r8:a1|Inline primitive
-|327|arrayRead|w8:res r8:a0 r8:a1|Inline primitive
-|328|arrayWrite|w8:res r8:a0 r8:a1 r8:a2|Inline primitive
-|329|bufferClone|w8:res r8:a0 r8:a1 r8:a2|Inline primitive
-|330|bufferCmp|w8:res r8:a0 r8:a1 r8:a2 r8:a3 r8:a4|Inline primitive
-|331|bufferCopy|w8:res r8:a0 r8:a1 r8:a2 r8:a3 r8:a4|Inline primitive
-|332|bufferFill|w8:res r8:a0 r8:a1 r8:a2 r8:a3|Inline primitive
-|333|bufferNew|w8:res r8:a0|Inline primitive
-|334|bufferReadFloat32|w8:res r8:a0 r8:a1|Inline primitive
-|335|bufferReadFloat64|w8:res r8:a0 r8:a1|Inline primitive
-|336|bufferReadUInt16|w8:res r8:a0 r8:a1|Inline primitive
-|337|bufferReadUInt32|w8:res r8:a0 r8:a1|Inline primitive
-|338|bufferReadUInt64|w8:res r8:a0 r8:a1|Inline primitive
-|339|bufferReadUInt8|w8:res r8:a0 r8:a1|Inline primitive
-|340|bufferWriteFloat32|w8:res r8:a0 r8:a1 r8:a2|Inline primitive
-|341|bufferWriteFloat64|w8:res r8:a0 r8:a1 r8:a2|Inline primitive
-|342|bufferWriteUInt16|w8:res r8:a0 r8:a1 r8:a2|Inline primitive
-|343|bufferWriteUInt32|w8:res r8:a0 r8:a1 r8:a2|Inline primitive
-|344|bufferWriteUInt64|w8:res r8:a0 r8:a1 r8:a2|Inline primitive
-|345|bufferWriteUInt8|w8:res r8:a0 r8:a1 r8:a2|Inline primitive
-|346|identical|w8:res r8:a0 r8:a1|Inline primitive
-|347|tag|w8:res r8:a0|Inline primitive
+|0|enter|u8:nargs|Pseudo instruction: Marks continuation entry point
+|1|limit|w16:top u8:lim|Check limit in continuation (safepoint!)
+|2|adj|u16:delta|Adjust stack pointer
+|3|idx|w8:res r8:var u8:idx|Load field res <- var[idx]
+|4|idxl|w16:res r16:var u16:idx|Load field res <- var[idx]
+|5|set|r16:var u16:i r16:field|Set closure field (used for letrec)
+|6|int8|w8:res i8:val|Load Int8 immediate
+|7|int32|w16:res i32:val|Load Int32 immediate
+|8|int64|w16:res i64:val|Load Int64 immediate
+|9|uint8|w8:res u8:val|Load UInt8 immediate
+|10|uint32|w16:res u32:val|Load UInt32 immediate
+|11|uint64|w16:res u64:val|Load UInt64 immediate
+|12|float32|w16:res f32:val|Load Float32 immediate
+|13|float64|w16:res f64:val|Load Float64 immediate
+|14|string|w16:res strref|Load String from constant store
+|15|buffer|w16:res bytesref|Load Buffer from constant store
+|16|xint|w16:res bytesref|Load Int from constant store
+|17|xintn|w16:res bytesref|Load negative Int from constant store
+|18|xint8|w8:res i8:val|Load Int immediate
+|19|xint64|w16:res i64:val|Load Int immediate
+|20|movc2|w8:res w8:src|Move consecutive registers res[i] <- src[i]
+|21|movc3|w8:res w8:src|Move consecutive registers res[i] <- src[i]
+|22|movc4|w8:res w8:src|Move consecutive registers res[i] <- src[i]
+|23|movcl2|w16:res w16:src|Move consecutive registers res[i] <- src[i]
+|24|movcl3|w16:res w16:src|Move consecutive registers res[i] <- src[i]
+|25|movcl4|w16:res w16:src|Move consecutive registers res[i] <- src[i]
+|26|mov1|w8:res r8:src0|Move registers res[i] <- srci
+|27|mov2|w8:res r8:src0 r8:src1|Move registers res[i] <- srci
+|28|mov3|w8:res r8:src0 r8:src1 r8:src2|Move registers res[i] <- srci
+|29|mov4|w8:res r8:src0 r8:src1 r8:src2 r8:src3|Move registers res[i] <- srci
+|30|movl1|w16:res r16:src0|Move registers res[i] <- srci
+|31|movl2|w16:res r16:src0 r16:src1|Move registers res[i] <- srci
+|32|choice|w8:res r8:scrut r8:a r8:b|Choose between two values
+|33|thk|w16:res fnref u16:nclos clos[nclos](r16:a)|Thunk with variable number of bound variables
+|34|thk0|w8:res fnref|New thunk with 0 bound variables
+|35|thk1|w8:res w8:c0 fnref|New thunk with 1 bound variables
+|36|thk2|w8:res w8:c0 w8:c1 fnref|New thunk with 2 bound variables
+|37|thk3|w8:res w8:c0 w8:c1 w8:c2 fnref|New thunk with 3 bound variables
+|38|thk4|w8:res w8:c0 w8:c1 w8:c2 w8:c3 fnref|New thunk with 4 bound variables
+|39|fn|w16:res fnref u8:arity u16:nclos clos[nclos](r16:a)|Closure with variable number of bound variables
+|40|fn0|w8:res u8:arity fnref|New closure with 0 bound variables
+|41|fn1|w8:res u8:arity w8:c0 fnref|New closure with 1 bound variables
+|42|fn2|w8:res u8:arity w8:c0 w8:c1 fnref|New closure with 2 bound variables
+|43|fn3|w8:res u8:arity w8:c0 w8:c1 w8:c2 fnref|New closure with 3 bound variables
+|44|fn4|w8:res u8:arity w8:c0 w8:c1 w8:c2 w8:c3 fnref|New closure with 4 bound variables
+|45|con|w16:res u16:tag u16:size fields[size](r16:a)|New value with variable number of fields
+|46|con0|w8:res u8:tag|New empty value
+|47|conl0|w16:res u16:tag|New empty value
+|48|con1|w8:res u8:tag r8:a0|New value with 1 fields
+|49|con2|w8:res u8:tag r8:a0 r8:a1|New value with 2 fields
+|50|con3|w8:res u8:tag r8:a0 r8:a1 r8:a2|New value with 3 fields
+|51|con4|w8:res u8:tag r8:a0 r8:a1 r8:a2 r8:a3|New value with 4 fields
+|52|casetbl|r16:scrut u32:lo u32:hi table[hi - lo + 1](u32:target)|Case branching using table lookup
+|53|case|r16:scrut u16:nalts table[nalts](u32:val u32:target)|Case branching using binary search
+|54|cont|w8:top u8:off|Create continuation frame
+|55|contl|w16:top u32:off|Create continuation frame
+|56|ret1|r8:v0|Return values
+|57|ret2|r8:v0 r8:v1|Return values
+|58|ret3|r8:v0 r8:v1 r8:v2|Return values
+|59|ret4|r8:v0 r8:v1 r8:v2 r8:v3|Return values
+|60|ret|u8:nvals vals[nvals](r16:a)|Return values
+|61|if|r8:scrut u8:off|Conditional branch
+|62|ifl|r16:scrut u32:off|Conditional branch
+|63|ifeq|u8:val r8:scrut u8:off|Compare and branch
+|64|ifeql|u32:val r16:scrut u32:off|Compare and branch
+|65|jmp|u8:off|Unconditional branch
+|66|jmpl|u32:off|Unconditional branch
+|67|kapp|fnref r16:fn u8:nargs args[nargs](r16:a)|Apply known function
+|68|kapp1|r8:fn r8:a0 fnref|Apply known function
+|69|kapp2|r8:fn r8:a0 r8:a1 fnref|Apply known function
+|70|kapp3|r8:fn r8:a0 r8:a1 r8:a2 fnref|Apply known function
+|71|kapp4|r8:fn r8:a0 r8:a1 r8:a2 r8:a3 fnref|Apply known function
+|72|kapp5|r8:fn r8:a0 r8:a1 r8:a2 r8:a3 r8:a4 fnref|Apply known function
+|73|app|r16:fn u8:nargs args[nargs](r16:a)|Apply unknown function
+|74|app1|r8:fn r8:a0|Apply unknown function
+|75|app2|r8:fn r8:a0 r8:a1|Apply unknown function
+|76|app3|r8:fn r8:a0 r8:a1 r8:a2|Apply unknown function
+|77|app4|r8:fn r8:a0 r8:a1 r8:a2 r8:a3|Apply unknown function
+|78|app5|r8:fn r8:a0 r8:a1 r8:a2 r8:a3 r8:a4|Apply unknown function
+|79|clos0|u8:lim|Check limit (safepoint!)
+|80|clos1|u8:arity u8:lim|Check limit and load closure with 1 fields (safepoint!)
+|81|clos2|u8:arity u8:lim|Check limit and load closure with 2 fields (safepoint!)
+|82|clos3|u8:arity u8:lim|Check limit and load closure with 3 fields (safepoint!)
+|83|clos4|u8:arity u8:lim|Check limit and load closure with 4 fields (safepoint!)
+|84|clos|u8:arity u16:lim u16:size|Check limit and load closure with variable number of fields
+|85|ffiget|w16:res ffiref|Get foreign variable
+|86|ffiset|r16:var ffiref|Set foreign variable
+|87|ffitail|ffiref u8:nargs args[nargs](r16:a)|Foreign call in tail position
+|88|ffiinl|w16:res ffiref u8:nargs args[nargs](r16:a)|Inline foreign call
+|89|ffiprot|ffiref u8:nargs args[nargs](r16:a)|Protected foreign call
+|90|thread|w16:res|Get current thread
+|91|proc|w16:res|Get current processor
+|92|plocal|w16:res|Get processor local
+|93|tstate|w16:res r16:thr|Get thread state
+|94|evfilt|w16:res r16:f r16:n|Event filter enabled
+|95|bitsToFloat32|w8:res r8:a0|Inline primitive
+|96|bitsToFloat64|w8:res r8:a0|Inline primitive
+|97|charEq|w8:res r8:a0 r8:a1|Inline primitive
+|98|charLe|w8:res r8:a0 r8:a1|Inline primitive
+|99|charLt|w8:res r8:a0 r8:a1|Inline primitive
+|100|charNe|w8:res r8:a0 r8:a1|Inline primitive
+|101|charToString|w8:res r8:a0|Inline primitive
+|102|charToUInt32|w8:res r8:a0|Inline primitive
+|103|float32Abs|w8:res r8:a0|Inline primitive
+|104|float32Acos|w8:res r8:a0|Inline primitive
+|105|float32Add|w8:res r8:a0 r8:a1|Inline primitive
+|106|float32Asin|w8:res r8:a0|Inline primitive
+|107|float32Atan|w8:res r8:a0|Inline primitive
+|108|float32Ceil|w8:res r8:a0|Inline primitive
+|109|float32Cos|w8:res r8:a0|Inline primitive
+|110|float32Cosh|w8:res r8:a0|Inline primitive
+|111|float32Div|w8:res r8:a0 r8:a1|Inline primitive
+|112|float32Eq|w8:res r8:a0 r8:a1|Inline primitive
+|113|float32Exp|w8:res r8:a0|Inline primitive
+|114|float32Expm1|w8:res r8:a0|Inline primitive
+|115|float32Floor|w8:res r8:a0|Inline primitive
+|116|float32Le|w8:res r8:a0 r8:a1|Inline primitive
+|117|float32Log|w8:res r8:a0|Inline primitive
+|118|float32Log1p|w8:res r8:a0|Inline primitive
+|119|float32Lt|w8:res r8:a0 r8:a1|Inline primitive
+|120|float32Mul|w8:res r8:a0 r8:a1|Inline primitive
+|121|float32Ne|w8:res r8:a0 r8:a1|Inline primitive
+|122|float32Neg|w8:res r8:a0|Inline primitive
+|123|float32Pow|w8:res r8:a0 r8:a1|Inline primitive
+|124|float32Round|w8:res r8:a0|Inline primitive
+|125|float32Sin|w8:res r8:a0|Inline primitive
+|126|float32Sinh|w8:res r8:a0|Inline primitive
+|127|float32Sqrt|w8:res r8:a0|Inline primitive
+|128|float32Sub|w8:res r8:a0 r8:a1|Inline primitive
+|129|float32Tan|w8:res r8:a0|Inline primitive
+|130|float32Tanh|w8:res r8:a0|Inline primitive
+|131|float32ToBits|w8:res r8:a0|Inline primitive
+|132|float32ToFloat64|w8:res r8:a0|Inline primitive
+|133|float32ToInt|w8:res r8:a0|Inline primitive
+|134|float32ToInt32|w8:res r8:a0|Inline primitive
+|135|float32ToInt64|w8:res r8:a0|Inline primitive
+|136|float32ToUInt32|w8:res r8:a0|Inline primitive
+|137|float32ToUInt64|w8:res r8:a0|Inline primitive
+|138|float32Trunc|w8:res r8:a0|Inline primitive
+|139|float64Abs|w8:res r8:a0|Inline primitive
+|140|float64Acos|w8:res r8:a0|Inline primitive
+|141|float64Add|w8:res r8:a0 r8:a1|Inline primitive
+|142|float64Asin|w8:res r8:a0|Inline primitive
+|143|float64Atan|w8:res r8:a0|Inline primitive
+|144|float64Ceil|w8:res r8:a0|Inline primitive
+|145|float64Cos|w8:res r8:a0|Inline primitive
+|146|float64Cosh|w8:res r8:a0|Inline primitive
+|147|float64Div|w8:res r8:a0 r8:a1|Inline primitive
+|148|float64Eq|w8:res r8:a0 r8:a1|Inline primitive
+|149|float64Exp|w8:res r8:a0|Inline primitive
+|150|float64Expm1|w8:res r8:a0|Inline primitive
+|151|float64Floor|w8:res r8:a0|Inline primitive
+|152|float64Le|w8:res r8:a0 r8:a1|Inline primitive
+|153|float64Log|w8:res r8:a0|Inline primitive
+|154|float64Log1p|w8:res r8:a0|Inline primitive
+|155|float64Lt|w8:res r8:a0 r8:a1|Inline primitive
+|156|float64Mul|w8:res r8:a0 r8:a1|Inline primitive
+|157|float64Ne|w8:res r8:a0 r8:a1|Inline primitive
+|158|float64Neg|w8:res r8:a0|Inline primitive
+|159|float64Pow|w8:res r8:a0 r8:a1|Inline primitive
+|160|float64Round|w8:res r8:a0|Inline primitive
+|161|float64Sin|w8:res r8:a0|Inline primitive
+|162|float64Sinh|w8:res r8:a0|Inline primitive
+|163|float64Sqrt|w8:res r8:a0|Inline primitive
+|164|float64Sub|w8:res r8:a0 r8:a1|Inline primitive
+|165|float64Tan|w8:res r8:a0|Inline primitive
+|166|float64Tanh|w8:res r8:a0|Inline primitive
+|167|float64ToBits|w8:res r8:a0|Inline primitive
+|168|float64ToFloat32|w8:res r8:a0|Inline primitive
+|169|float64ToInt|w8:res r8:a0|Inline primitive
+|170|float64ToInt32|w8:res r8:a0|Inline primitive
+|171|float64ToInt64|w8:res r8:a0|Inline primitive
+|172|float64ToUInt32|w8:res r8:a0|Inline primitive
+|173|float64ToUInt64|w8:res r8:a0|Inline primitive
+|174|float64Trunc|w8:res r8:a0|Inline primitive
+|175|int16ToInt32|w8:res r8:a0|Inline primitive
+|176|int16ToUInt16|w8:res r8:a0|Inline primitive
+|177|int32Add|w8:res r8:a0 r8:a1|Inline primitive
+|178|int32And|w8:res r8:a0 r8:a1|Inline primitive
+|179|int32Div|w8:res r8:a0 r8:a1|Inline primitive
+|180|int32Eq|w8:res r8:a0 r8:a1|Inline primitive
+|181|int32Le|w8:res r8:a0 r8:a1|Inline primitive
+|182|int32Lt|w8:res r8:a0 r8:a1|Inline primitive
+|183|int32Mod|w8:res r8:a0 r8:a1|Inline primitive
+|184|int32Mul|w8:res r8:a0 r8:a1|Inline primitive
+|185|int32Ne|w8:res r8:a0 r8:a1|Inline primitive
+|186|int32Neg|w8:res r8:a0|Inline primitive
+|187|int32Not|w8:res r8:a0|Inline primitive
+|188|int32Or|w8:res r8:a0 r8:a1|Inline primitive
+|189|int32Quo|w8:res r8:a0 r8:a1|Inline primitive
+|190|int32Rem|w8:res r8:a0 r8:a1|Inline primitive
+|191|int32Shl|w8:res r8:a0 r8:a1|Inline primitive
+|192|int32Shr|w8:res r8:a0 r8:a1|Inline primitive
+|193|int32Sub|w8:res r8:a0 r8:a1|Inline primitive
+|194|int32ToFloat32|w8:res r8:a0|Inline primitive
+|195|int32ToFloat64|w8:res r8:a0|Inline primitive
+|196|int32ToInt|w8:res r8:a0|Inline primitive
+|197|int32ToInt16|w8:res r8:a0|Inline primitive
+|198|int32ToInt64|w8:res r8:a0|Inline primitive
+|199|int32ToInt8|w8:res r8:a0|Inline primitive
+|200|int32ToUInt32|w8:res r8:a0|Inline primitive
+|201|int32ToUInt64|w8:res r8:a0|Inline primitive
+|202|int32Xor|w8:res r8:a0 r8:a1|Inline primitive
+|203|int64Add|w8:res r8:a0 r8:a1|Inline primitive
+|204|int64And|w8:res r8:a0 r8:a1|Inline primitive
+|205|int64Div|w8:res r8:a0 r8:a1|Inline primitive
+|206|int64Eq|w8:res r8:a0 r8:a1|Inline primitive
+|207|int64Le|w8:res r8:a0 r8:a1|Inline primitive
+|208|int64Lt|w8:res r8:a0 r8:a1|Inline primitive
+|209|int64Mod|w8:res r8:a0 r8:a1|Inline primitive
+|210|int64Mul|w8:res r8:a0 r8:a1|Inline primitive
+|211|int64Ne|w8:res r8:a0 r8:a1|Inline primitive
+|212|int64Neg|w8:res r8:a0|Inline primitive
+|213|int64Not|w8:res r8:a0|Inline primitive
+|214|int64Or|w8:res r8:a0 r8:a1|Inline primitive
+|215|int64Quo|w8:res r8:a0 r8:a1|Inline primitive
+|216|int64Rem|w8:res r8:a0 r8:a1|Inline primitive
+|217|int64Shl|w8:res r8:a0 r8:a1|Inline primitive
+|218|int64Shr|w8:res r8:a0 r8:a1|Inline primitive
+|219|int64Sub|w8:res r8:a0 r8:a1|Inline primitive
+|220|int64ToFloat32|w8:res r8:a0|Inline primitive
+|221|int64ToFloat64|w8:res r8:a0|Inline primitive
+|222|int64ToInt|w8:res r8:a0|Inline primitive
+|223|int64ToInt32|w8:res r8:a0|Inline primitive
+|224|int64ToUInt32|w8:res r8:a0|Inline primitive
+|225|int64ToUInt64|w8:res r8:a0|Inline primitive
+|226|int64Xor|w8:res r8:a0 r8:a1|Inline primitive
+|227|int8ToInt32|w8:res r8:a0|Inline primitive
+|228|int8ToUInt8|w8:res r8:a0|Inline primitive
+|229|intAdd|w8:res r8:a0 r8:a1|Inline primitive
+|230|intAnd|w8:res r8:a0 r8:a1|Inline primitive
+|231|intCmp|w8:res r8:a0 r8:a1|Inline primitive
+|232|intDiv|w8:res r8:a0 r8:a1|Inline primitive
+|233|intEq|w8:res r8:a0 r8:a1|Inline primitive
+|234|intLe|w8:res r8:a0 r8:a1|Inline primitive
+|235|intLt|w8:res r8:a0 r8:a1|Inline primitive
+|236|intMod|w8:res r8:a0 r8:a1|Inline primitive
+|237|intMul|w8:res r8:a0 r8:a1|Inline primitive
+|238|intNe|w8:res r8:a0 r8:a1|Inline primitive
+|239|intNeg|w8:res r8:a0|Inline primitive
+|240|intNot|w8:res r8:a0|Inline primitive
+|241|intOr|w8:res r8:a0 r8:a1|Inline primitive
+|242|intQuo|w8:res r8:a0 r8:a1|Inline primitive
+|243|intRem|w8:res r8:a0 r8:a1|Inline primitive
+|244|intShl|w8:res r8:a0 r8:a1|Inline primitive
+|245|intShr|w8:res r8:a0 r8:a1|Inline primitive
+|246|intSub|w8:res r8:a0 r8:a1|Inline primitive
+|247|intToFloat32|w8:res r8:a0|Inline primitive
+|248|intToFloat64|w8:res r8:a0|Inline primitive
+|249|intToInt32|w8:res r8:a0|Inline primitive
+|250|intToInt64|w8:res r8:a0|Inline primitive
+|251|intToUInt32|w8:res r8:a0|Inline primitive
+|252|intToUInt64|w8:res r8:a0|Inline primitive
+|253|intXor|w8:res r8:a0 r8:a1|Inline primitive
+|254|stringCmp|w8:res r8:a0 r8:a1|Inline primitive
+|255|stringCursorBegin|w8:res r8:a0|Inline primitive
+|256|stringCursorEnd|w8:res r8:a0|Inline primitive
+|257|stringCursorEq|w8:res r8:a0 r8:a1|Inline primitive
+|258|stringCursorLe|w8:res r8:a0 r8:a1|Inline primitive
+|259|stringCursorLt|w8:res r8:a0 r8:a1|Inline primitive
+|260|stringCursorNe|w8:res r8:a0 r8:a1|Inline primitive
+|261|stringCursorGet|w8:res r8:a0 r8:a1|Inline primitive
+|262|stringCursorNext|w8:res r8:a0 r8:a1|Inline primitive
+|263|stringCursorPrev|w8:res r8:a0 r8:a1|Inline primitive
+|264|stringEq|w8:res r8:a0 r8:a1|Inline primitive
+|265|stringLe|w8:res r8:a0 r8:a1|Inline primitive
+|266|stringLt|w8:res r8:a0 r8:a1|Inline primitive
+|267|stringNe|w8:res r8:a0 r8:a1|Inline primitive
+|268|stringNull|w8:res r8:a0|Inline primitive
+|269|stringSlice|w8:res r8:a0 r8:a1 r8:a2|Inline primitive
+|270|uint16ToUInt32|w8:res r8:a0|Inline primitive
+|271|uint16ToInt16|w8:res r8:a0|Inline primitive
+|272|uint32Add|w8:res r8:a0 r8:a1|Inline primitive
+|273|uint32And|w8:res r8:a0 r8:a1|Inline primitive
+|274|uint32Div|w8:res r8:a0 r8:a1|Inline primitive
+|275|uint32Eq|w8:res r8:a0 r8:a1|Inline primitive
+|276|uint32Le|w8:res r8:a0 r8:a1|Inline primitive
+|277|uint32Lt|w8:res r8:a0 r8:a1|Inline primitive
+|278|uint32Mod|w8:res r8:a0 r8:a1|Inline primitive
+|279|uint32Mul|w8:res r8:a0 r8:a1|Inline primitive
+|280|uint32Ne|w8:res r8:a0 r8:a1|Inline primitive
+|281|uint32Neg|w8:res r8:a0|Inline primitive
+|282|uint32Not|w8:res r8:a0|Inline primitive
+|283|uint32Or|w8:res r8:a0 r8:a1|Inline primitive
+|284|uint32Shl|w8:res r8:a0 r8:a1|Inline primitive
+|285|uint32Shr|w8:res r8:a0 r8:a1|Inline primitive
+|286|uint32Sub|w8:res r8:a0 r8:a1|Inline primitive
+|287|uint32ToChar|w8:res r8:a0|Inline primitive
+|288|uint32ToFloat32|w8:res r8:a0|Inline primitive
+|289|uint32ToFloat64|w8:res r8:a0|Inline primitive
+|290|uint32ToInt|w8:res r8:a0|Inline primitive
+|291|uint32ToInt32|w8:res r8:a0|Inline primitive
+|292|uint32ToInt64|w8:res r8:a0|Inline primitive
+|293|uint32ToUInt16|w8:res r8:a0|Inline primitive
+|294|uint32ToUInt64|w8:res r8:a0|Inline primitive
+|295|uint32ToUInt8|w8:res r8:a0|Inline primitive
+|296|uint32Xor|w8:res r8:a0 r8:a1|Inline primitive
+|297|uint64Add|w8:res r8:a0 r8:a1|Inline primitive
+|298|uint64And|w8:res r8:a0 r8:a1|Inline primitive
+|299|uint64Div|w8:res r8:a0 r8:a1|Inline primitive
+|300|uint64Eq|w8:res r8:a0 r8:a1|Inline primitive
+|301|uint64Le|w8:res r8:a0 r8:a1|Inline primitive
+|302|uint64Lt|w8:res r8:a0 r8:a1|Inline primitive
+|303|uint64Mod|w8:res r8:a0 r8:a1|Inline primitive
+|304|uint64Mul|w8:res r8:a0 r8:a1|Inline primitive
+|305|uint64Ne|w8:res r8:a0 r8:a1|Inline primitive
+|306|uint64Neg|w8:res r8:a0|Inline primitive
+|307|uint64Not|w8:res r8:a0|Inline primitive
+|308|uint64Or|w8:res r8:a0 r8:a1|Inline primitive
+|309|uint64Shl|w8:res r8:a0 r8:a1|Inline primitive
+|310|uint64Shr|w8:res r8:a0 r8:a1|Inline primitive
+|311|uint64Sub|w8:res r8:a0 r8:a1|Inline primitive
+|312|uint64ToFloat32|w8:res r8:a0|Inline primitive
+|313|uint64ToFloat64|w8:res r8:a0|Inline primitive
+|314|uint64ToInt|w8:res r8:a0|Inline primitive
+|315|uint64ToInt32|w8:res r8:a0|Inline primitive
+|316|uint64ToInt64|w8:res r8:a0|Inline primitive
+|317|uint64ToUInt32|w8:res r8:a0|Inline primitive
+|318|uint64Xor|w8:res r8:a0 r8:a1|Inline primitive
+|319|uint8ToUInt32|w8:res r8:a0|Inline primitive
+|320|uint8ToInt8|w8:res r8:a0|Inline primitive
+|321|lazyForce|r8:thk|Force thunk
+|322|stringBuilderNew|w8:res r8:a0|Inline primitive
+|323|stringBuilderChar|w8:res r8:a0 r8:a1|Inline primitive
+|324|stringBuilderString|w8:res r8:a0 r8:a1|Inline primitive
+|325|stringBuilderBuild|w8:res r8:a0|Inline primitive
+|326|bufferSize|w8:res r8:a0|Inline primitive
+|327|arraySize|w8:res r8:a0|Inline primitive
+|328|arrayCas|w8:res r8:a0 r8:a1 r8:a2 r8:a3|Inline primitive
+|329|arrayClone|w8:res r8:a0 r8:a1 r8:a2|Inline primitive
+|330|arrayCopy|w8:res r8:a0 r8:a1 r8:a2 r8:a3 r8:a4|Inline primitive
+|331|arrayNew|w8:res r8:a0 r8:a1|Inline primitive
+|332|arrayRead|w8:res r8:a0 r8:a1|Inline primitive
+|333|arrayWrite|w8:res r8:a0 r8:a1 r8:a2|Inline primitive
+|334|bufferClone|w8:res r8:a0 r8:a1 r8:a2|Inline primitive
+|335|bufferCmp|w8:res r8:a0 r8:a1 r8:a2 r8:a3 r8:a4|Inline primitive
+|336|bufferCopy|w8:res r8:a0 r8:a1 r8:a2 r8:a3 r8:a4|Inline primitive
+|337|bufferFill|w8:res r8:a0 r8:a1 r8:a2 r8:a3|Inline primitive
+|338|bufferNew|w8:res r8:a0|Inline primitive
+|339|bufferReadFloat32|w8:res r8:a0 r8:a1|Inline primitive
+|340|bufferReadFloat64|w8:res r8:a0 r8:a1|Inline primitive
+|341|bufferReadUInt16|w8:res r8:a0 r8:a1|Inline primitive
+|342|bufferReadUInt32|w8:res r8:a0 r8:a1|Inline primitive
+|343|bufferReadUInt64|w8:res r8:a0 r8:a1|Inline primitive
+|344|bufferReadUInt8|w8:res r8:a0 r8:a1|Inline primitive
+|345|bufferWriteFloat32|w8:res r8:a0 r8:a1 r8:a2|Inline primitive
+|346|bufferWriteFloat64|w8:res r8:a0 r8:a1 r8:a2|Inline primitive
+|347|bufferWriteUInt16|w8:res r8:a0 r8:a1 r8:a2|Inline primitive
+|348|bufferWriteUInt32|w8:res r8:a0 r8:a1 r8:a2|Inline primitive
+|349|bufferWriteUInt64|w8:res r8:a0 r8:a1 r8:a2|Inline primitive
+|350|bufferWriteUInt8|w8:res r8:a0 r8:a1 r8:a2|Inline primitive
+|351|identical|w8:res r8:a0 r8:a1|Inline primitive
+|352|tag|w8:res r8:a0|Inline primitive
 |===

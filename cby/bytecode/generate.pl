@@ -75,41 +75,41 @@ sub decode_args {
         if ($arg[0] eq "r") {
             push @out, $deref ? "const Chili $arg[2] = REG[FETCH$arg[1]];"
                 : "const uint$arg[1]_t $arg[2] = FETCH$arg[1];";
-            push @fmt, ["ARGR($arg[2])", "(uint32_t)$arg[2]"];
+            push @fmt, ["NAME($arg[2])", "REG", "(uint32_t)$arg[2]"];
         } elsif ($arg[0] eq "w") {
             push @out, $deref ? "Chili* const $arg[2] = REG + FETCH$arg[1];"
                 : "const uint$arg[1]_t $arg[2] = FETCH$arg[1];";
-            push @fmt, ["ARGR($arg[2])", "(uint32_t)$arg[2]"];
+            push @fmt, ["NAME($arg[2])", "REG", "(uint32_t)$arg[2]"];
         } elsif ($arg[0] eq "i" && $arg[1] == 64) {
             push @out, "const int64_t $arg[2] = (int64_t)FETCH64;";
-            push @fmt, ["NAME($arg[2])VAL(\"%jd\")", $arg[2]];
+            push @fmt, ["NAME($arg[2])", "VAL(\"%jd\")", $arg[2]];
         } elsif ($arg[0] eq "u" && $arg[1] == 64) {
             push @out, "const uint64_t $arg[2] = FETCH64;";
-            push @fmt, ["NAME($arg[2])VAL(\"%ju\")", $arg[2]];
+            push @fmt, ["NAME($arg[2])", "VAL(\"%ju\")", $arg[2]];
         } elsif ($arg[0] eq "i") {
             push @out, "const int$arg[1]_t $arg[2] = (int$arg[1]_t)FETCH$arg[1];";
-            push @fmt, ["ARGD($arg[2])", "(int32_t)$arg[2]"];
+            push @fmt, ["NAME($arg[2])", "VAL(\"%d\")", "(int32_t)$arg[2]"];
         } elsif ($arg[0] eq "u") {
             push @out, "const uint$arg[1]_t $arg[2] = FETCH$arg[1];";
-            push @fmt, ["ARGU($arg[2])", "(uint32_t)$arg[2]"];
+            push @fmt, ["NAME($arg[2])", "VAL(\"%u\")", "(uint32_t)$arg[2]"];
         } elsif ($arg[0] eq "f" && $arg[1] == 32) {
             push @out, "const float $arg[2] = CHI_CAST(FETCH32, float);";
-            push @fmt, ["NAME($arg[2])VAL(\"%f\")", "(double)$arg[2]"];
+            push @fmt, ["NAME($arg[2])", "VAL(\"%f\")", "(double)$arg[2]"];
         } elsif ($arg[0] eq "f" && $arg[1] == 64) {
             push @out, "const double $arg[2] = CHI_CAST(FETCH64, double);";
-            push @fmt, ["NAME($arg[2])VAL(\"%f\")", $arg[2]];
+            push @fmt, ["NAME($arg[2])", "VAL(\"%f\")", $arg[2]];
         } elsif ($arg[0] eq "fnref") {
             push @out, "int32_t _fnref = (int32_t)FETCH32; const CbyCode* fnref = IP + _fnref;";
-            push @fmt, [" FNREF ", "FNREF_ARGS"];
+            push @fmt, ["", "FNREF", "FNREF_ARGS"];
         } elsif ($arg[0] eq "strref") {
             push @out, "const ChiStringRef strref = FETCH_STRING;";
-            push @fmt, ["\" \"VAL(\"%qS\")", "strref"];
+            push @fmt, ["", "VAL(\"%qS\")", "strref"];
         } elsif ($arg[0] eq "bytesref") {
             push @out, "const ChiStringRef bytesref = FETCH_STRING;";
-            push @fmt, ["\" \"VAL(\"%hS\")", "bytesref"];
+            push @fmt, ["", "VAL(\"%hS\")", "bytesref"];
         } elsif ($arg[0] eq "ffiref") {
             push @out, "int32_t _ffiref = (int32_t)FETCH32; const CbyCode* ffiref = IP + _ffiref;";
-            push @fmt, [" FFIREF ", "FFIREF_ARGS"];
+            push @fmt, ["", "FFIREF", "FFIREF_ARGS"];
         } elsif ($arg[0] eq "arr") {
             unshift @args, \@arg;
             last;
@@ -173,20 +173,23 @@ sub gen_disasm_args {
     my $fmtstr = "";
     my $fmtarg = "";
     foreach (@$fmt) {
-        my ($fs, $fa) = @$_;
+        my ($fn, $fs, $fa) = @$_;
+        $fmtstr .= "\" \"" if $fmtstr ne "" || $prefix eq "";
+        $fmtstr .= "$fn" if $prefix eq "";
         $fmtstr .= "$fs";
         $fmtarg .= ", $fa";
     }
-    $out .= "    chiSinkFmt(sink, $fmtstr$fmtarg);\n" if ($fmtstr ne "");
+    $out .= "    chiSinkFmt(sink, $fmtstr$fmtarg);\n" if $fmtstr ne "";
     if ($#{$rest} >= 0) {
         my @arg = @{${$rest}[0]};
         if ($arg[0] eq "arr") {
-            my $body = gen_disasm_args("    if ($arg[1]_count) chiSinkPuts(sink, \" |\");\n", $arg[3]);
+            my $body = gen_disasm_args("    if ($arg[1]_count) chiSinkPuts(sink, \"; \");\n", $arg[3]);
             $body =~ s/(?!\A)^/    /mg;
             $body =~ s/\n\Z| +$//mg;
-            $out .= "    chiSinkPuts(sink, NAME($arg[1])\"[\");\n";
+            my $sp = $fmtstr eq "" ? '' : '" "';
+            $out .= "    chiSinkPuts(sink, ${sp}NAME($arg[1])\"[\");\n";
             $out .= "    for (uint32_t $arg[1]_count = 0; $arg[1]_count < $arg[2]; ++$arg[1]_count) $body\n";
-            $out .= "    chiSinkPuts(sink, \" ]\");\n";
+            $out .= "    chiSinkPuts(sink, \"]\");\n";
         } else {
             die;
         }
@@ -330,18 +333,6 @@ sub parse_insn {
                 }
             }
 
-            # reference other instruction
-            if ($thisbody =~ /\s+%goto\s+(\w+);/) {
-                my $ref = $1;
-                foreach my $other (@insns) {
-                    my ($other_id, $other_opcode, $other_desc, $other_args, $other_body) = @$other;
-                    if ($other_opcode eq $ref) {
-                        $thisbody =~ s/%goto\s+$ref;/{$other_body}/g;
-                        last;
-                    }
-                }
-            }
-
             push @insns, [$#insns+1+$offset, $opcode, $thisdesc, \@arg, $thisbody];
         }
     }
@@ -354,6 +345,19 @@ my @priminsns = parse_insn "priminsn.defs", $first_prim;
 
 my @allinsns = ();
 push(@allinsns, @insns, @priminsns);
+
+foreach my $insn (@allinsns) {
+    # reference other instruction
+    if ($insn->[4] =~ /\s+%goto\s+(\w+);/) {
+        my $ref = $1;
+        foreach my $other (@allinsns) {
+            if ($other->[1] eq $ref) {
+                $insn->[4] =~ s/%goto\s+$ref;/{$other->[4]}/g;
+                last;
+            }
+        }
+    }
+}
 
 gen_doc @allinsns;
 gen_header $first_prim, @allinsns;

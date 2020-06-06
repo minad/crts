@@ -11,12 +11,12 @@ BENCH(newSmallFixed, 1000000) {
 }
 
 BENCH(newSmallFixedLoc, 1000000) {
-    Chili c = chiNewFlags(CHI_PRESTRING, 8, CHI_NEW_LOCAL);
+    Chili c = chiNewFlags(CHI_PRESTRING, 8, CHI_NEW_SHARED);
     *(__volatile__ uint8_t*)chiRawPayload(c) = 1;
 }
 
 BENCH(newSmallFixedLocInl, 1000000) {
-    Chili c = chiNewInl(CHI_CURRENT_PROCESSOR, CHI_PRESTRING, 8, CHI_NEW_LOCAL);
+    Chili c = chiNewInl(CHI_CURRENT_PROCESSOR, CHI_PRESTRING, 8, CHI_NEW_SHARED);
     *(__volatile__ uint8_t*)chiRawPayload(c) = 1;
 }
 
@@ -45,7 +45,7 @@ BENCH(newSmallLoc, 1000000) {
     do {
         s = (size_t)RAND % 32;
     } while (!s);
-    Chili c = chiNewFlags(CHI_PRESTRING, s, CHI_NEW_LOCAL);
+    Chili c = chiNewFlags(CHI_PRESTRING, s, CHI_NEW_SHARED);
     *(__volatile__ uint8_t*)chiRawPayload(c) = 1;
 }
 
@@ -54,7 +54,7 @@ BENCH(newSmallLocInl, 1000000) {
     do {
         s = (size_t)RAND % 32;
     } while (!s);
-    Chili c = chiNewInl(CHI_CURRENT_PROCESSOR, CHI_PRESTRING, s, CHI_NEW_LOCAL);
+    Chili c = chiNewInl(CHI_CURRENT_PROCESSOR, CHI_PRESTRING, s, CHI_NEW_SHARED);
     *(__volatile__ uint8_t*)chiRawPayload(c) = 1;
 }
 
@@ -111,6 +111,7 @@ SUBTEST(chiNew, ChiType type, bool shared) {
         ASSERT(chiGen(c) == (s <= CHI_MAX_UNPINNED ? CHI_GEN_NURSERY : CHI_GEN_MAJOR));
         ASSERTEQ(chiSize(c), s);
         ASSERT(chiGen(c) != CHI_GEN_MAJOR || shared == chiObjectShared(chiObject(c)));
+        memset(chiRawPayload(c), 0, s * CHI_WORDSIZE);
     }
     for (size_t i = 1; i < 100; ++i) {
         size_t s;
@@ -121,6 +122,7 @@ SUBTEST(chiNew, ChiType type, bool shared) {
         ASSERT(chiGen(c) == (s <= CHI_MAX_UNPINNED ? CHI_GEN_NURSERY : CHI_GEN_MAJOR));
         ASSERTEQ(chiSize(c), s);
         ASSERT(chiGen(c) != CHI_GEN_MAJOR || shared == chiObjectShared(chiObject(c)));
+        memset(chiRawPayload(c), 0, s * CHI_WORDSIZE);
     }
 }
 
@@ -130,6 +132,7 @@ SUBTEST(chiNewFlags, ChiType type, ChiNewFlags flags, bool shared) {
         ASSERT(chiGen(c) == CHI_GEN_MAJOR);
         ASSERTEQ(chiSize(c), s);
         ASSERT(chiGen(c) != CHI_GEN_MAJOR || shared == chiObjectShared(chiObject(c)));
+        memset(chiRawPayload(c), 0, s * CHI_WORDSIZE);
     }
     for (size_t i = 1; i < 100; ++i) {
         size_t s;
@@ -140,6 +143,7 @@ SUBTEST(chiNewFlags, ChiType type, ChiNewFlags flags, bool shared) {
         ASSERT(chiGen(c) == CHI_GEN_MAJOR);
         ASSERTEQ(chiSize(c), s);
         ASSERT(chiGen(c) != CHI_GEN_MAJOR || shared == chiObjectShared(chiObject(c)));
+        memset(chiRawPayload(c), 0, s * CHI_WORDSIZE);
     }
 }
 

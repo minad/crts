@@ -75,9 +75,6 @@ static void chunkInit(ChiChunk* chunk, void* start, size_t size) {
 }
 
 static ChiChunk* vaGetHandle(VirtAllocator*, void*, size_t);
-static ChiChunk* vaSplitBegin(VirtAllocator*, ChiChunk*, size_t);
-static ChiChunk* vaSplitEnd(VirtAllocator*, ChiChunk*, size_t);
-static void vaSplit(VirtAllocator*, ChiChunk*, size_t, size_t, ChiChunk**, ChiChunk**);
 static void vaFreeChunk(Allocator*, ChiChunk*);
 static CHI_WU bool vaNeedHandles(VirtAllocator*, size_t);
 static CHI_WU bool vaAllocHuge(VirtAllocator*, size_t);
@@ -90,7 +87,7 @@ _Static_assert(CHI_CHUNK_ARENA_FIXED || !CHI_CHUNK_START, "Fixed arena must not 
 #if CHI_CHUNK_ARENA_ENABLED
 
 CHI_INL CHI_WU uint32_t chunkClassSmaller(size_t size) {
-    uint32_t cls = chiLog2(size);
+    uint32_t cls = chiLog2Floor(size);
     CHI_ASSERT(cls >= CHI_CHUNK_MIN_SHIFT);
     CHI_ASSERT(cls <= CHI_CHUNK_MAX_SHIFT);
     return (uint32_t)(cls - CHI_CHUNK_MIN_SHIFT);
@@ -168,6 +165,37 @@ static ChiChunk* vaFindSize(VirtAllocator* va, const size_t size) {
     return chunk;
 }
 
+static ChiChunk* vaSplitBegin(VirtAllocator* va, ChiChunk* chunk, size_t align) {
+    if (!chunkAligned(chunk->start, align)) {
+        uintptr_t oldStart = (uintptr_t)chunk->start, newStart = CHI_ALIGNUP(oldStart, align);
+        ChiChunk* before = vaGetHandle(va, chunk->start, newStart - oldStart);
+        chunk->start = (void*)newStart;
+        CHI_ASSERT(chunk->size > before->size);
+        chunk->size -= before->size;
+        CHI_IF(CHI_CHUNK_ARENA_ENABLED, before->_used = true; addrListInsertBefore(chunk, before));
+        return before;
+    }
+    return 0;
+}
+
+static ChiChunk* vaSplitEnd(VirtAllocator* va, ChiChunk* chunk, size_t size) {
+    if (chunk->size != size) {
+        CHI_ASSERT(chunk->size > size);
+        ChiChunk* after = vaGetHandle(va, (void*)((uintptr_t)chunk->start + size), chunk->size - size);
+        CHI_ASSERT(chunk->size > after->size);
+        chunk->size -= after->size;
+        CHI_IF(CHI_CHUNK_ARENA_ENABLED, after->_used = true; addrListInsertAfter(chunk, after));
+        return after;
+    }
+    return 0;
+}
+
+static void vaSplit(VirtAllocator* va, ChiChunk* chunk, size_t size, size_t align,
+                    ChiChunk** before, ChiChunk** after) {
+    *before = vaSplitBegin(va, chunk, align);
+    *after = vaSplitEnd(va, chunk, size);
+}
+
 static ChiChunk* vaFind(VirtAllocator* va, size_t size, size_t align) {
     CHI_LOCK_MUTEX(&va->mutex);
     if (!vaNeedHandles(va, 2))
@@ -229,10 +257,10 @@ static ChiChunk* vaNewChunk(Allocator* a, const size_t size, const size_t align)
                     chiVirtFree((void*)alignedEnd, end - alignedEnd);
             } else {
                 chiVirtFree((void*)start, size + align);
-                start = chiVirtAlloc((void*)alignedStart, size, vaAllocHuge(va, size));
+                start = (uintptr_t)chiVirtAlloc((void*)alignedStart, size, vaAllocHuge(va, size));
                 if (start != alignedStart) {
                     if (start)
-                        chiVirtFree(start, size);
+                        chiVirtFree((void*)start, size);
                     continue;
                 }
             }
@@ -242,6 +270,7 @@ static ChiChunk* vaNewChunk(Allocator* a, const size_t size, const size_t align)
             return 0;
         return vaGetHandle(va, (void*)start, size);
     }
+    return 0;
 }
 #endif
 
@@ -287,37 +316,6 @@ static ChiChunk* vaGetHandle(VirtAllocator* va, void* start, size_t size) {
     return chunk;
 }
 
-static ChiChunk* vaSplitBegin(VirtAllocator* va, ChiChunk* chunk, size_t align) {
-    if (!chunkAligned(chunk->start, align)) {
-        uintptr_t oldStart = (uintptr_t)chunk->start, newStart = CHI_ALIGNUP(oldStart, align);
-        ChiChunk* before = vaGetHandle(va, chunk->start, newStart - oldStart);
-        chunk->start = (void*)newStart;
-        CHI_ASSERT(chunk->size > before->size);
-        chunk->size -= before->size;
-        CHI_IF(CHI_CHUNK_ARENA_ENABLED, before->_used = true; addrListInsertBefore(chunk, before));
-        return before;
-    }
-    return 0;
-}
-
-static ChiChunk* vaSplitEnd(VirtAllocator* va, ChiChunk* chunk, size_t size) {
-    if (chunk->size != size) {
-        CHI_ASSERT(chunk->size > size);
-        ChiChunk* after = vaGetHandle(va, (void*)((uintptr_t)chunk->start + size), chunk->size - size);
-        CHI_ASSERT(chunk->size > after->size);
-        chunk->size -= after->size;
-        CHI_IF(CHI_CHUNK_ARENA_ENABLED, after->_used = true; addrListInsertAfter(chunk, after));
-        return after;
-    }
-    return 0;
-}
-
-static void vaSplit(VirtAllocator* va, ChiChunk* chunk, size_t size, size_t align,
-                    ChiChunk** before, ChiChunk** after) {
-    *before = vaSplitBegin(va, chunk, align);
-    *after = vaSplitEnd(va, chunk, size);
-}
-
 static void vaSetup(VirtAllocator* va, const ChiChunkOption* opts) {
     CHI_ZERO_STRUCT(va);
     chiMutexInit(&va->mutex);
@@ -343,7 +341,7 @@ static ChiChunk* uaReuse(UnmapAllocator* ua, size_t size, size_t align) {
 }
 
 static ChiMillis currentMillis(void) {
-    return chiNanosToMillis(chiClockMonotonicFast());
+    return chiNanosToMillis(chiClockFast());
 }
 
 static ChiChunk* uaPopWait(UnmapAllocator* ua) {
@@ -464,11 +462,10 @@ void chiChunkFree(ChiChunk* chunk) {
 }
 
 #define CHI_OPT_STRUCT ChiChunkOption
-CHI_INTERN const ChiOption chiChunkOptionList[] = {
-    CHI_OPT_TITLE("CHUNK ALLOCATOR")
-    CHI_OPT_FLAG(smallPages, "c:sp", "Use small pages")
-    CHI_OPT_FLAG(noUnmap, "c:nou", "Disable unmapping")
-    CHI_IF(CHI_UNMAP_TASK_ENABLED, CHI_OPT_UINT64(_CHI_UN(Millis, unmapTimeout), 0, 60000, "c:ut", "Unmapping timeout in ms"))
-    CHI_OPT_END
-};
+CHI_INTERN CHI_OPT_GROUP(chiChunkOptions, "CHUNK",
+                         CHI_OPT_FLAG(smallPages, "c:sp", "Use small pages")
+                         CHI_OPT_FLAG(noUnmap, "c:nou", "Disable unmapping")
+                         CHI_IF(CHI_UNMAP_TASK_ENABLED,
+                                CHI_OPT_UINT64(_CHI_UN(Millis, unmapTimeout), 0, 60000,
+                                               "c:ut", "Unmapping timeout in ms")))
 #undef CHI_OPT_STRUCT

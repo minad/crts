@@ -1,7 +1,6 @@
 #include <chili/cont.h>
 #include <setjmp.h>
 #include <stdlib.h>
-#include "../export.h"
 #include "../runtime.h"
 #include "../strutil.h"
 #include "test.h"
@@ -22,11 +21,11 @@ static void shuffle(ChiRandState randState, TestFn** a, size_t n) {
 
 static uint64_t randSeed;
 
-STATIC_CONT(runBench) {
+STATIC_CONT(runBench, .na = 1) {
     PROLOGUE(runBench);
-    LIMITS(.interrupt = true); // force safepoint
-
-    uint32_t i = chiToUInt32(A(0));
+    LIMITS_PROC(.interrupt = true); // force safepoint
+    uint32_t i = chiToUInt32(AGET(0));
+    UNDEF_ARGS(0);
 
     enum { REPEAT = 3 };
 
@@ -41,27 +40,28 @@ STATIC_CONT(runBench) {
     BenchState state = { .run = 0 };
     chiRandInit(state.rand, randSeed);
 
-    const ChiNanos begin = chiClockMonotonicFine();
+    const ChiNanos begin = chiClockFine();
     while (state.run < b->runs) {
         b->fn(&state);
         ++state.run;
     }
-    const ChiNanos delta = chiNanosDelta(chiClockMonotonicFine(), begin);
+    const ChiNanos delta = chiNanosDelta(chiClockFine(), begin);
     chiSinkFmt(chiStdout, " │ %8t %8t/run", delta, chiNanos(CHI_UN(Nanos, delta) / b->runs));
     if (i % REPEAT == REPEAT - 1)
         chiSinkPutc(chiStdout, '\n');
     chiSinkFlush(chiStdout);
 
-    A(0) = chiFromUInt32(i + 1);
+    ASET(0, chiFromUInt32(i + 1));
     KNOWN_JUMP(runBench);
 }
 
-STATIC_CONT(runTest, .na = 1) {
+STATIC_CONT(runTest, .na = 2) {
     PROLOGUE(runTest);
-    LIMITS(.interrupt = true); // force safepoint
+    LIMITS_PROC(.interrupt = true); // force safepoint
+    uint32_t i = chiToUInt32(AGET(0));
+    uint32_t failed = chiToUInt32(AGET(1));
+    UNDEF_ARGS(0);
 
-    uint32_t i = chiToUInt32(A(0));
-    uint32_t failed = chiToUInt32(A(1));
     if (__start_chi_test_registry + i >= __stop_chi_test_registry) {
         chiSinkFmt(chiStdout, "\n%ld succeeded, %u failed.\n",
                    (__stop_chi_test_registry - __start_chi_test_registry) - failed, failed);
@@ -76,17 +76,19 @@ STATIC_CONT(runTest, .na = 1) {
     chiSinkPutc(chiStdout, state.failed ? 'F' : '.');
     chiSinkFlush(chiStdout);
 
-    A(0) = chiFromUInt32(i + 1);
-    A(1) = chiFromUInt32(failed);
+    ASET(0, chiFromUInt32(i + 1));
+    ASET(1, chiFromUInt32(failed));
     KNOWN_JUMP(runTest);
 }
 
+CHI_EXTERN_CONT_DECL(z_Main)
 CONT(z_Main) {
     PROLOGUE(z_Main);
+    UNDEF_ARGS(0);
 
     ChiRuntime* rt = CHI_CURRENT_RUNTIME;
     if (rt->argc == 2 && streq(rt->argv[1], "bench")) {
-        A(0) = CHI_FALSE;
+        ASET(0, CHI_FALSE);
         KNOWN_JUMP(runBench);
     }
 
@@ -94,7 +96,7 @@ CONT(z_Main) {
         const char* end = rt->argv[1] + 5;
         CHI_IGNORE_RESULT(chiReadUInt64(&randSeed, &end));
     } else {
-        randSeed = CHI_UN(Nanos, chiClockMonotonicFine());
+        randSeed = CHI_UN(Nanos, chiClockFine());
     }
     chiSinkFmt(chiStdout, "*** Running test suite with TEST_SEED=%ju ***\n", randSeed);
 
@@ -103,8 +105,8 @@ CONT(z_Main) {
     shuffle(randState, __start_chi_test_registry,
             (size_t)(__stop_chi_test_registry - __start_chi_test_registry));
 
-    A(0) = CHI_FALSE;
-    A(1) = CHI_FALSE;
+    ASET(0, CHI_FALSE);
+    ASET(1, CHI_FALSE);
     KNOWN_JUMP(runTest);
 }
 

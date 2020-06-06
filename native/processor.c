@@ -33,25 +33,28 @@ void chiProcessorRequest(ChiProcessor* proc, ChiProcessorRequest request) {
 #endif
 
     switch (request) {
-    case CHI_REQUEST_TICK:
+    case CHI_REQUEST_TIMERINTERRUPT:
         if (CHI_AND(CHI_SYSTEM_HAS_TASK, snd->status != CHI_SECONDARY_INACTIVE))
             return; // No ticks if secondary worker is active/running
-        if (chiTriggered(&proc->trigger.tick))
+        if (chiTriggered(&proc->trigger.timerInterrupt))
             chiEvent(proc->rt, PROC_STALL, .wid = proc->primary.worker.wid);
         else
-            chiTrigger(&proc->trigger.tick, true);
+            chiTrigger(&proc->trigger.timerInterrupt, true);
         break;
     case CHI_REQUEST_EXIT: chiTrigger(&proc->trigger.exit, true); break;
-    case CHI_REQUEST_DUMPSTACK: chiTrigger(&proc->trigger.dumpStack, true); break;
+    case CHI_REQUEST_DUMP: chiTrigger(&proc->trigger.dump, true); break;
     case CHI_REQUEST_USERINTERRUPT: chiTrigger(&proc->trigger.userInterrupt, true); break;
-    case CHI_REQUEST_MIGRATE: chiTrigger(&proc->trigger.migrate, true); // fall through
+    case CHI_REQUEST_NOTIFYINTERRUPT: chiTrigger(&proc->trigger.notifyInterrupt, true); break;
+    case CHI_REQUEST_PROMOTE: chiTrigger(&proc->trigger.promote, true); // fall through
     case CHI_REQUEST_SCAVENGE: chiTrigger(&proc->trigger.scavenge, true); break;
     case CHI_REQUEST_HANDSHAKE: break;
     }
 
     interruptProcessor(proc);
 
-    if (request == CHI_REQUEST_USERINTERRUPT || request == CHI_REQUEST_EXIT) {
+    if (request == CHI_REQUEST_USERINTERRUPT ||
+        request == CHI_REQUEST_NOTIFYINTERRUPT ||
+        request == CHI_REQUEST_EXIT) {
         CHI_LOCK_MUTEX(&proc->suspend.mutex);
         if (!chiMillisZero(proc->suspend.timeout)) {
             proc->suspend.timeout = chiMillis(0);
@@ -82,7 +85,7 @@ static void workerBegin(ChiWorker* worker, ChiRuntime* rt, const char* prefix, u
     chiFmt(worker->name, sizeof (worker->name), "%s%u", prefix, wid);
     CHI_IF(CHI_SYSTEM_HAS_TASK, chiTaskName(worker->name));
     chiEventWorkerStart(worker);
-    chiHookRun(CHI_HOOK_WORKER_START, worker);
+    chiHookWorkerRun(worker, START);
 }
 
 #if CHI_POISON_ENABLED
@@ -92,7 +95,7 @@ static void resetDebugData(void) {
 }
 static void setupDebugData(ChiProcessor* proc) {
     _chiDebugData.ownerMinor = (uintptr_t)&proc->heap.manager;
-    _chiDebugData.ownerMinorMask = CHI_ALIGNMASK(proc->rt->option.block.size);
+    _chiDebugData.ownerMinorMask = CHI_ALIGNMASK(proc->rt->option.nursery.block);
     _chiDebugData.wid = proc->primary.worker.wid;
     _chiDebugData.markState = proc->gc.markState;
     _chiDebugData.protect = false;
@@ -288,8 +291,8 @@ static bool initProcessor(ChiProcessor* proc) {
     chiLocalGCSetup(&proc->gc, &rt->gc);
     setupDebugData(proc);
     chiLocalHeapSetup(&proc->heap,
-                      opt->block.size, opt->block.chunk,
-                      opt->block.nursery, rt);
+                      opt->nursery.block, opt->nursery.chunk,
+                      opt->nursery.limit / opt->nursery.block, rt);
     chiHeapHandleSetup(&proc->handle, &rt->heap, proc->gc.markState.white);
 
 #if CHI_SYSTEM_HAS_TASK
@@ -312,7 +315,7 @@ static void destroyProcessor(ChiProcessor* proc) {
         chiGCDestroy(rt);
 
     chiEvent0(proc, PROC_RUN_END);
-    chiHookRun(CHI_HOOK_PROC_STOP, proc);
+    chiHookProcRun(proc, STOP);
     chiEvent0(proc, PROC_DESTROY);
 
     chiHeapHandleDestroy(&proc->handle);
@@ -348,7 +351,7 @@ static void destroyProcessor(ChiProcessor* proc) {
 static void exitProcessor(ChiProcessor* proc) {
     ChiRuntime* rt = proc->rt;
     if (chiProcessorMain(proc)) {
-        rt->timeRef.end = chiTime();
+        rt->timeRef.end = chiClockFine();
         CHI_IF(CHI_SYSTEM_HAS_TASK, waitProcessors(proc));
         destroyProcessor(proc);
         chiRuntimeDestroy(proc);
@@ -360,9 +363,7 @@ static void exitProcessor(ChiProcessor* proc) {
 }
 
 void chiProcessorProtectEnd(ChiProcessor* proc) {
-    int e = CHI_AND(CHI_SYSTEM_HAS_ERRNO, errno);
     CHI_IF(CHI_SYSTEM_HAS_TASK, secondaryDeactivate(proc));
-    chiThreadSetErrno(proc, e);
     if (chiTriggered(&proc->trigger.exit) || chiTriggered(&proc->trigger.userInterrupt))
         chiTrigger(&proc->trigger.interrupt, true);
 }
@@ -372,17 +373,15 @@ static void serviceExit(ChiProcessor* proc) {
         exitProcessor(proc);
 }
 
-static void serviceDumpStack(ChiProcessor* proc) {
-    if (chiTriggered(&proc->trigger.dumpStack)) {
-        chiTrigger(&proc->trigger.dumpStack, false);
+static void serviceDump(ChiProcessor* proc) {
+    if (chiTriggered(&proc->trigger.dump)) {
+        chiTrigger(&proc->trigger.dump, false);
         if (chiEventEnabled(proc, STACK_TRACE)) {
             CHI_STRING_SINK(sink);
-            chiStackActivate(proc);
-            Chili stack = chiThreadStack(proc->thread);
-            Chili* sp = chiToStack(stack)->sp;
-            chiStackDump(sink, proc, sp);
+            Chili stack = chiThreadStackUnchecked(proc->thread);
+            CHI_LOCK_OBJECT(chiObject(stack));
+            chiStackDump(sink, proc, chiToStack(stack)->sp);
             chiEvent(proc, STACK_TRACE, .stack = chiAddress(stack), .trace = chiSinkString(sink));
-            chiStackDeactivate(proc, sp);
         }
     }
 }
@@ -392,9 +391,11 @@ void chiProcessorService(ChiProcessor* proc) {
 
     while (chiTriggered(&proc->trigger.interrupt)) {
         chiTrigger(&proc->trigger.interrupt, false);
-        chiGCService(proc);
+        if (chiProcessorMain(proc))
+            chiGCControl(proc);
+        chiGCSlice(proc);
+        serviceDump(proc);
         serviceExit(proc);
-        serviceDumpStack(proc);
     }
 
     chiEvent0(proc, PROC_SERVICE_END);
@@ -405,18 +406,19 @@ void chiProtectBegin(Chili* sp) {
     chiStackDeactivate(proc, sp);
     chiEvent0(proc, THREAD_RUN_END);
     CHI_IF(CHI_SYSTEM_HAS_TASK, secondaryActivate(proc));
-    CHI_IF(CHI_SYSTEM_HAS_ERRNO, errno = 0);
 }
 
-void chiProcessorSuspend(Chili handle, uint32_t ms) {
-    ChiProcessor* proc = (ChiProcessor*)chiToPtr(handle);
-    chiEvent(CHI_CURRENT_PROCESSOR, PROC_SUSPEND, .suspendWid = proc->primary.worker.wid, .ms = ms);
-
+void chiProcessorSuspend(uint32_t ms) {
+    ChiProcessor* proc = CHI_CURRENT_PROCESSOR;
+    chiEvent(proc, PROC_SUSPEND, .ms = ms);
     CHI_LOCK_MUTEX(&proc->suspend.mutex);
-    ChiMillis old = proc->suspend.timeout;
     proc->suspend.timeout = chiMillis(ms);
-    if (!ms && !chiMillisZero(old))
-        chiCondSignal(&proc->suspend.cond);
+}
+
+void chiProcessorNotify(Chili handle) {
+    ChiProcessor* proc = (ChiProcessor*)chiToPtr(handle);
+    chiEvent(CHI_CURRENT_PROCESSOR, PROC_NOTIFY, .notifyWid = proc->primary.worker.wid);
+    chiProcessorRequest(proc, CHI_REQUEST_NOTIFYINTERRUPT);
 }
 
 void chiProcessorSetup(ChiProcessor* proc) {
@@ -463,7 +465,7 @@ void chiWorkerBegin(ChiWorker* worker, ChiRuntime* rt, const char* prefix) {
 }
 
 void chiWorkerEnd(ChiWorker* worker) {
-    chiHookRun(CHI_HOOK_WORKER_STOP, worker);
+    chiHookWorkerRun(worker, STOP);
     chiEventWorkerStop(worker);
 }
 

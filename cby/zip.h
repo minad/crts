@@ -36,7 +36,7 @@ typedef enum { ZIP_FOREACH_RESULT(_ZIP_RESULT) } ZipResult;
 extern const char* const zipResultName[];
 CHI_INTERN CHI_WU Zip* zipOpen(const char*, ZipResult*);
 CHI_INTERN void zipClose(Zip*);
-CHI_INTERN CHI_WU ZipFile* zipFind(Zip*, ChiStringRef);
+CHI_INTERN CHI_WU ZipFile* zipFind(Zip*, const char*);
 CHI_INTERN CHI_WU ZipResult zipRead(Zip*, ZipFile*, void*);
 
 CHI_DEFINE_AUTO(Zip*, zipClose)

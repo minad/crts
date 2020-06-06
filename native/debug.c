@@ -32,7 +32,7 @@ static void debugMsgv(const char* prefix, const char* file, uint32_t line, const
     chiSinkMemInit(&s, buf, sizeof (buf));
     chiSinkFmt(&s.base, "%s: %s:%u: %s: ", prefix, file, line, func);
     chiSinkFmtv(&s.base, fmt, ap);
-    s.used = CHI_MIN(s.capacity - 1, s.used);
+    CHI_SETMIN(&s.used, s.capacity - 1);
     chiSinkPutc(&s.base, '\n');
     chiSinkWrite(chiStderr, s.buf, s.used);
 }

@@ -89,14 +89,15 @@ typedef struct ChiProcessor_ {
         ChiMillis     timeout;
     } suspend;
     struct {
-        CHI_UNLESS(CHI_SYSTEM_HAS_INTERRUPT, ChiNanos lastTick;)
+        CHI_UNLESS(CHI_SYSTEM_HAS_INTERRUPT, ChiNanos lastTimerInterrupt;)
         ChiTrigger    interrupt;
         ChiTrigger    exit;
-        ChiTrigger    tick;
-        ChiTrigger    dumpStack;
+        ChiTrigger    dump;
+        ChiTrigger    timerInterrupt;
         ChiTrigger    userInterrupt;
+        ChiTrigger    notifyInterrupt;
         ChiTrigger    scavenge;
-        ChiTrigger    migrate;
+        ChiTrigger    promote;
     } trigger;
 } ChiProcessor;
 

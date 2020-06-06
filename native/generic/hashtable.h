@@ -9,10 +9,12 @@
 #define HT_GROW          CHI_CAT(HT_PREFIX, Grow)
 #define HT_INSERT        CHI_CAT(HT_PREFIX, Insert)
 #define HT_INSERTPOS     CHI_CAT(HT_PREFIX, InsertPos)
-#define HT_KEYTYPE       CHI_CAT(HT_PREFIX, KeyType)
 
 #ifndef HT_EXISTS
 #  define HT_EXISTS HT_KEY
+#endif
+#ifndef HT_KEYTYPE
+#  define HT_KEYTYPE const typeof (HT_KEY(((HT_ENTRY*)0)))
 #endif
 #ifndef HT_KEYEQ
 #  define HT_KEYEQ(a, b) (a == b)
@@ -41,8 +43,6 @@ typedef struct {
     size_t used, capacity;
 } HT_HASH;
 #endif
-
-typedef const typeof (HT_KEY(((HT_ENTRY*)0))) HT_KEYTYPE;
 
 /**
  * Compute hash index

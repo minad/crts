@@ -132,7 +132,7 @@ typedef struct {
 
 CHI_WARN_OFF(c++-compat)
 typedef struct Buffer_ {
-    CHI_IF(CHI_SYSTEM_HAS_TASK, struct Buffer_* next;)
+    struct Buffer_* next;
     uint8_t buf[0];
 } Buffer;
 CHI_WARN_ON
@@ -143,7 +143,7 @@ typedef struct WorkerStats_ WorkerStats;
 struct ChiEventState_ {
     ChiSink* sink;
     ChiNanos begin[_CHI_EVENT_DURATION_RUNTIME];
-    CHI_IF(CHI_SYSTEM_HAS_TASK, _Atomic(Buffer*) bufList;)
+    _Atomic(Buffer*) bufList;
     CHI_IF(CHI_STATS_ENABLED, RuntimeStats* stats;)
 };
 
@@ -157,16 +157,13 @@ struct ChiEventWS_ {
 #  include "event/stats.h"
 #endif
 
-static Buffer* workerBuffer(ChiEventWS* ws, size_t msgSize) {
-    if (CHI_UNLIKELY(!ws->buf))
-        ws->buf = (Buffer*)chiZalloc(msgSize);
-    return ws->buf;
-}
-
-#if CHI_SYSTEM_HAS_TASK
 static Buffer* bufferAcquire(ChiEventState* state, ChiWorker* worker, size_t msgSize) {
-    if (worker)
-        return workerBuffer(worker->eventWS, msgSize);
+    if (worker) {
+        ChiEventWS* ws = worker->eventWS;
+        if (CHI_UNLIKELY(!ws->buf))
+            ws->buf = (Buffer*)chiZalloc(msgSize);
+        return ws->buf;
+    }
     for (;;) {
         Buffer* buf = atomic_load_explicit(&state->bufList, memory_order_acquire);
         if (!buf)
@@ -196,14 +193,6 @@ static void bufferDestroy(ChiEventState* state) {
         buf = next;
     }
 }
-#else
-static Buffer* bufferAcquire(ChiEventState* CHI_UNUSED(s), ChiWorker* worker, size_t msgSize) {
-    return workerBuffer(worker->eventWS, msgSize);
-}
-
-static void bufferRelease(ChiEventState* CHI_UNUSED(s), ChiWorker* CHI_UNUSED(w), Buffer* CHI_UNUSED(buf)) {}
-static void bufferDestroy(ChiEventState* CHI_UNUSED(s)) {}
-#endif
 
 #define WRITE_MODE estimate
 // lint: no-sort
@@ -378,7 +367,7 @@ void chiEventWrite(void* ctx, ChiEvent e, const ChiEventPayload* p) {
     Event event = {
         .type = e,
         .payload = p,
-        .ts = chiNanosDelta(chiClockMonotonicFine(), rt->timeRef.start.real),
+        .ts = chiNanosDelta(chiClockFine(), rt->timeRef.start),
         .wid = worker ? worker->wid : 0,
         .tid = eventDesc[e].ctx == CTX_THREAD ? chiThreadId(proc->thread) : 0,
     };

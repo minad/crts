@@ -7,20 +7,12 @@
 
 typedef struct ChiProcessor_ ChiProcessor;
 typedef struct ChiHeap_ ChiHeap;
-typedef union ChiHeapPage_ ChiHeapPage;
 typedef struct ChiHeapClass_ ChiHeapClass;
 typedef struct ChiHeapSegmentLink_ ChiHeapSegmentLink;
 struct ChiHeapSegmentLink_ { ChiHeapSegmentLink *prev, *next; };
+CHI_NEWTYPE(HeapPage, uint32_t)
 
 #define CHI_HEAP_PAGE_FREE (1U << 31)
-
-/**
- * Each heap page contains objects of a fixed size.
- */
-union ChiHeapPage_ {
-    uint32_t objectSize;
-    uint32_t nextIndex;
-};
 
 /**
  * The heap consists of multiple segments.

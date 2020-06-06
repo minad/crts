@@ -410,8 +410,9 @@ _z_inl _z_wu uint64_t z_to_u64(z_int a) {
 
 _z_inl _z_wu z_int z_from_u64(uint64_t b) {
     z_int r = _z_new_checked(false, false, 0, _z_digits(64));
+    uint64_t mask = 64 <= Z_BITS ? ~(uint64_t)0 : ((uint64_t)1 << (64 <= Z_BITS ? 0 : Z_BITS)) - 1;
     while (b) {
-        r.d[r.size++] = (z_digit)(b & (((uint64_t)1 << (Z_BITS >= 64 ? 0 : Z_BITS)) - 1));
+        r.d[r.size++] = (z_digit)(b & mask);
         if (64 <= Z_BITS)
             break;
         b >>= 64 <= Z_BITS ? 0 : Z_BITS;
@@ -420,7 +421,7 @@ _z_inl _z_wu z_int z_from_u64(uint64_t b) {
 }
 
 _z_inl _z_wu z_int z_from_i64(int64_t b) {
-    z_int r = z_from_u64((uint64_t)(b < 0 ? -b : b));
+    z_int r = z_from_u64(b < 0 ? -(uint64_t)b : (uint64_t)b);
     r.neg = b < 0;
     return r;
 }
@@ -453,19 +454,17 @@ _z_inl _z_wu double z_to_d(z_int a) {
 }
 
 _z_inl _z_wu z_int z_from_d(double b) {
-    union {
-        double   dbl;
-        uint64_t bits;
-    } cast = { .dbl = b };
-    int32_t exp = (int32_t)((cast.bits >> 52) & 0x7FF);
+    uint64_t bits;
+    memcpy(&bits, &b, sizeof (bits));
+    int32_t exp = (int32_t)((bits >> 52) & 0x7FF);
     if (exp == 0x7FF)
         return z_zero; // convention: return 0 for +-inf, NaN
     exp -= 1023 + 52;
-    uint64_t frac = (cast.bits & (((uint64_t)1 << 52) - (uint64_t)1)) | ((uint64_t)1 << 52);
+    uint64_t frac = (bits & (((uint64_t)1 << 52) - (uint64_t)1)) | ((uint64_t)1 << 52);
     z_int f = z_from_u64(frac),
         r = exp < 0 ? z_shr(f, (uint16_t)-exp) : z_shl(f, (uint16_t)exp);
     z_free(f);
-    r.neg = (cast.bits >> 63) && r.size;
+    r.neg = (bits >> 63) && r.size;
     return r;
 }
 

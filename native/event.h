@@ -38,27 +38,20 @@
 #define chiEventEnabled(ctx, type)                                          \
     (_CHI_EVENT_FILTER_ENABLED(ctx, type) || _CHI_DTRACE_ENABLED(type) || _CHI_LTTNG_ENABLED(type))
 
+#define _chiEventStruct(ctx, type, ...)                                 \
+    ({                                                                  \
+        typeof(ctx) _ctx = (ctx);                                       \
+        if (_CHI_EVENT_FILTER_ENABLED(_ctx, type))                      \
+            _CHI_EVENT_##type(_ctx, ##__VA_ARGS__);                     \
+        _CHI_DTRACE(type, _ctx, ##__VA_ARGS__);                         \
+        _CHI_LTTNG(type, _ctx, ##__VA_ARGS__);                          \
+    })
+
 #define chiEventStruct(ctx, type, event)                                \
-    ({                                                                  \
-        typeof(ctx) _ctx = (ctx);                                       \
-        typeof(event) _event = (event);                                 \
-        if (_CHI_EVENT_FILTER_ENABLED(_ctx, type))                      \
-            _CHI_EVENT_##type(_ctx, _event);                            \
-        _CHI_DTRACE(type, _ctx, _event);                                \
-        _CHI_LTTNG(type, _ctx, _event);                                 \
-    })
-
-#define chiEvent(ctx, type, arg, ...)                                  \
+    ({ typeof(event) _event = (event); _chiEventStruct((ctx), type, _event); })
+#define chiEvent(ctx, type, arg, ...)                                   \
     chiEventStruct(ctx, type, &((typeof(*(CHI_FIELD_TYPE(ChiEventPayload, type)*)0)){ arg, __VA_ARGS__ }))
-
-#define chiEvent0(ctx, type)                                            \
-    ({                                                                  \
-        typeof(ctx) _ctx = (ctx);                                       \
-        if (_CHI_EVENT_FILTER_ENABLED(_ctx, type))                      \
-            _CHI_EVENT_##type(_ctx);                                    \
-        _CHI_DTRACE(type, _ctx);                                        \
-        _CHI_LTTNG(type, _ctx);                                         \
-    })
+#define chiEvent0(ctx, type) _chiEventStruct((ctx), type)
 
 #define CHI_FOREACH_EVENT_FORMAT(FORMAT, SEP)    \
     FORMAT(NONE,   none)   SEP                   \
@@ -69,7 +62,6 @@
 #define _CHI_EVENT_FORMAT(N, n) CHI_EVFMT_##N,
 typedef enum { CHI_FOREACH_EVENT_FORMAT(_CHI_EVENT_FORMAT,) } ChiEventFormat;
 #undef _CHI_EVENT_FORMAT
-
 
 #if CHI_EVENT_ENABLED
 CHI_EXTERN const char* const chiEventName[];

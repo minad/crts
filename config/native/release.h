@@ -209,7 +209,7 @@
 /**
  * Maximum block size in words
  */
-#define CHI_BLOCK_MAXSIZE          131072 /* 1M */
+#define CHI_BLOCK_MAXSIZE          262144 /* 2M */
 
 /**
  * Enable small string optimization.
@@ -250,6 +250,38 @@
  * garbage collector
  */
 #define CHI_GC_CONC_ENABLED       CHI_SYSTEM_HAS_TASK
+
+/**
+ * Scavenger thunk collapsing enabled
+ */
+#define CHI_SCAV_COLLAPSE_ENABLED 1
+
+/**
+ * Marker thunk collapsing enabled
+ *
+ * Thunk collapsing is only available on 64-bit platforms for now,
+ * since we overwrite the 64-bit field non-atomically while mutators
+ * might be accessing it. On 32-bit platforms, the non-atomic 64-bit reads
+ * might read a partial value.
+ * TODO: One possible solution could be to implement thunk collapsing as
+ * during a short stop the world pause. The collapsible thunks should then
+ * be collected in a queue.
+ */
+#if CHI_ARCH_32BIT
+#  define CHI_MARK_COLLAPSE_ENABLED 0
+#else
+#  define CHI_MARK_COLLAPSE_ENABLED 1
+#endif
+
+/**
+ * Card size used for large arrays
+ */
+#define CHI_CARD_SIZE             32
+
+/**
+ * String builder growth factor in percent
+ */
+#define CHI_STRINGBUILDER_GROWTH  200
 
 /* -------------------- Chunk allocator settings --------------------  */
 
@@ -333,10 +365,9 @@
 #define CHI_POISON_STACK_CANARY      UINT64_C(0xDADAD0D0DADAD0D0)
 #define CHI_POISON_STACK_CANARY_SIZE 0
 
-/*
- * Additional stack debugging settings
+/**
+ * Stack debug walking depth. Set to negative value for unlimited depth.
  */
-
 #define CHI_STACK_DEBUG_WALK       0
 
 /*

@@ -27,16 +27,31 @@ CHI_INTERN CHI_WU Chili chiArrayNewUninitialized(ChiProcessor*, uint32_t, ChiNew
 CHI_INTERN CHI_WU Chili chiBufferNewUninitialized(ChiProcessor*, uint32_t, ChiNewFlags);
 CHI_INTERN CHI_WU Chili chiStringFromBytesFlags(ChiProcessor*, const uint8_t*, uint32_t, ChiNewFlags);
 CHI_INTERN CHI_WU Chili chiNewMajorClean(ChiProcessor*, ChiType, size_t, ChiNewFlags);
+CHI_INTERN CHI_WU Chili chiNewMajorCards(ChiProcessor*, ChiType, size_t, ChiNewFlags);
 CHI_INTERN CHI_WU Chili chiNewMajorDirty(ChiProcessor*, ChiType, size_t, ChiNewFlags);
 
 CHI_INL CHI_WU Chili chiNewInl(ChiProcessor* proc, ChiType type, size_t size, ChiNewFlags flags) {
     CHI_ASSERT(size);
-    if (CHI_LIKELY(!(flags & (CHI_NEW_LOCAL | CHI_NEW_SHARED | CHI_NEW_CLEAN)))) {
+    if (CHI_LIKELY(!(flags & (CHI_NEW_LOCAL | CHI_NEW_SHARED | CHI_NEW_CLEAN | CHI_NEW_CARDS)))) {
         if (CHI_LIKELY(size <= CHI_MAX_UNPINNED))
             return chiWrap(chiBlockAllocNew(&proc->heap.nursery.alloc, size), size, type, CHI_GEN_NURSERY);
         flags |= chiRaw(type) ? (CHI_NEW_SHARED | CHI_NEW_CLEAN) : CHI_NEW_LOCAL;
     }
-    return flags & CHI_NEW_CLEAN ? chiNewMajorClean(proc, type, size, flags) : chiNewMajorDirty(proc, type, size, flags);
+
+    CHI_ASSERT(!(flags & CHI_NEW_CARDS) || (flags & CHI_NEW_LOCAL)); // card table is only needed for local objects
+    CHI_ASSERT(!chiRaw(type) || (flags & CHI_NEW_SHARED)); // raw must be allocated shared
+    CHI_ASSERT(!chiRaw(type) || (flags & CHI_NEW_CLEAN));  // raw must be allocated clean
+    // Stacks must be allocated clean, such that they do not end up wrongly
+    // in the dirty list of the allocating processor.
+    // chiStackDectivate will take care of marking stacks dirty.
+    CHI_ASSERT(type != CHI_STACK || (flags & CHI_NEW_CLEAN));
+
+    return
+        flags & CHI_NEW_CARDS
+        ? chiNewMajorCards(proc, type, size, flags)
+        : flags & CHI_NEW_CLEAN
+        ? chiNewMajorClean(proc, type, size, flags)
+        : chiNewMajorDirty(proc, type, size, flags);
 }
 
 CHI_INL CHI_WU Chili chiNewFromArrayFlags(ChiProcessor* proc, ChiType type,

@@ -2,10 +2,12 @@
 #pragma once
 
 #define CBY_FOREACH_OPCODE(OP) \
+    OP(enter) \
+    OP(limit) \
+    OP(adj) \
     OP(idx) \
     OP(idxl) \
-    OP(fset) \
-    OP(tset) \
+    OP(set) \
     OP(int8) \
     OP(int32) \
     OP(int64) \
@@ -32,6 +34,7 @@
     OP(mov4) \
     OP(movl1) \
     OP(movl2) \
+    OP(choice) \
     OP(thk) \
     OP(thk0) \
     OP(thk1) \
@@ -55,33 +58,35 @@
     OP(case) \
     OP(cont) \
     OP(contl) \
+    OP(ret1) \
+    OP(ret2) \
+    OP(ret3) \
+    OP(ret4) \
     OP(ret) \
-    OP(retl) \
-    OP(retif) \
-    OP(retifn) \
     OP(if) \
     OP(ifl) \
+    OP(ifeq) \
+    OP(ifeql) \
     OP(jmp) \
-    OP(jmp1) \
-    OP(jmp2) \
-    OP(jmp3) \
-    OP(jmp4) \
-    OP(jmp5) \
+    OP(jmpl) \
+    OP(kapp) \
+    OP(kapp1) \
+    OP(kapp2) \
+    OP(kapp3) \
+    OP(kapp4) \
+    OP(kapp5) \
     OP(app) \
-    OP(appn) \
     OP(app1) \
     OP(app2) \
     OP(app3) \
     OP(app4) \
     OP(app5) \
-    OP(limit) \
+    OP(clos0) \
     OP(clos1) \
     OP(clos2) \
     OP(clos3) \
     OP(clos4) \
     OP(clos) \
-    OP(enter) \
-    OP(enterl) \
     OP(ffiget) \
     OP(ffiset) \
     OP(ffitail) \
@@ -117,8 +122,6 @@
     OP(float32Log) \
     OP(float32Log1p) \
     OP(float32Lt) \
-    OP(float32Max) \
-    OP(float32Min) \
     OP(float32Mul) \
     OP(float32Ne) \
     OP(float32Neg) \
@@ -155,8 +158,6 @@
     OP(float64Log) \
     OP(float64Log1p) \
     OP(float64Lt) \
-    OP(float64Max) \
-    OP(float64Min) \
     OP(float64Mul) \
     OP(float64Ne) \
     OP(float64Neg) \
@@ -177,6 +178,7 @@
     OP(float64ToUInt64) \
     OP(float64Trunc) \
     OP(int16ToInt32) \
+    OP(int16ToUInt16) \
     OP(int32Add) \
     OP(int32And) \
     OP(int32Div) \
@@ -228,6 +230,7 @@
     OP(int64ToUInt64) \
     OP(int64Xor) \
     OP(int8ToInt32) \
+    OP(int8ToUInt8) \
     OP(intAdd) \
     OP(intAnd) \
     OP(intCmp) \
@@ -270,6 +273,7 @@
     OP(stringNull) \
     OP(stringSlice) \
     OP(uint16ToUInt32) \
+    OP(uint16ToInt16) \
     OP(uint32Add) \
     OP(uint32And) \
     OP(uint32Div) \
@@ -318,6 +322,7 @@
     OP(uint64ToUInt32) \
     OP(uint64Xor) \
     OP(uint8ToUInt32) \
+    OP(uint8ToInt8) \
     OP(lazyForce) \
     OP(stringBuilderNew) \
     OP(stringBuilderChar) \
@@ -356,7 +361,7 @@ typedef enum { CBY_FOREACH_OPCODE(_CBY_OPCODE_ENUM) } Opcode;
 #undef _CBY_OPCODE_ENUM
 
 enum {
-    OPCODE_COUNT = 348,
+    OPCODE_COUNT = 353,
     OPCODE_MAXLEN = 7,
-    OPCODE_PRIM = 90
+    OPCODE_PRIM = 95
 };

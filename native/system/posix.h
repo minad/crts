@@ -71,14 +71,10 @@ CHI_INL void chiTaskJoin(ChiTask t) {
 CHI_INL void chiTaskClose(ChiTask CHI_UNUSED(t)) {
 }
 
-CHI_INL CHI_WU bool chiTaskEqual(ChiTask a, ChiTask b) {
-    return pthread_equal(CHI_UN(Task, a), CHI_UN(Task, b));
-}
-
 CHI_INL CHI_WU bool chiTaskNull(ChiTask a) {
     ChiTask b;
     CHI_ZERO_STRUCT(&b);
-    return chiTaskEqual(a, b);
+    return pthread_equal(CHI_UN(Task, a), CHI_UN(Task, b));
 }
 
 CHI_INL CHI_WU bool chiFileWrite(ChiFile file, const void* buf, size_t size) {
@@ -161,9 +157,8 @@ CHI_INTERN void chiTimerInstall(ChiTimer*);
 CHI_INTERN void chiTimerRemove(ChiTimer*);
 CHI_INTERN void chiSigInstall(ChiSigHandler*);
 CHI_INTERN void chiSigRemove(ChiSigHandler*);
-CHI_INTERN CHI_WU ChiNanos chiClockMonotonicFine(void);
-CHI_INTERN CHI_WU ChiNanos chiClockMonotonicFast(void);
-CHI_INTERN CHI_WU ChiNanos chiClockCpu(void);
+CHI_INTERN CHI_WU ChiNanos chiClockFine(void);
+CHI_INTERN CHI_WU ChiNanos chiClockFast(void);
 CHI_INTERN CHI_WU ChiNanos chiCondTimedWait(ChiCond*, ChiMutex*, ChiNanos);
 CHI_INTERN CHI_WU ChiTask chiTaskTryCreate(ChiTaskRun, void*);
 CHI_INTERN CHI_WU bool chiFilePerm(const char*, int32_t);

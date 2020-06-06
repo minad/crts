@@ -5,17 +5,17 @@ typedef struct {
 
 typedef struct {
     struct {
-        size_t     lastUsedWords, totalWords;
-        uint64_t   allocWords;
+        size_t     lastUsedSize, totalSize;
+        uint64_t   allocSize;
     } minor;
     struct {
         struct {
-            size_t totalWords;
-            uint64_t allocWords;
+            size_t totalSize;
+            uint64_t allocSize;
         } small, medium, large;
     } major;
     struct {
-        ChiObjectCount totalCopied, totalPromoted;
+        ChiObjectCount totalCopied, totalPromoted, totalDirty;
     } scav;
     size_t stackMaxSize;
 } SpecialStats;
@@ -29,7 +29,6 @@ struct RuntimeStats_ {
     ChiMutex       mutex;
     SpecialStats   special;
     _Atomic(uint32_t) threadCount, threadMaxCount;
-    size_t         maxResidentSize;
     DStats         dstats[DSTATS_COUNT];
     uint64_t       istats[ISTATS_COUNT];
     HistogramDesc  histogramDesc;
@@ -46,12 +45,12 @@ struct WorkerStats_ {
 // From fastapprox by Paul Mineiro
 static float fastlog2(float x) {
     // TODO: Check big endian
-    union { float f; uint32_t i; } vx = { .f = x }, mx = { .i = (vx.i & 0x7FFFFF) | 0x3F000000 };
-    float y = (float)vx.i;
+    union { float f; uint32_t i; } v = { .f = x }, m = { .i = (v.i & 0x7FFFFF) | 0x3F000000 };
+    float y = (float)v.i;
     y *= 1.1920928955078125e-7f;
     return y - 124.22551499f
-        - 1.498030302f * mx.f
-        - 1.72587999f / (.3520887068f + mx.f);
+        - 1.498030302f * m.f
+        - 1.72587999f / (.3520887068f + m.f);
 }
 
 static uint32_t nanosToBin(const HistogramDesc* h, ChiNanos ns) {
@@ -81,30 +80,29 @@ static void specialStatsCollect(RuntimeStats* stats, SpecialStats* s, const Even
             chiCountAdd(s->scav.totalCopied, d->scavenger.raw.copied);
             chiCountAdd(s->scav.totalPromoted, d->scavenger.object.promoted);
             chiCountAdd(s->scav.totalPromoted, d->scavenger.raw.promoted);
+            chiCountAdd(s->scav.totalDirty, d->scavenger.dirty.stack);
+            chiCountAdd(s->scav.totalDirty, d->scavenger.dirty.object);
+            chiCountAdd(s->scav.totalDirty, d->scavenger.dirty.card);
 
-            s->minor.totalWords = CHI_MAX(s->minor.totalWords, d->minorHeapBefore.totalWords);
-            s->minor.totalWords = CHI_MAX(s->minor.totalWords, d->minorHeapAfter.totalWords);
-            if (d->minorHeapBefore.usedWords > s->minor.lastUsedWords)
-                s->minor.allocWords += d->minorHeapBefore.usedWords - s->minor.lastUsedWords;
-            s->minor.lastUsedWords = d->minorHeapAfter.usedWords;
+            CHI_SETMAX(&s->minor.totalSize, d->minorHeapBefore.totalSize);
+            CHI_SETMAX(&s->minor.totalSize, d->minorHeapAfter.totalSize);
+            if (d->minorHeapBefore.usedSize > s->minor.lastUsedSize)
+                s->minor.allocSize += d->minorHeapBefore.usedSize - s->minor.lastUsedSize;
+            s->minor.lastUsedSize = d->minorHeapAfter.usedSize;
             break;
         }
 
     case CHI_EVENT_HEAP_USAGE:
         {
             const ChiHeapUsage* u = &e->payload->HEAP_USAGE;
-            s->major.small.totalWords  = CHI_MAX(s->major.small.totalWords,  u->small.totalWords);
-            s->major.medium.totalWords = CHI_MAX(s->major.medium.totalWords, u->medium.totalWords);
-            s->major.large.totalWords  = CHI_MAX(s->major.large.totalWords,  u->large.totalWords);
-            s->major.small.allocWords = CHI_MAX(s->major.small.allocWords, u->small.allocWords);
-            s->major.medium.allocWords = CHI_MAX(s->major.medium.allocWords, u->medium.allocWords);
-            s->major.large.allocWords = CHI_MAX(s->major.large.allocWords, u->large.allocWords);
+            CHI_SETMAX(&s->major.small.totalSize,  u->small.totalSize);
+            CHI_SETMAX(&s->major.medium.totalSize, u->medium.totalSize);
+            CHI_SETMAX(&s->major.large.totalSize,  u->large.totalSize);
+            CHI_SETMAX(&s->major.small.allocSize, u->small.allocSize);
+            CHI_SETMAX(&s->major.medium.allocSize, u->medium.allocSize);
+            CHI_SETMAX(&s->major.large.allocSize, u->large.allocSize);
             break;
         }
-
-    case CHI_EVENT_SYSTEM_STATS:
-        stats->maxResidentSize = CHI_MAX(stats->maxResidentSize, e->payload->SYSTEM_STATS.residentSize);
-        break;
 
     case CHI_EVENT_THREAD_NEW:
         {
@@ -118,8 +116,8 @@ static void specialStatsCollect(RuntimeStats* stats, SpecialStats* s, const Even
         atomic_fetch_sub_explicit(&stats->threadCount, 1, memory_order_relaxed);
         break;
 
-    case CHI_EVENT_STACK_RESIZE:
-        s->stackMaxSize = CHI_MAX(s->stackMaxSize, e->payload->STACK_RESIZE.newSize);
+    case CHI_EVENT_STACK_GROW:
+        CHI_SETMAX(&s->stackMaxSize, e->payload->STACK_GROW.size);
         break;
 
     default:
@@ -129,17 +127,18 @@ static void specialStatsCollect(RuntimeStats* stats, SpecialStats* s, const Even
 }
 
 static void specialStatsMerge(SpecialStats* stats, const SpecialStats* wstats) {
-    stats->minor.totalWords += wstats->minor.totalWords;
-    stats->minor.allocWords += wstats->minor.allocWords;
-    stats->major.small.totalWords += wstats->major.small.totalWords;
-    stats->major.small.allocWords += wstats->major.small.allocWords;
-    stats->major.medium.totalWords += wstats->major.medium.totalWords;
-    stats->major.medium.allocWords += wstats->major.medium.allocWords;
-    stats->major.large.totalWords += wstats->major.large.totalWords;
-    stats->major.large.allocWords += wstats->major.large.allocWords;
-    stats->stackMaxSize = CHI_MAX(stats->stackMaxSize, wstats->stackMaxSize);
+    CHI_SETMAX(&stats->stackMaxSize, wstats->stackMaxSize);
+    CHI_SETMAX(&stats->minor.totalSize, wstats->minor.totalSize);
+    CHI_SETMAX(&stats->major.small.totalSize, wstats->major.small.totalSize);
+    CHI_SETMAX(&stats->major.medium.totalSize, wstats->major.medium.totalSize);
+    CHI_SETMAX(&stats->major.large.totalSize, wstats->major.large.totalSize);
+    stats->minor.allocSize += wstats->minor.allocSize;
+    stats->major.small.allocSize += wstats->major.small.allocSize;
+    stats->major.medium.allocSize += wstats->major.medium.allocSize;
+    stats->major.large.allocSize += wstats->major.large.allocSize;
     chiCountAdd(stats->scav.totalCopied, wstats->scav.totalCopied);
     chiCountAdd(stats->scav.totalPromoted, wstats->scav.totalPromoted);
+    chiCountAdd(stats->scav.totalDirty, wstats->scav.totalDirty);
 }
 
 static void statsCollect(RuntimeStats* stats, WorkerStats* wstats, const Event* e) {
@@ -203,12 +202,12 @@ static void statsAdd(ChiRuntime* rt, const char* row, const DStats* s) {
     const HistogramDesc* h = &rt->eventState->stats->histogramDesc;
     uint64_t count = dstatsCount(s, h->bins);
     ChiNanos mean = chiNanos(count > 0 ? CHI_UN(Nanos, s->sum) / count : 0);
-    ChiTime delta = chiTimeDelta(rt->timeRef.end, rt->timeRef.start);
+    ChiNanos delta = chiNanosDelta(rt->timeRef.end, rt->timeRef.start);
     if (row)
         chiStatsRow(out, row);
     chiStatsInt(out, "count", count);
-    chiStatsPerSec(out, "rate", chiPerSec(count, delta.real));
-    chiStatsPercent(out, "usage", chiNanosRatio(s->sum, delta.real));
+    chiStatsPerSec(out, "rate", chiPerSec(count, delta));
+    chiStatsPercent(out, "usage", chiNanosRatio(s->sum, delta));
     chiStatsTime(out, "total", s->sum);
     chiStatsTime(out, "max", s->max);
     chiStatsTime(out, "mean", mean);
@@ -222,88 +221,84 @@ static void statsGC(ChiRuntime* rt) {
 
     chiStatsTitle(out, "gc");
 
-    if (opt->gc.major.mode != CHI_GC_NONE) {
+    if (opt->gc.mode != CHI_GC_NONE) {
         chiStatsRow(out, "mark sweep");
 
 #define _CHI_GCMODE(n, s) CHI_STRINGIZE(s),
         static const char* const gcMode[] = { CHI_FOREACH_GCMODE(_CHI_GCMODE,) };
 #undef _CHI_GCMODE
-        chiStatsString(out, "mode", chiStringRef(gcMode[opt->gc.major.mode]));
-        if (CHI_AND(CHI_GC_CONC_ENABLED, opt->gc.major.mode == CHI_GC_CONC))
-            chiStatsInt(out, "workers", CHI_AND(CHI_GC_CONC_ENABLED, opt->gc.major.worker));
+        chiStatsString(out, "mode", chiStringRef(gcMode[opt->gc.mode]));
+        if (CHI_AND(CHI_GC_CONC_ENABLED, opt->gc.mode == CHI_GC_CONC))
+            chiStatsInt(out, "workers", CHI_AND(CHI_GC_CONC_ENABLED, opt->gc.worker));
         statsAdd(rt, 0, s + DSTATS_GC_MARK_PHASE);
-        if (opt->stats.verbose) {
-            statsAdd(rt, "m slice", s + DSTATS_GC_MARK_SLICE);
-            statsAdd(rt, "s slice", s + DSTATS_GC_SWEEP_SLICE);
-        }
+        statsAdd(rt, "m slice", s + DSTATS_GC_MARK_SLICE);
+        statsAdd(rt, "s slice", s + DSTATS_GC_SWEEP_SLICE);
     }
 
     statsAdd(rt, "scavenger", s + DSTATS_GC_SCAVENGER);
+    chiStatsRow(out, "copied");
+    chiStatsBytes(out, "size", CHI_WORDSIZE * special->scav.totalCopied.words);
+    chiStatsInt(out, "objects", special->scav.totalCopied.count);
+    chiStatsBytesPerSec(out, "rate", chiPerSec(CHI_WORDSIZE * special->scav.totalCopied.words, s[DSTATS_GC_SCAVENGER].sum));
 
-    if (opt->stats.verbose) {
-        chiStatsRow(out, "copied");
-        chiStatsWords(out, "size", special->scav.totalCopied.words);
-        chiStatsInt(out, "objects", special->scav.totalCopied.count);
-        chiStatsWordsPerSec(out, "rate", chiPerSec(special->scav.totalCopied.words, s[DSTATS_GC_SCAVENGER].sum));
+    chiStatsRow(out, "promoted");
+    chiStatsBytes(out, "size", CHI_WORDSIZE * special->scav.totalPromoted.words);
+    chiStatsInt(out, "objects", special->scav.totalPromoted.count);
+    chiStatsBytesPerSec(out, "rate", chiPerSec(CHI_WORDSIZE * special->scav.totalPromoted.words, s[DSTATS_GC_SCAVENGER].sum));
 
-        chiStatsRow(out, "promoted");
-        chiStatsWords(out, "size", special->scav.totalPromoted.words);
-        chiStatsInt(out, "objects", special->scav.totalPromoted.count);
-        chiStatsWordsPerSec(out, "rate", chiPerSec(special->scav.totalPromoted.words, s[DSTATS_GC_SCAVENGER].sum));
-    }
+    chiStatsRow(out, "dirty");
+    chiStatsBytes(out, "size", CHI_WORDSIZE * special->scav.totalDirty.words);
+    chiStatsInt(out, "objects", special->scav.totalDirty.count);
+    chiStatsBytesPerSec(out, "rate", chiPerSec(CHI_WORDSIZE * special->scav.totalDirty.words, s[DSTATS_GC_SCAVENGER].sum));
 }
 
-static void statsMem(ChiRuntime* rt) {
+static void statsHeaps(ChiRuntime* rt) {
     const ChiRuntimeOption* opt = &rt->option;
     ChiStats* out = &rt->stats;
     const RuntimeStats* stats = rt->eventState->stats;
     const SpecialStats* special = &stats->special;
-    ChiTime delta = chiTimeDelta(rt->timeRef.end, rt->timeRef.start);
-    uint64_t majorAlloc = special->major.small.allocWords + special->major.medium.allocWords + special->major.large.allocWords;
-    size_t majorSize = special->major.small.totalWords + special->major.medium.totalWords + special->major.large.totalWords;
+    ChiNanos delta = chiNanosDelta(rt->timeRef.end, rt->timeRef.start);
+    uint64_t majorAlloc = special->major.small.allocSize + special->major.medium.allocSize + special->major.large.allocSize;
+    size_t majorSize = special->major.small.totalSize + special->major.medium.totalSize + special->major.large.totalSize;
 
-    chiStatsTitle(out, "memory");
-
-    chiStatsRow(out, "mem usage");
-    chiStatsWords(out, "heaps", majorSize + special->minor.totalWords);
-    chiStatsBytes(out, "resident", stats->maxResidentSize);
+    chiStatsTitle(out, "heaps");
 
     chiStatsRow(out, "major heap");
-    chiStatsWords(out, "size", majorSize);
-    chiStatsWords(out, "alloc", majorAlloc);
-    chiStatsWordsPerSec(out, "rate", chiPerSec(majorAlloc, delta.real));
+    chiStatsBytes(out, "size", majorSize);
+    chiStatsBytes(out, "alloc", majorAlloc);
+    chiStatsBytesPerSec(out, "rate", chiPerSec(majorAlloc, delta));
 
-    if (opt->stats.verbose) {
-        chiStatsRow(out, "small");
-        chiStatsBytes(out, "segment", opt->heap.small.segment);
-        chiStatsBytes(out, "page", opt->heap.small.page);
-        chiStatsWords(out, "size", special->major.small.totalWords);
-        chiStatsWords(out, "alloc", special->major.small.allocWords);
-        chiStatsWordsPerSec(out, "rate", chiPerSec(special->major.small.allocWords, delta.real));
+    chiStatsRow(out, "small");
+    chiStatsBytes(out, "segment", opt->heap.small.segment);
+    chiStatsBytes(out, "page", opt->heap.small.page);
+    chiStatsBytes(out, "size", special->major.small.totalSize);
+    chiStatsBytes(out, "alloc", special->major.small.allocSize);
+    chiStatsBytesPerSec(out, "rate", chiPerSec(special->major.small.allocSize, delta));
 
-        chiStatsRow(out, "medium");
-        chiStatsBytes(out, "segment", opt->heap.medium.segment);
-        chiStatsBytes(out, "page", opt->heap.medium.page);
-        chiStatsWords(out, "size", special->major.medium.totalWords);
-        chiStatsWords(out, "alloc", special->major.medium.allocWords);
-        chiStatsWordsPerSec(out, "rate", chiPerSec(special->major.medium.allocWords, delta.real));
+    chiStatsRow(out, "medium");
+    chiStatsBytes(out, "segment", opt->heap.medium.segment);
+    chiStatsBytes(out, "page", opt->heap.medium.page);
+    chiStatsBytes(out, "size", special->major.medium.totalSize);
+    chiStatsBytes(out, "alloc", special->major.medium.allocSize);
+    chiStatsBytesPerSec(out, "rate", chiPerSec(special->major.medium.allocSize, delta));
 
-        chiStatsRow(out, "large");
-        chiStatsWords(out, "size", special->major.large.totalWords);
-        chiStatsWords(out, "alloc", special->major.large.allocWords);
-        chiStatsWordsPerSec(out, "rate", chiPerSec(special->major.large.allocWords, delta.real));
-    }
+    chiStatsRow(out, "large");
+    chiStatsBytes(out, "size", special->major.large.totalSize);
+    chiStatsBytes(out, "alloc", special->major.large.allocSize);
+    chiStatsBytesPerSec(out, "rate", chiPerSec(special->major.large.allocSize, delta));
 
     chiStatsRow(out, "minor heap");
-    chiStatsWords(out, "size", special->minor.totalWords);
-    chiStatsBytes(out, "block", opt->block.size);
-    chiStatsBytes(out, "nursery", opt->block.size * opt->block.nursery);
-    chiStatsWords(out, "alloc", special->minor.allocWords);
-    chiStatsWordsPerSec(out, "rate", chiPerSec(special->minor.allocWords, delta.real));
+    chiStatsBytes(out, "nursery", opt->nursery.limit);
+    chiStatsBytes(out, "block", opt->nursery.block);
+    chiStatsBytes(out, "chunk", opt->nursery.chunk);
+    chiStatsInt(out, "aging", opt->gc.aging);
+    chiStatsBytes(out, "size", special->minor.totalSize);
+    chiStatsBytes(out, "alloc", special->minor.allocSize);
+    chiStatsBytesPerSec(out, "rate", chiPerSec(special->minor.allocSize, delta));
 }
 
-static void statsBasics(ChiRuntime* rt) {
-    ChiTime delta = chiTimeDelta(rt->timeRef.end, rt->timeRef.start);
+static void statsOverview(ChiRuntime* rt) {
+    ChiNanos delta = chiNanosDelta(rt->timeRef.end, rt->timeRef.start);
     ChiStats* out = &rt->stats;
     RuntimeStats* stats = rt->eventState->stats;
     const DStats* s = stats->dstats;
@@ -312,26 +307,66 @@ static void statsBasics(ChiRuntime* rt) {
     chiStatsTitle(out, "overview");
 
     chiStatsRow(out, "runtime");
-    chiStatsTime(out, "real", delta.real);
-    chiStatsTime(out, "cpu", delta.cpu);
+    chiStatsTime(out, "real", delta);
+
+#if CHI_SYSTEM_HAS_STATS
+    ChiSystemStats ss;
+    chiSystemStats(&ss);
+
+    // ... continue runtime row
+    chiStatsTime(out, "cpu", chiNanosAdd(ss.cpuTimeUser, ss.cpuTimeSystem));
+    chiStatsTime(out, "user", ss.cpuTimeUser);
+    chiStatsTime(out, "system", ss.cpuTimeSystem);
+    chiStatsPercent(out, "usage", chiNanosRatio(chiNanosAdd(ss.cpuTimeUser, ss.cpuTimeSystem), delta));
+
+    chiStatsRow(out, "memory");
+    chiStatsBytes(out, "resident", ss.maxResidentSize);
+    chiStatsInt(out, "pagefault", ss.pageFault);
+
+    chiStatsRow(out, "ctx switch");
+    chiStatsInt(out, "voluntary", ss.voluntaryContextSwitch);
+    chiStatsInt(out, "involuntary", ss.involuntaryContextSwitch);
+#endif
+
+    chiStatsRow(out, "misc");
     chiStatsTime(out, "startup", s[DSTATS_STARTUP].sum);
     chiStatsTime(out, "shutdown", s[DSTATS_SHUTDOWN].sum);
+    chiStatsInt(out, "exception", is[ISTATS_EXCEPTION]);
+    chiStatsInt(out, "module", is[ISTATS_MODULE_INIT]);
+}
+
+static void statsProcessors(ChiRuntime* rt) {
+    ChiStats* out = &rt->stats;
+    RuntimeStats* stats = rt->eventState->stats;
+    const DStats* s = stats->dstats;
+    const uint64_t* is = stats->istats;
+    ChiNanos delta = chiNanosDelta(rt->timeRef.end, rt->timeRef.start);
+
+    chiStatsTitle(out, "processors");
 
     chiStatsRow(out, "processor");
+    chiStatsPercent(out, "load", chiNanosRatio(chiNanosAdd(s[DSTATS_PROC_RUN].sum, s[DSTATS_PROC_SERVICE].sum), delta));
     chiStatsInt(out, "count", is[ISTATS_PROC_INIT]);
     chiStatsInt(out, "stall", is[ISTATS_PROC_STALL]);
-    chiStatsInt(out, "request", is[ISTATS_PROC_REQUEST]);
+    chiStatsInt(out, "requests", is[ISTATS_PROC_REQUEST]);
     chiStatsInt(out, "messages", is[ISTATS_PROC_MSG_SEND]);
-    chiStatsPercent(out, "cpu", chiNanosRatio(delta.cpu, delta.real));
-    chiStatsPercent(out, "load", chiNanosRatio(chiNanosAdd(s[DSTATS_PROC_RUN].sum, s[DSTATS_PROC_SERVICE].sum), delta.real));
-
-    statsAdd(rt, "mutator", s + DSTATS_THREAD_RUN);
-    statsAdd(rt, "scheduler", s + DSTATS_THREAD_SCHED);
     statsAdd(rt, "service", s + DSTATS_PROC_SERVICE);
     statsAdd(rt, "parked", s + DSTATS_PROC_PARK);
+}
 
-    chiStatsRow(out, "threads");
-    chiStatsInt(out, "new", is[ISTATS_THREAD_NEW]);
+static void statsThreads(ChiRuntime* rt) {
+    ChiStats* out = &rt->stats;
+    RuntimeStats* stats = rt->eventState->stats;
+    const DStats* s = stats->dstats;
+    const uint64_t* is = stats->istats;
+
+    chiStatsTitle(out, "threads");
+
+    statsAdd(rt, "slice", s + DSTATS_THREAD_RUN);
+    statsAdd(rt, "scheduler", s + DSTATS_THREAD_SCHED);
+
+    chiStatsRow(out, "thread");
+    chiStatsInt(out, "created", is[ISTATS_THREAD_NEW]);
     chiStatsInt(out, "switch", is[ISTATS_THREAD_SWITCH]);
     chiStatsInt(out, "terminated", is[ISTATS_THREAD_TERMINATED]);
     chiStatsInt(out, "migrated", is[ISTATS_THREAD_MIGRATE]);
@@ -339,14 +374,12 @@ static void statsBasics(ChiRuntime* rt) {
     chiStatsInt(out, "max", atomic_load_explicit(&stats->threadMaxCount, memory_order_relaxed));
 
     chiStatsRow(out, "stack");
-    chiStatsInt(out, "resize", is[ISTATS_STACK_RESIZE]);
-    chiStatsInt(out, "max", CHI_MAX(stats->special.stackMaxSize, rt->option.stack.init));
-
-    chiStatsRow(out, "exception");
-    chiStatsInt(out, "count", is[ISTATS_EXCEPTION]);
-
-    chiStatsRow(out, "module");
-    chiStatsInt(out, "count", is[ISTATS_MODULE_INIT]);
+    chiStatsInt(out, "grow", is[ISTATS_STACK_GROW]);
+    chiStatsInt(out, "shrink", is[ISTATS_STACK_SHRINK]);
+    chiStatsBytes(out, "init", rt->option.stack.init);
+    chiStatsBytes(out, "step", rt->option.stack.step);
+    chiStatsBytes(out, "max", CHI_MAX(stats->special.stackMaxSize, rt->option.stack.init));
+    chiStatsBytes(out, "limit", rt->option.stack.limit);
 }
 
 typedef struct {
@@ -403,7 +436,7 @@ static void statsHistogramTables(ChiRuntime* rt) {
     HistogramColumn scav[] = { { DSTATS_GC_SCAVENGER, "scav" } };
     statsHistogram(rt, "scavenger", CHI_DIM(scav), scav);
 
-    if (rt->option.gc.major.mode != CHI_GC_NONE) {
+    if (rt->option.gc.mode != CHI_GC_NONE) {
         HistogramColumn ms[] = { { DSTATS_GC_MARK_SLICE,  "m slice"  },
                                  { DSTATS_GC_SWEEP_SLICE, "s slice" } };
         statsHistogram(rt, "mark & sweep", CHI_DIM(ms), ms);
@@ -418,10 +451,12 @@ static void statsDestroy(ChiRuntime* rt) {
     if (!stats)
         return;
     const ChiRuntimeOption* opt = &rt->option;
-    statsBasics(rt);
-    statsMem(rt);
+    statsOverview(rt);
+    statsProcessors(rt);
+    statsThreads(rt);
+    statsHeaps(rt);
     statsGC(rt);
-    if (opt->stats.verbose)
+    if (opt->stats.histogram)
         statsHistogramTables(rt);
     chiMutexDestroy(&stats->mutex);
     chiFree(stats);

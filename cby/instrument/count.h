@@ -33,7 +33,8 @@ CHI_INL void countLeave(ChiProcessor* CHI_UNUSED(proc), countData* local, Chili 
 }
 
 CHI_INL void countProcStop(ChiProcessor* CHI_UNUSED(proc), countData* local, countData* global) {
-    CHI_ASSERT(local->enter + local->enterJmp == local->leave);
+    // This assertion does not hold unfortunately due to noreturn ffi calls like chiExit
+    //CHI_ASSERT(local->enter + local->enterJmp == local->leave);
     global->enter    += local->enter;
     global->leave    += local->leave;
     global->enterJmp += local->enterJmp;

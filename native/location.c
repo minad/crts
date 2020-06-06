@@ -38,25 +38,28 @@ void chiLocResolveDefault(ChiLocResolve* resolve, ChiLoc loc, bool mangled) {
     CHI_NOWARN_UNUSED(info);
 
     const char* file = CHI_AND(CHI_LOC_ENABLED, CHI_CHOICE(CHI_CONT_PREFIX, info->loc->file, info->file));
+    ChiStringRef fn;
     if (!file) {
-        chiShowHexUInt(resolve->buf, (uintptr_t)loc.cont);
-        resolve->loc.fn = chiStringRef(resolve->buf);
+        fn.bytes = (uint8_t*)resolve->buf;
+        fn.size = (uint32_t)(chiShowHexUInt(resolve->buf, (uintptr_t)loc.cont) - resolve->buf);
         resolve->loc.file = CHI_EMPTY_STRINGREF;
     } else {
         resolve->loc.line = CHI_AND(CHI_LOC_ENABLED, CHI_CHOICE(CHI_CONT_PREFIX, info->loc->line, info->line));
-        resolve->loc.file = chiStringRef(file);
+        ChiStringRef ext = resolve->loc.file = chiStringRef(file);
 
-        ChiStringRef fn = chiStringRef((const char*)CHI_AND(CHI_LOC_ENABLED, CHI_CHOICE(CHI_CONT_PREFIX, info->loc->name, info->name)));
-        if (!mangled && fn.size <= sizeof (resolve->buf)) {
+        fn = chiStringRef((const char*)CHI_AND(CHI_LOC_ENABLED, CHI_CHOICE(CHI_CONT_PREFIX, info->loc->name, info->name)));
+        if (!mangled
+            && ext.size && ext.bytes[ext.size - 1] != 'c'
+            && fn.size <= sizeof (resolve->buf)) {
             uint32_t n = demangle((uint8_t*)resolve->buf, fn.bytes, fn.size);
             fn.bytes = (uint8_t*)resolve->buf;
             fn.size = n;
         }
-        resolve->loc.fn = fn;
     }
+    resolve->loc.fn = fn;
 }
 
 ChiLoc chiLocateFrameDefault(const Chili* p) {
-    Chili c = chiFrame(p) == CHI_FRAME_RESTORE ? p[1 - chiToUnboxed(p[-1])] : *p;
+    Chili c = chiToCont(*p) == &chiRestoreCont ? p[1 - chiToUnboxed(p[-1])] : *p;
     return (ChiLoc){ .cont = chiToCont(c), .type = CHI_LOC_NATIVE };
 }

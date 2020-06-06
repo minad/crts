@@ -4,7 +4,7 @@
 
 // Clay Turner's fast binary logarithm
 CHI_INL float intLog2(uint64_t x) {
-    uint32_t n = chiLog2(x);
+    uint32_t n = chiLog2Floor(x);
     float y = (float)n, b = .5;
     float z = (float)x / (float)(UINT64_C(1) << n);
     for (uint32_t i = 0; i < 5; ++i) {
@@ -40,7 +40,7 @@ BENCH(intLog2, 1000000) {
 }
 
 BENCH(chiLog2, 1000000) {
-    __volatile__ uint32_t x = chiLog2(BENCHRUN + 1);
+    __volatile__ uint32_t x = chiLog2Floor(BENCHRUN + 1);
     CHI_NOWARN_UNUSED(x);
 }
 
@@ -60,9 +60,9 @@ TEST(log2) {
 
 TEST(chiLog2) {
     for (uint32_t i = 1; i < 63; ++i) {
-        ASSERTEQ(chiLog2(UINT64_C(1) << i), i);
-        ASSERTEQ(chiLog2((UINT64_C(1) << i) + (UINT64_C(1) << i)/2), i);
-        ASSERTEQ(chiLog2RoundUp(UINT64_C(1) << i), i);
-        ASSERTEQ(chiLog2RoundUp((UINT64_C(1) << i) + (UINT64_C(1) << i)/2), i + 1);
+        ASSERTEQ(chiLog2Floor(UINT64_C(1) << i), i);
+        ASSERTEQ(chiLog2Floor((UINT64_C(1) << i) + (UINT64_C(1) << i)/2), i);
+        ASSERTEQ(chiLog2Ceil(UINT64_C(1) << i), i);
+        ASSERTEQ(chiLog2Ceil((UINT64_C(1) << i) + (UINT64_C(1) << i)/2), i + 1);
     }
 }

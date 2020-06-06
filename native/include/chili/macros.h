@@ -157,9 +157,19 @@
     })
 #define CHI_CAST(x, t) _CHI_CAST(CHI_GENSYM, CHI_GENSYM, (x), t)
 
+#define _CHI_ALIGN_CAST(v, x, t)                                        \
+    ({                                                                  \
+        const uint8_t* v = (x);                                         \
+        CHI_ASSERT(((uintptr_t)v) % _Alignof(typeof(*v)) == 0);         \
+        (t)(uintptr_t)v;                                                \
+    })
+#define CHI_ALIGN_CAST(x, t) _CHI_ALIGN_CAST(CHI_GENSYM, (x), t)
+
 #define _CHI_MM(v,w,x,y,o)    ({ typeof(x) v = (x), w = (y); v o w ? v : w; })
 #define CHI_MIN(x, y)         _CHI_MM(CHI_GENSYM, CHI_GENSYM, x, y, <)
 #define CHI_MAX(x, y)         _CHI_MM(CHI_GENSYM, CHI_GENSYM, x, y, >)
+#define CHI_SETMAX(x, y)      ({ *(x) = CHI_MAX(*(x), (y)); ({}); })
+#define CHI_SETMIN(x, y)      ({ *(x) = CHI_MIN(*(x), (y)); ({}); })
 #define CHI_CLAMP(x, a, b)    CHI_MAX(CHI_MIN(x, b), a)
 
 /**

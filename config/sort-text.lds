@@ -9,4 +9,4 @@
  * If this linker script does not work, you can use the default linker
  * script from `ld --verbose` and copy the `KEEP(...)` inside the .text section.
  */
-SECTIONS { .text : { KEEP(*(SORT(.text$*))) } } INSERT BEFORE .fini;
+SECTIONS { .text.chili : { KEEP(*(SORT(.text$*))) } } INSERT AFTER .text;

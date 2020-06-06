@@ -5,15 +5,16 @@
 #include <zlib.h>
 #include "native/endian.h"
 #include "native/mem.h"
+#include "native/strutil.h"
 
 #define HT_NOSTRUCT
-#define HT_HASH        ZipFileHash
-#define HT_ENTRY       ZipFile
-#define HT_PREFIX      fileHash
-#define HT_KEY(e)      chiStringRef(e->name)
-#define HT_EXISTS(e)   e->name
-#define HT_KEYEQ(a, b) chiStringRefEq(a, b)
-#define HT_HASHFN      chiHashStringRef
+#define HT_HASH    ZipFileHash
+#define HT_ENTRY   ZipFile
+#define HT_PREFIX  fileHash
+#define HT_KEY(e)  e->name
+#define HT_KEYEQ   streq
+#define HT_KEYTYPE const char*
+#define HT_HASHFN  chiHashCString
 #include "native/generic/hashtable.h"
 
 /* General purpose bits:
@@ -150,7 +151,7 @@ static ZipResult parseFileRecord(Zip* z, const uint8_t** pp, const uint8_t* end)
     memcpy(name, p, nameSize);
 
     ZipFile* f;
-    if (!fileHashCreate(&z->hash, chiStringRef(name), &f)) {
+    if (!fileHashCreate(&z->hash, name, &f)) {
         chiFree(name);
         return ZIP_ERROR_DUPLICATE;
     }
@@ -208,7 +209,7 @@ void zipClose(Zip* z) {
     chiFree(z);
 }
 
-ZipFile* zipFind(Zip* z, ChiStringRef name) {
+ZipFile* zipFind(Zip* z, const char* name) {
     return fileHashFind(&z->hash, name);
 }
 

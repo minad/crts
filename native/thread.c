@@ -4,14 +4,13 @@
 #include "stack.h"
 
 typedef enum {
-    TS_ERRNO = 1,
-    TS_INTERRUPTIBLE = 3,
-    TS_NAME = 5,
-    TS_TID = 8,
+    TS_INTERRUPTIBLE = 2,
+    TS_NAME = 4,
+    TS_TID = 7,
 } ThreadState;
 
 static void threadSet(Chili thread, ThreadState ts, Chili val) {
-    CHI_ASSERT(chiUnboxed(val));
+    CHI_ASSERT(!chiRef(val));
     Chili c = chiThreadState(thread);
     // No chiFieldWrite barrier needed, since only unboxed values are written!
     if (chiTrue(c))
@@ -26,7 +25,8 @@ static Chili threadGet(Chili thread, ThreadState ts, Chili dfl) {
 Chili chiThreadNewUninitialized(ChiProcessor* proc) {
     Chili c = chiNewInl(proc, CHI_THREAD, CHI_SIZEOF_WORDS (ChiThread), CHI_NEW_SHARED | CHI_NEW_CLEAN);
     ChiThread* t = chiToThread(c);
-    chiFieldInit(&t->stack, chiStackNew(proc));
+    t->stackSize = proc->rt->option.stack.init / CHI_WORDSIZE;
+    chiFieldInit(&t->stack, chiStackNew(proc, t->stackSize));
     chiFieldInit(&t->state, CHI_FALSE);
     return c;
 }
@@ -37,10 +37,6 @@ Chili chiThreadName(Chili thread) {
 
 bool chiThreadInterruptible(Chili thread) {
     return chiToBool(threadGet(thread, TS_INTERRUPTIBLE, CHI_FALSE));
-}
-
-void chiThreadSetErrno(ChiProcessor* proc, int32_t e) {
-    threadSet(proc->thread, TS_ERRNO, chiFromInt32(e));
 }
 
 void chiThreadSetInterruptible(ChiProcessor* proc, bool b) {
@@ -66,8 +62,8 @@ Chili chiThreadNew(Chili state, Chili run) {
     // Promote closure to shared space. This isolates the thread!
     ChiPromoteState ps;
     chiPromoteSharedBegin(&ps, proc);
-    chiPromoteSharedObject(&ps, &state);
-    chiPromoteSharedObject(&ps, &run);
+    chiPromoteSharedAdd(&ps, &state);
+    chiPromoteSharedAdd(&ps, &run);
     chiPromoteSharedEnd(&ps);
 
     Chili c = chiThreadNewUninitialized(proc);

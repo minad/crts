@@ -3,6 +3,7 @@
 #include <sys/resource.h>
 #include <time.h>
 #include "../strutil.h"
+#include "../num.h"
 #include "interrupt.h"
 
 #if defined(__FreeBSD__) || defined(__OpenBSD__)
@@ -11,6 +12,7 @@
 #elif defined(__MACH__)
 #  define pthread_setname_np(t, n) pthread_setname_np(n)
 #elif defined (__linux__)
+#  include <sched.h>
 #  include <sys/syscall.h>
 #  define pthread_main_np() (getpid() == syscall(SYS_gettid))
 #endif
@@ -48,7 +50,7 @@ static ChiNanos timevalToNanos(struct timeval tv) {
 
 static ChiSig convertPosixSig(int sig) {
     switch (sig) {
-    case SIGQUIT: return CHI_SIG_DUMPSTACK;
+    case SIGQUIT: return CHI_SIG_DUMP;
     case SIGINT:  return CHI_SIG_USERINTERRUPT;
     default:      CHI_BUG("Wrong signal");
     }
@@ -116,16 +118,12 @@ static ChiNanos getClock(clockid_t clock) {
     return timespecToNanos(ts);
 }
 
-ChiNanos chiClockMonotonicFine(void) {
+ChiNanos chiClockFine(void) {
     return getClock(CLOCK_MONOTONIC);
 }
 
-ChiNanos chiClockMonotonicFast(void) {
+ChiNanos chiClockFast(void) {
     return getClock(CHI_CLOCK_MONOTONIC_FAST);
-}
-
-ChiNanos chiClockCpu(void) {
-    return getClock(CLOCK_PROCESS_CPUTIME_ID);
 }
 
 ChiNanos chiCondTimedWait(ChiCond* c, ChiMutex* m, ChiNanos ns) {
@@ -254,12 +252,31 @@ void chiVirtFree(void* p, size_t s) {
 }
 
 uint32_t chiPhysProcessors(void) {
+#ifdef __linux__
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    if (sched_getaffinity(0, sizeof(set), &set) < 0)
+        chiSysErr("sched_getaffinity");
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < CPU_SETSIZE; ++i) {
+            if (CPU_ISSET(i, &set))
+                ++n;
+    }
+    return n;
+#else
     return (uint32_t)sysconf_err(_SC_NPROCESSORS_ONLN);
+#endif
+}
+
+static size_t pageSize(void) {
+    static size_t pageSize = 0;
+    if (!pageSize)
+        pageSize = (size_t)sysconf_err(_SC_PAGESIZE);
+    return pageSize;
 }
 
 uint64_t chiPhysMemory(void) {
-    return ((uint64_t)sysconf_err(_SC_PHYS_PAGES) *
-            (uint64_t)sysconf_err(_SC_PAGESIZE)) / CHI_MiB(1) * CHI_MiB(1);
+    return CHI_FLOOR((uint64_t)sysconf_err(_SC_PHYS_PAGES) * pageSize(), CHI_MiB(1));
 }
 
 bool chiFilePerm(const char* file, int32_t perm) {
@@ -271,15 +288,38 @@ bool chiFilePerm(const char* file, int32_t perm) {
     return !access(file, flags);
 }
 
+static size_t getCurrentRSS(void) {
+#ifdef __linux__
+    int fd = open("/proc/self/statm", O_RDONLY);
+    if (fd < 0)
+        return 0;
+    char buf[64];
+    ssize_t n = read(fd, buf, sizeof (buf) - 1);
+    close(fd);
+    buf[CHI_MAX(n, 0)] = 0;
+    const char* p = strchr(buf, ' ');
+    if (!p)
+        return 0;
+    ++p;
+    uint64_t rss;
+    return chiReadUInt64(&rss, &p) ? (size_t)(rss * pageSize()) : 0;
+#endif
+    return 0;
+}
+
 void chiSystemStats(ChiSystemStats* a) {
     struct rusage r;
     if (getrusage(RUSAGE_SELF, &r) < 0)
         chiSysErr("getrusage");
     a->cpuTimeUser = timevalToNanos(r.ru_utime);
     a->cpuTimeSystem = timevalToNanos(r.ru_stime);
-    a->residentSize = (size_t)r.ru_maxrss * 1024; // TODO: Current RSS!
     a->pageFault = (uint64_t)r.ru_minflt;
-    a->contextSwitch = (uint64_t)r.ru_nivcsw;
+    a->involuntaryContextSwitch = (uint64_t)r.ru_nivcsw;
+    a->voluntaryContextSwitch = (uint64_t)r.ru_nvcsw;
+    a->maxResidentSize = (size_t)r.ru_maxrss * 1024;
+    a->currResidentSize = getCurrentRSS();
+    if (!a->currResidentSize)
+        a->currResidentSize = a->maxResidentSize; // Fallback
 }
 
 void chiPager(void) {

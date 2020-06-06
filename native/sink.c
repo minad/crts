@@ -460,7 +460,7 @@ void chiSinkWarnv(ChiSink* sink, const char* fmt, va_list ap) {
     chiSinkMemInit(&s, buf, sizeof (buf));
     chiSinkPuts(&s.base, "Error: ");
     chiSinkFmtv(&s.base, fmt, ap);
-    s.used = CHI_MIN(s.capacity - 1, s.used);
+    CHI_SETMIN(&s.used, s.capacity - 1);
     chiSinkPutc(&s.base, '\n');
     chiSinkWrite(sink, s.buf, s.used);
 }

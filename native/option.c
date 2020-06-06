@@ -7,31 +7,22 @@
 
 #if CHI_OPTION_ENABLED
 
-void chiOptionHelp(const ChiOptionParser* parser) {
+void chiOptionHelp(ChiOptionParser* parser) {
     int max = 0;
-    for (const ChiOptionList* p = parser->list; p->desc; ++p) {
-        for (const ChiOption* opt = p->desc; opt->type; ++opt) {
-            if (opt->type != CHI_OPTTYPE_TITLE)
-                max = CHI_MAX(max,
-                              (int)strlen(opt->name) +
-                              (opt->type == CHI_OPTTYPE_FLAG ? 0 : 2));
-        }
+    for (ChiOptionAssoc* assoc = parser->assocs; assoc->group; ++assoc) {
+        for (ChiOption* opt = assoc->group->options; opt < assoc->group->options + assoc->group->count; ++opt)
+            CHI_SETMAX(&max, (int)strlen(opt->name) + (opt->type == CHI_OPTTYPE_FLAG ? 0 : 2));
     }
 
-    for (const ChiOptionList* p = parser->list; p->desc; ++p) {
-        for (const ChiOption* opt = p->desc; opt->type; ++opt) {
-            int n = 0;
+    for (ChiOptionAssoc* assoc = parser->assocs; assoc->group; ++assoc) {
+        chiSinkFmt(parser->help, "%s"TitleBegin"%s OPTIONS"TitleEnd"\n",
+                   assoc != parser->assocs ? "\n" : "", assoc->group->title);
+        for (ChiOption* opt = assoc->group->options; opt < assoc->group->options + assoc->group->count; ++opt) {
             char cbField[8] = { 0 };
-            void* field = opt->cb ? cbField : (char*)p->target + opt->field;
-            if (opt->type != CHI_OPTTYPE_TITLE)
-                n = (int)strlen(opt->name) + 2;
+            void* field = opt->cb ? cbField : (char*)assoc->target + opt->field;
+            int n = (int)strlen(opt->name) + 2;
             const char* desc = opt->name + strlen(opt->name) + 1;
             switch (opt->type) {
-            case CHI_OPTTYPE_END: CHI_BUG("End reached");
-            case CHI_OPTTYPE_TITLE:
-                chiSinkFmt(parser->help, "%s"TitleBegin"%s OPTIONS"TitleEnd"\n",
-                           opt != p->desc || p != parser->list ? "\n" : "", opt->name);
-                break;
             case CHI_OPTTYPE_FLAG:
                 n -= 2;
                 chiSinkFmt(parser->help, "  -R%s%*w %s\n", opt->name, max - n, desc);
@@ -66,7 +57,7 @@ void chiOptionHelp(const ChiOptionParser* parser) {
 }
 
 CHI_FMT(2, 3)
-static CHI_WU ChiOptionResult error(const ChiOptionParser* parser, const char* fmt, ...) {
+static CHI_WU ChiOptionResult error(ChiOptionParser* parser, const char* fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
     chiSinkFmtv(parser->usage, fmt, ap);
@@ -75,11 +66,11 @@ static CHI_WU ChiOptionResult error(const ChiOptionParser* parser, const char* f
     return CHI_OPTRESULT_ERROR;
 }
 
-static CHI_WU ChiOptionResult invalidArg(const ChiOptionParser* parser, const char* arg) {
+static CHI_WU ChiOptionResult invalidArg(ChiOptionParser* parser, const char* arg) {
     return error(parser, "Invalid argument '%s'.", arg);
 }
 
-static CHI_WU ChiOptionResult parseInt(const ChiOptionParser* parser, const char* arg, const char* val,
+static CHI_WU ChiOptionResult parseInt(ChiOptionParser* parser, const char* arg, const char* val,
                                        uint64_t min, uint64_t max, uint64_t* res) {
     const char* end = val;
     uint64_t ival;
@@ -91,7 +82,7 @@ static CHI_WU ChiOptionResult parseInt(const ChiOptionParser* parser, const char
     return CHI_OPTRESULT_OK;
 }
 
-static CHI_WU ChiOptionResult parseChoice(const ChiOptionParser* parser, const char* arg,
+static CHI_WU ChiOptionResult parseChoice(ChiOptionParser* parser, const char* arg,
                                           const char* val, const char* choices, uint32_t* res) {
     const char* c = choices;
     for (uint32_t i = 0; ; ++i) {
@@ -107,7 +98,7 @@ static CHI_WU ChiOptionResult parseChoice(const ChiOptionParser* parser, const c
     }
 }
 
-static CHI_WU ChiOptionResult parseSize(const ChiOptionParser* parser, const char* arg, const char* val,
+static CHI_WU ChiOptionResult parseSize(ChiOptionParser* parser, const char* arg, const char* val,
                                         size_t min, size_t max, size_t* res) {
     const char* end = val;
     size_t factor = 1;
@@ -131,27 +122,24 @@ static CHI_WU ChiOptionResult parseSize(const ChiOptionParser* parser, const cha
     return CHI_OPTRESULT_OK;
 }
 
-static CHI_WU ChiOptionResult parseOption(const ChiOptionParser* parser, const char* arg) {
-    const char *val = strchr(arg, '=');
-    size_t nameSize;
-    if (val) {
-        nameSize = (size_t)(val - arg);
-        ++val;
+static CHI_WU ChiOptionResult parseOption(ChiOptionParser* parser, const char* arg) {
+    const char *end = strchrnul(arg, '='), *val = 0;
+    size_t nameSize = (size_t)(end - arg);
+    if (*end == '=') {
+        val = end + 1;
         if (!*val)
             return error(parser, "Invalid empty argument '%s'.", arg);
-    } else {
-        nameSize = strlen(arg);
     }
 
     if (!val && memeqstr(arg, nameSize, "help"))
         return CHI_OPTRESULT_HELP;
 
-    for (const ChiOptionList* p = parser->list; p->desc; ++p) {
-        for (const ChiOption* opt = p->desc; opt->type; ++opt) {
-            if (opt->type == CHI_OPTTYPE_TITLE || !memeqstr(arg, nameSize, opt->name))
+    for (ChiOptionAssoc* assoc = parser->assocs; assoc->group; ++assoc) {
+        for (ChiOption* opt = assoc->group->options; opt < assoc->group->options + assoc->group->count; ++opt) {
+            if (!memeqstr(arg, nameSize, opt->name))
                 continue;
             char cbField[8] = { 0 };
-            void* field = opt->cb ? cbField : (char*)p->target + opt->field;
+            void* field = opt->cb ? cbField : (char*)assoc->target + opt->field;
             if (!val) {
                 if (opt->type == CHI_OPTTYPE_FLAG)
                     *((bool*)field) = true;
@@ -159,9 +147,6 @@ static CHI_WU ChiOptionResult parseOption(const ChiOptionParser* parser, const c
                     return error(parser, "Argument '%s' requires a value.", arg);
             } else {
                 switch (opt->type) {
-                case CHI_OPTTYPE_END: CHI_BUG("End reached");
-                case CHI_OPTTYPE_TITLE:
-                    continue;
                 case CHI_OPTTYPE_FLAG:
                     if (streq(val, "t"))
                         *((bool*)field) = true;
@@ -219,14 +204,14 @@ static CHI_WU ChiOptionResult parseOption(const ChiOptionParser* parser, const c
                     break;
                 }
             }
-            return opt->cb ? opt->cbFn(parser, p, opt, opt->type == CHI_OPTTYPE_STRING ? val : cbField) : CHI_OPTRESULT_OK;
+            return opt->cb ? opt->cbFn(parser, assoc, opt, opt->type == CHI_OPTTYPE_STRING ? val : cbField) : CHI_OPTRESULT_OK;
         }
     }
 
     return error(parser, "Invalid runtime option '%s'.", arg);
 }
 
-ChiOptionResult chiOptionArgs(const ChiOptionParser* parser, int* argc, char** argv) {
+ChiOptionResult chiOptionArgs(ChiOptionParser* parser, int* argc, char** argv) {
     int n = 0;
     for (int i = 0; i < *argc; ++i) {
         if (argv[i][0] == '-' && argv[i][1] == 'R') {
@@ -242,7 +227,7 @@ ChiOptionResult chiOptionArgs(const ChiOptionParser* parser, int* argc, char** a
     return CHI_OPTRESULT_OK;
 }
 
-ChiOptionResult chiOptionEnv(const ChiOptionParser* parser, const char* var) {
+ChiOptionResult chiOptionEnv(ChiOptionParser* parser, const char* var) {
     CHI_AUTO_FREE(val, chiGetEnv(var));
     if (!val)
         return CHI_OPTRESULT_OK;

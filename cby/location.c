@@ -19,7 +19,7 @@ void cbyReadFnLocation(Chili fn, ChiLocInfo* loc) {
 }
 
 ChiLoc chiLocateFrame(const Chili* p) {
-    return chiFrame(p) == CHI_FRAME_INTERP
+    return chiFrameInfo(p)->interp
         ? (ChiLoc){ .type = CHI_LOC_INTERP, .id = chiToIP(chiToCbyFn(p[-3])->ip) }
         : chiLocateFrameDefault(p);
 }

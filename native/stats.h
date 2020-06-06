@@ -68,13 +68,5 @@ CHI_INL void chiStatsPerSec(ChiStats* s, const char* n, double v) {
     chiStatsFloatUnit(s, n, v, false, "/s");
 }
 
-CHI_INL void chiStatsWordsPerSec(ChiStats* s, const char* n, double v) {
-    chiStatsBytesPerSec(s, n, CHI_WORDSIZE * v);
-}
-
-CHI_INL void chiStatsWords(ChiStats* s, const char* n, uint64_t v) {
-    chiStatsBytes(s, n, CHI_WORDSIZE * v);
-}
-
 #define chiStatsTable(stats, ...)                                       \
     (chiStatsAddTable((stats), &(ChiStatsTable){ __VA_ARGS__ }))

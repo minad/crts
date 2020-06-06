@@ -18,11 +18,8 @@ CHI_INL void _countcyclesDestroy(CbyInterpreter* interp, countcyclesData* data) 
 
 #define countcyclesDestroy _countcyclesDestroy
 
-#ifdef __clang__
 // we use switch since this leads to smaller code being generated
 #define INTERP_DISPATCH    switch
-#endif
-
 #define INSTRUMENT_NAME    countcycles
 #define INTERP_NAME        cycles
 #include "interpreter.h"

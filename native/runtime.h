@@ -5,31 +5,23 @@
 #include "stats.h"
 
 /**
- * Entry points into the Chili runtime.
- * The entry points are Chili closures.
- */
-typedef struct {
-    Chili start;
-    Chili unhandled;
-    Chili blackhole;
-    Chili timerInterrupt;
-    Chili userInterrupt;
-} ChiEntryPoint;
-
-/**
  * Runtime hooks
  * Hooks with even id are executed in reverse order.
  */
 typedef enum {
     CHI_HOOK_PROC_START      = 0,
     CHI_HOOK_PROC_STOP       = 1, // reverse
-    CHI_HOOK_PROC            = CHI_HOOK_PROC_STOP,
     CHI_HOOK_WORKER_START    = 2,
     CHI_HOOK_WORKER_STOP     = 3, // reverse
     CHI_HOOK_COUNT           = 4,
 } ChiHookType;
 
-typedef void (*ChiHookFn)(ChiHookType, void*);
+#define ChiHookFn(t)                typeof ((void (*)(ChiHookType, t*))0)
+#define chiHookProc(rt, t, fn)      ({ ChiHookFn(ChiProcessor) f = (fn); _chiHook((rt), CHI_HOOK_PROC_##t, (ChiHookFn(void))f); })
+#define chiHookWorker(rt, t, fn)    ({ ChiHookFn(ChiWorker) f = (fn); _chiHook((rt), CHI_HOOK_WORKER_##t, (ChiHookFn(void))f); })
+#define chiHookProcRun(proc, t)     ({ ChiProcessor* p = (proc); _chiHookRun(p->rt, CHI_HOOK_PROC_##t, p); })
+#define chiHookWorkerRun(worker, t) ({ ChiWorker* w = (worker); _chiHookRun(w->rt, CHI_HOOK_WORKER_##t, w); })
+
 typedef struct ChiEventState_ ChiEventState;
 typedef struct ChiProfiler_ ChiProfiler;
 typedef struct ChiModuleEntry_ ChiModuleEntry;
@@ -43,7 +35,7 @@ typedef struct {
 } ChiModuleHash;
 
 typedef struct {
-    ChiHookFn   fn;
+    ChiHookFn(void) fn;
     ChiHookType type;
 } ChiHook;
 
@@ -70,7 +62,7 @@ typedef void (*ChiExitHandler)(int);
  */
 typedef struct ChiRuntime_ {
     struct {
-        ChiTime          start, end;
+        ChiNanos         start, end;
     } timeRef;
     struct {
         ChiMutex         mutex;
@@ -84,9 +76,10 @@ typedef struct ChiRuntime_ {
     CHI_IF(CHI_STATS_ENABLED, ChiStats stats;)
     ChiHookVec           hooks[CHI_HOOK_COUNT];
     ChiGC                gc;
-    ChiEntryPoint        entryPoint;
+    Chili                entryPoints, fail;
     ChiHeap              heap;
-    _Atomic(size_t)      totalHeapChunkSize;
+    _Atomic(size_t)      heapTotalSize;
+    size_t               heapOverflowLimit;
     ChiModuleHash        moduleHash;
     ChiRuntimeOption     option;
     char**               argv;
@@ -96,19 +89,26 @@ typedef struct ChiRuntime_ {
     ChiTrigger           heapOverflow;
 } ChiRuntime;
 
-CHI_INTERN_CONT_DECL(chiEntryPointUnhandledDefault)
-CHI_INTERN_CONT_DECL(chiIdentity)
+// AsyncException tags. Must be ordered alphabetically.
+typedef enum {
+    CHI_HEAP_OVERFLOW,
+    CHI_STACK_OVERFLOW,
+    CHI_THREAD_INTERRUPT,
+    CHI_USER_INTERRUPT,
+} ChiAsyncException;
+
+CHI_INTERN_CONT_DECL(chiYield)
 CHI_INTERN_CONT_DECL(chiJumpCont)
 CHI_INTERN_CONT_DECL(chiRestoreCont)
 CHI_INTERN_CONT_DECL(chiRunMainCont)
 CHI_INTERN_CONT_DECL(chiSetupEntryPointsCont)
-CHI_INTERN_CONT_DECL(chiShowAsyncException)
 CHI_INTERN_CONT_DECL(chiStartupEndCont)
-CHI_INTERN_CONT_DECL(chiThunkBlackhole)
 CHI_INTERN_CONT_DECL(chiThunkForward)
+CHI_INTERN_CONT_DECL(chiThrowRuntimeException)
+CHI_INTERN_CONT_DECL(chiExceptionCatchCont)
 
-CHI_INTERN void chiHook(ChiRuntime*, ChiHookType, ChiHookFn);
-CHI_INTERN void chiHookRun(ChiHookType, void*);
+CHI_INTERN void _chiHook(ChiRuntime*, ChiHookType, ChiHookFn(void));
+CHI_INTERN void _chiHookRun(ChiRuntime*, ChiHookType, void*);
 CHI_INTERN _Noreturn void chiRuntimeMain(ChiRuntime*, int, char**, ChiExitHandler);
 CHI_INTERN _Noreturn void chiRuntimeEnter(ChiRuntime*, int, char**);
 CHI_INTERN void chiRuntimeInit(ChiRuntime*, ChiExitHandler);

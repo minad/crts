@@ -88,6 +88,33 @@ BENCH(SinkPutc, 1000000) {
 TEST(chiFmt) {
     char buf[256];
 
+    chiFmt(buf, sizeof (buf), "%f", 0.01245);
+    ASSERT(streq(buf, "0.012450"));
+
+    chiFmt(buf, sizeof (buf), "%f", 1e45);
+    ASSERT(streq(buf, "1.000000e45"));
+
+    chiFmt(buf, sizeof (buf), "%f", 1.987654e76);
+    ASSERT(streq(buf, "1.987654e76"));
+
+    chiFmt(buf, sizeof (buf), "%e", 1.987654e-9);
+    ASSERT(streq(buf, "1.987654e-9"));
+
+    chiFmt(buf, sizeof (buf), "%f", 1.987654e-9);
+    ASSERT(streq(buf, "0.000000"));
+
+    chiFmt(buf, sizeof (buf), "%f", 1.987654e-3);
+    ASSERT(streq(buf, "0.001988"));
+
+    chiFmt(buf, sizeof (buf), "%.2f", 123.456);
+    ASSERT(streq(buf, "123.46"));
+
+    chiFmt(buf, sizeof (buf), "%f", 123.456);
+    ASSERT(streq(buf, "123.456000"));
+
+    chiFmt(buf, sizeof (buf), "%.*f", 4, 123.456);
+    ASSERT(streq(buf, "123.4560"));
+
     chiFmt(buf, sizeof (buf), "%d", 123);
     ASSERT(streq(buf, "123"));
 

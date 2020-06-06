@@ -1,8 +1,8 @@
 #pragma once
 
 #include "blockalloc.h"
-#include "blockvec.h"
 #include "heap.h"
+#include "objvec.h"
 
 typedef struct {
     Chili from, to;
@@ -11,6 +11,16 @@ typedef struct {
 #define VEC_TYPE   ChiPromoted
 #define VEC_PREFIX chiPromotedVec
 #define VEC        ChiPromotedVec
+#include "generic/blockvec.h"
+
+typedef struct {
+    Chili obj;
+    size_t idx;
+} ChiCard;
+
+#define VEC_TYPE   ChiCard
+#define VEC_PREFIX chiCardVec
+#define VEC        ChiCardVec
 #include "generic/blockvec.h"
 
 /**
@@ -63,15 +73,19 @@ typedef struct {
 typedef struct {
     ChiBlockManager     manager;
     struct {
-        ChiPromotedVec  vec;
+        ChiPromotedVec  objects;
         CHI_IF(CHI_COUNT_ENABLED, ChiPromoteStats stats;)
     } promoted;
     struct {
         ChiBlockAlloc   alloc;
         ChiBlock*       bump;
+        size_t          limit;
     } nursery;
     ChiBlockAlloc       agedAlloc;
-    ChiBlockVec         majorDirty;
+    struct {
+        ChiObjVec       objects;
+        ChiCardVec      cards;
+    } dirty;
 } ChiLocalHeap;
 
 typedef struct ChiRuntime_ ChiRuntime;

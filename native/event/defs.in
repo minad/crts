@@ -20,21 +20,23 @@ typedef struct {
 typedef struct {
     ChiNanos cpuTimeUser;
     ChiNanos cpuTimeSystem;
-    size_t   residentSize;
+    size_t   maxResidentSize;
+    size_t   currResidentSize;
     uint64_t pageFault;
-    uint64_t contextSwitch;
+    uint64_t voluntaryContextSwitch;
+    uint64_t involuntaryContextSwitch;
 } ChiSystemStats;
 
 typedef struct {
-    uint64_t allocWords;
-    size_t   totalWords;
+    uint64_t allocSize;
+    size_t   totalSize;
 } ChiHeapClassUsage;
 
 typedef struct {
     ChiHeapClassUsage small;
     ChiHeapClassUsage medium;
     ChiHeapClassUsage large;
-    size_t            totalChunkWords;
+    size_t            totalSize;
 } ChiHeapUsage;
 
 typedef struct {
@@ -59,13 +61,14 @@ typedef struct {
 } ChiScavengerRawCount;
 
 typedef struct {
-    ChiObjectCount major;
-    ChiObjectCount stacks;
+    ChiObjectCount object;
+    ChiObjectCount stack;
+    ChiObjectCount card;
 } ChiScavengerDirtyCount;
 
 typedef struct {
-    size_t usedWords;
-    size_t totalWords;
+    size_t usedSize;
+    size_t totalSize;
 } ChiMinorHeapUsage;
 
 typedef struct {
@@ -102,12 +105,10 @@ typedef struct {
 } ChiScanStats;
 
 typedef struct {
-    uintptr_t oldStack;
-    uintptr_t newStack;
-    size_t reqSize;
-    size_t oldSize;
-    size_t newSize;
-    size_t usedSize;
+    uintptr_t stack;
+    size_t size;
+    size_t step;
+    size_t copied;
 } ChiEventStackSize;
 
 typedef struct {
@@ -117,8 +118,7 @@ typedef struct {
 
 typedef struct {
     uintptr_t stack;
-    bool scanned;
-} ChiEventStackActive;
+} ChiEventStack;
 
 typedef struct {
     ChiStringRef name;
@@ -127,17 +127,17 @@ typedef struct {
 typedef struct {
     ChiStringRef name;
     ChiStringRef trace;
-    bool         handled;
 } ChiEventException;
 
 typedef enum {
     CHI_REQUEST_EXIT,
-    CHI_REQUEST_TICK,
-    CHI_REQUEST_DUMPSTACK,
+    CHI_REQUEST_DUMP,
+    CHI_REQUEST_NOTIFYINTERRUPT,
+    CHI_REQUEST_TIMERINTERRUPT,
     CHI_REQUEST_USERINTERRUPT,
     CHI_REQUEST_HANDSHAKE,
     CHI_REQUEST_SCAVENGE,
-    CHI_REQUEST_MIGRATE,
+    CHI_REQUEST_PROMOTE,
 } ChiProcessorRequest;
 
 typedef struct {
@@ -196,7 +196,7 @@ typedef struct {
 
 typedef enum {
     CHI_SIG_USERINTERRUPT,
-    CHI_SIG_DUMPSTACK
+    CHI_SIG_DUMP
 } ChiSig;
 
 typedef struct {
@@ -210,26 +210,16 @@ typedef enum {
     CHI_GC_ASYNC,
 } ChiGCPhase;
 
-typedef enum {
-    CHI_HEAP_LIMIT_ALLOC,
-    CHI_HEAP_LIMIT_SOFT,
-    CHI_HEAP_LIMIT_HARD,
-} ChiHeapLimit;
-
-typedef struct {
-    size_t heapSize;
-    size_t softLimit;
-    size_t hardLimit;
-    ChiHeapLimit limit;
-} ChiEventHeapLimit;
-
 typedef struct {
     ChiStringRef type;
     size_t       size;
 } ChiEventHeapAlloc;
 
 typedef struct {
-    ChiWid suspendWid;
+    ChiWid notifyWid;
+} ChiEventProcNotify;
+
+typedef struct {
     uint32_t ms;
 } ChiEventProcSuspend;
 
@@ -296,6 +286,7 @@ INSTANT  BIGINT_OVERFLOW     THREAD    0             0             "Big integer 
 INSTANT  BLOCK_CHUNK_FREE    RUNTIME   Chunk         0             "Block manager: Chunk freed"
 INSTANT  BLOCK_CHUNK_NEW     RUNTIME   Chunk         0             "Block manager: New chunk allocated"
 INSTANT  ENTRY_BLACKHOLE     LIBRARY   0             0             "Entry point: Blackhole"
+INSTANT  ENTRY_NOTIFY_INT    LIBRARY   0             0             "Entry point: Notify interrupt"
 INSTANT  ENTRY_START         LIBRARY   0             0             "Entry point: Start"
 INSTANT  ENTRY_TIMER_INT     LIBRARY   0             0             "Entry point: Timer interrupt"
 INSTANT  ENTRY_UNHANDLED     LIBRARY   0             0             "Entry point: Unhandled exception"
@@ -307,14 +298,14 @@ INSTANT  FNLOG_ENTER         THREAD    FnLog         0             "Logging: Int
 INSTANT  FNLOG_ENTER_JMP     THREAD    FnLog         0             "Logging: Interpreted function entered via jump"
 INSTANT  FNLOG_FFI           THREAD    FnLogFFI      0             "Logging: Foreign function called in interpreter"
 INSTANT  FNLOG_LEAVE         THREAD    FnLog         0             "Logging: Interpreted function left"
-INSTANT  GC_NOTIFY           RUNTIME   0             0             "GC: Notify workers"
 INSTANT  GC_PHASE_GLOBAL     PROCESSOR GCPhase       0             "GC: Handshake"
 INSTANT  GC_PHASE_LOCAL      PROCESSOR GCPhase       0             "GC: Handshake"
 INSTANT  GC_TRIGGER          RUNTIME   0             0             "Garbage collection triggered"
 INSTANT  HEAP_ALLOC_FAILED   THREAD    HeapAlloc     0             "Heap: Allocation failed"
 INSTANT  HEAP_CHUNK_FREE     RUNTIME   Chunk         0             "Heap: Chunk freed"
 INSTANT  HEAP_CHUNK_NEW      RUNTIME   Chunk         0             "Heap: New Chunk allocated"
-INSTANT  HEAP_LIMIT          RUNTIME   HeapLimit     0             "Heap: Limit reached"
+INSTANT  HEAP_LIMIT_GC       RUNTIME   0             0             "Heap: GC limit reached"
+INSTANT  HEAP_LIMIT_OVERFLOW RUNTIME   0             0             "Heap: Overflow limit reached"
 INSTANT  HEAP_USAGE          PROCESSOR HeapUsage     0             "Heap usage statistics"
 INSTANT  LOG_BEGIN           RUNTIME   0             0             "Beginning of event log"
 INSTANT  LOG_END             RUNTIME   0             0             "End of event log""
@@ -325,6 +316,7 @@ INSTANT  PROC_DESTROY        PROCESSOR 0             0             "Processor: D
 INSTANT  PROC_INIT           PROCESSOR 0             1             "Processor: Initialized"
 INSTANT  PROC_MSG_RECV       LIBRARY   ProcMsgRecv   0             "Processor: Receive message"
 INSTANT  PROC_MSG_SEND       LIBRARY   ProcMsgSend   1             "Processor: Send message"
+INSTANT  PROC_NOTIFY         THREAD    ProcNotify    0             "Processor: Notify request"
 INSTANT  PROC_REQUEST        RUNTIME   ProcRequest   1             "Processor: Request"
 INSTANT  PROC_STALL          RUNTIME   ProcStall     1             "Processor: Stalling"
 INSTANT  PROC_SUSPEND        THREAD    ProcSuspend   0             "Processor: Suspend request"
@@ -332,9 +324,11 @@ INSTANT  PROF_DISABLED       WORKER    0             0             "Profiling di
 INSTANT  PROF_ENABLED        WORKER    0             0             "Profiling enabled"
 INSTANT  PROF_TRACE          WORKER    StackTrace    0             "Profiling: Stack trace collected"
 INSTANT  SIGNAL              RUNTIME   Signal        0             "Signal received"
-INSTANT  STACK_ACTIVATE      THREAD    StackActive   0             "Stack: Activation"
-INSTANT  STACK_DEACTIVATE    THREAD    StackActive   0             "Stack: Deactivation"
-INSTANT  STACK_RESIZE        THREAD    StackSize     1             "Stack: Resize"
+INSTANT  STACK_ACTIVATE      THREAD    Stack         0             "Stack: Activation"
+INSTANT  STACK_DEACTIVATE    THREAD    Stack         0             "Stack: Deactivation"
+INSTANT  STACK_GROW          THREAD    StackSize     1             "Stack: Grow"
+INSTANT  STACK_SCANNED       THREAD    Stack         0             "Stack: Scanned"
+INSTANT  STACK_SHRINK        THREAD    StackSize     1             "Stack: Shrink"
 INSTANT  STACK_TRACE         THREAD    StackTrace    0             "Stack: Trace collected"
 INSTANT  STRBUILDER_OVERFLOW THREAD    0             0             "String builder overflow"
 INSTANT  SYSTEM_STATS        RUNTIME   SystemStats   0             "System statistics"
@@ -346,7 +340,6 @@ INSTANT  THREAD_SWITCH       THREAD    ThreadNext    1             "Thread: Swit
 INSTANT  THREAD_TAKEOVER     LIBRARY   ThreadMigrate 1             "Thread: Take over by other processor"
 INSTANT  THREAD_TERMINATED   LIBRARY   0             1             "Thread: Terminated"
 INSTANT  THREAD_YIELD        LIBRARY   ThreadYield   0             "Thread: Yield"
-INSTANT  TICK                RUNTIME   0             0             "Timer tick received"
 INSTANT  USER_BUFFER         LIBRARY   UserBuffer    0             "User event: Binary data"
 INSTANT  USER_STRING         LIBRARY   UserString    0             "User event: String data"
 INSTANT  WORKER_DESTROY      WORKER    0             0             "Worker: Destroyed"

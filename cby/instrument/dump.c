@@ -26,8 +26,8 @@ void _dumpInsnBegin(dumpData* local, const CbyCode* ip) {
 void _dumpProcStart(ChiProcessor* proc, dumpData* local) {
     char file[64];
     chiFmt(file, sizeof(file), "insndump.%u.%u.log", chiPid(), proc->worker->wid);
-    local->sink = chiSinkFileTryNew(cbyInterpreter(proc)->option.dumpFile ? file : "stdout",
-                                    CHI_MiB(4), false, proc->rt->option.color);
+    const CbyOption* opt = &cbyInterpreter(proc)->option;
+    local->sink = chiSinkFileTryNew(opt->dumpFile ? file : "stdout", opt->dumpBuffer, false, proc->rt->option.color);
     if (!local->sink)
         local->sink = chiSinkNull;
 }

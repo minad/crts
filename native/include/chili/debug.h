@@ -23,12 +23,12 @@ CHI_EXPORT _Noreturn void CHI_PRIVATE(chiDebugAssert)(const char*, uint32_t, con
  * the check allows false positives.
  * But this should be sufficient to catch bugs.
  * Empty values are stored unboxed to allow
- * a fast reference check, i.e., !chiUnboxed(c).
+ * a fast reference check, i.e., chiRef(c).
  *
  * Before moving to unboxed empty values,
  * boxed empty values have been used with
  * size=0 address=0, but this made the reference
- * check more expensive, !chiUnboxed(c) && !chiEmpty(c).
+ * check more expensive, chiRef(c) && !chiEmpty(c).
  */
 #define CHI_ASSERT_TAGGED(c) \
-    CHI_ASSERT(!_chiUnboxed(c) || (CHILI_UN(c) & CHI_BF_SHIFTED_MASK(_CHILI_BF_REFTAG)) == _CHILI_EMPTY_REFTAG);
+    CHI_ASSERT(_chiRef(c) || (CHILI_UN(c) & CHI_BF_SHIFTED_MASK(_CHILI_BF_REFTAG)) == _CHILI_EMPTY_REFTAG);

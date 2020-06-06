@@ -24,7 +24,7 @@ static void initBlock(ChiBlockManager* bm, ChiBlock* b) {
     CHI_POISON(b->owner, bm);
     poisonBlock(b, CHI_POISON_BLOCK_USED, bm->blockSize);
     CHI_ASSERT(bm->blockSize);
-    CHI_ASSERT(((uintptr_t)b / bm->blockSize) * bm->blockSize == (uintptr_t)b); // alignment
+    CHI_ASSERT(CHI_FLOOR((uintptr_t)b, bm->blockSize) == (uintptr_t)b); // alignment
     CHI_ASSERT(chiBlock(bm, b) == b);
     CHI_ASSERT(chiBlock(bm, (ChiWord*)b + 123) == b);
 }
@@ -36,7 +36,7 @@ static ChiBlock* freshBlock(ChiBlockManager* bm) {
         bm->nextBlock = blockEnd == bm->chunkEnd ? 0 : blockEnd;
         block = (ChiBlock*)blockStart;
     } else {
-        ChiChunk* r = chiBlockManagerChunkNew(bm->rt, bm->chunkSize, CHI_MAX(CHI_CHUNK_MIN_SIZE, bm->blockSize));
+        ChiChunk* r = chiBlockManagerChunkNew(bm, bm->chunkSize, CHI_MAX(CHI_CHUNK_MIN_SIZE, bm->blockSize));
         bm->chunkEnd = CHI_ALIGN_CAST((uint8_t*)r->start + bm->chunkSize, ChiWord*);
         bm->nextBlock = (ChiWord*)r->start + bm->blockSize / CHI_WORDSIZE;
         chiChunkListAppend(&bm->chunkList, r);
@@ -50,7 +50,7 @@ static ChiBlock* freshBlock(ChiBlockManager* bm) {
 static void freeChunkList(ChiBlockManager* bm) {
     if (bm->blocksCount == bm->freeList.length) {
         while (!chiChunkListNull(&bm->chunkList))
-            chiBlockManagerChunkFree(bm->rt, chiChunkListPop(&bm->chunkList));
+            chiBlockManagerChunkFree(bm, chiChunkListPop(&bm->chunkList));
         chiBlockListInit(&bm->freeList);
         bm->nextBlock = bm->chunkEnd = 0;
         bm->blocksCount = 0;
@@ -85,6 +85,8 @@ ChiBlock* chiBlockManagerAlloc(ChiBlockManager* bm) {
         b = chiBlockListNull(&bm->freeList) ? freshBlock(bm) : chiBlockListPop(&bm->freeList);
     }
     initBlock(bm, b);
+    if (bm->allocHookEnabled)
+        chiBlockManagerAllocHook(bm);
     return b;
 }
 
@@ -114,10 +116,9 @@ void chiBlockManagerFree(ChiBlockManager* bm, ChiBlock* b) {
     freeChunkList(bm);
 }
 
-void chiBlockAllocSetup(ChiBlockAlloc* ba, ChiBlockManager* bm, size_t limit) {
+void chiBlockAllocSetup(ChiBlockAlloc* ba, ChiBlockManager* bm) {
     CHI_ZERO_STRUCT(ba);
     ba->manager = bm;
-    ba->limit = limit;
     chiBlockListInit(&ba->usedList);
     chiBlockAllocFresh(ba);
 }
@@ -133,8 +134,6 @@ ChiBlock* chiBlockAllocTake(ChiBlockAlloc* ba) {
     b->alloc.end = (ChiWord*)b + ba->manager->blockSize / CHI_WORDSIZE;
     memset(&b->alloc.forward, 0, (size_t)((uint8_t*)b->alloc.base - (uint8_t*)b->alloc.forward));
     chiBlockListAppend(&ba->usedList, b);
-    if (ba->limit && ba->usedList.length >= ba->limit)
-        chiBlockAllocLimitReached(ba->manager);
     return b;
 }
 

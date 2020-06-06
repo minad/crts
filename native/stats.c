@@ -153,9 +153,9 @@ static void prettyTable(ChiStats* s, const ChiStatsTable* table) {
     for (uint32_t x = 0; x < ncols; ++x) {
         for (uint32_t y = 0; y < nrows; ++y) {
             if (col[x].type == CHI_STATS_FLOAT && col[x].percent)
-                max[x] = CHI_MAX(max[x], col[x].floats[y]);
+                CHI_SETMAX(max + x, col[x].floats[y]);
             else if (col[x].type == CHI_STATS_INT && col[x].percent)
-                max[x] = CHI_MAX(max[x], col[x].sum ? (double)col[x].ints[y] / (double)col[x].sum : 0);
+                CHI_SETMAX(max + x, col[x].sum ? (double)col[x].ints[y] / (double)col[x].sum : 0);
         }
     }
 
@@ -163,7 +163,7 @@ static void prettyTable(ChiStats* s, const ChiStatsTable* table) {
     for (uint32_t x = 0; x < ncols; ++x) {
         width[x] = strlen(col[x].header);
         for (uint32_t y = 0; y < nrows; ++y) {
-            width[x] = CHI_MAX(width[x], formatCell(cell, col + x, y, max[x], s->cell));
+            CHI_SETMAX(width + x, formatCell(cell, col + x, y, max[x], s->cell));
             chiSinkString(cell); // reset
         }
     }

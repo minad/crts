@@ -34,7 +34,6 @@ static uint32_t countDigits16(uint64_t n) {
 char* chiShowUInt(char* p, uint64_t n) {
     p += countDigits10(n);
     char *end = p;
-    *end = 0;
     while (n >= 10000) {
         uint64_t a = n % 10000, b = 2 * (a % 100), c = 2 * (a / 100);
         n /= 10000;
@@ -66,7 +65,6 @@ char* chiShowInt(char* p, int64_t n) {
 char* chiShowHexUInt(char* p, uint64_t n) {
     p += countDigits16(n);
     char *end = p;
-    *end = 0;
     while (n >= 256) {
         *--p = chiHexDigits[n & 15];
         *--p = chiHexDigits[(n / 16) & 15];
@@ -91,17 +89,18 @@ uint64_t chiPow(uint64_t a, uint32_t b) {
 
 // Non locale dependent version of strtoull.
 // Also doesn't use errno.
-#define CHI_READ_UINT(n)                                               \
+#define CHI_READ_UINT(n)                                                \
     bool chiReadUInt##n(uint##n##_t* x, const char** end) {             \
         const char* s = *end;                                           \
-        *x = 0;                                                         \
+        uint##n##_t r = 0;                                              \
         while (chiDigit(*s)) {                                          \
-            if (__builtin_mul_overflow(*x, 10, x) ||                    \
-                __builtin_add_overflow(*x, (uint##n##_t)(*s++ - '0'), x)) \
+            if (__builtin_mul_overflow(r, 10, &r) ||                    \
+                __builtin_add_overflow(r, (uint##n##_t)(*s++ - '0'), &r)) \
                 return false;                                           \
         }                                                               \
         if (*end == s)                                                  \
             return false;                                               \
+        *x = r;                                                         \
         *end = s;                                                       \
         return true;                                                    \
     }

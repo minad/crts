@@ -25,9 +25,8 @@ CHI_INL void chiCondDestroy(ChiCond* CHI_UNUSED(c))           {}
 CHI_INL void chiCondSignal(ChiCond* CHI_UNUSED(c))            {}
 CHI_INL void chiSystemSetup(void) {}
 CHI_INL void chiCondWait(ChiCond* CHI_UNUSED(c), ChiMutex* CHI_UNUSED(m)) { CHI_BUG("Function not available"); }
-CHI_INL CHI_WU ChiNanos chiClockMonotonicFine(void) { return (ChiNanos){ sb_clock_monotonic() }; }
-CHI_INL CHI_WU ChiNanos chiClockMonotonicFast(void) { return chiClockMonotonicFine(); }
-CHI_INL CHI_WU ChiNanos chiClockCpu(void) {  return chiClockMonotonicFine(); }
+CHI_INL CHI_WU ChiNanos chiClockFine(void) { return (ChiNanos){ sb_clock_monotonic() }; }
+CHI_INL CHI_WU ChiNanos chiClockFast(void) { return chiClockFine(); }
 CHI_INL uint64_t chiPhysMemory(void) { return sb_info->heap.size; }
 CHI_INTERN CHI_WU ChiNanos chiCondTimedWait(ChiCond*, ChiMutex*, ChiNanos);
 CHI_INL CHI_WU uint32_t chiPid(void) { return 0; }

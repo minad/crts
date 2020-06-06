@@ -33,7 +33,7 @@ CHI_INL ChiChunk* mallocGetHeader(const void* mem, size_t* size) {
 CHI_INL uint32_t mallocClass(size_t size) {
     if (size <= (1UL << MALLOC_POOL_SHIFT))
         return 0;
-    uint32_t cls = chiLog2RoundUp(size);
+    uint32_t cls = chiLog2Ceil(size);
     cls -= MALLOC_POOL_SHIFT;
     CHI_ASSERT(cls < CHI_DIM(mallocPool));
     return cls;

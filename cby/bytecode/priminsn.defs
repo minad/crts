@@ -99,14 +99,6 @@ float32Lt w8:res r8:a0 r8:a1 {
     *res = chiFromBool(chi_Prim_float32Lt(chiToFloat32(a0), chiToFloat32(a1)));
 }
 // Inline primitive
-float32Max w8:res r8:a0 r8:a1 {
-    *res = chiFromFloat32(chi_Prim_float32Max(chiToFloat32(a0), chiToFloat32(a1)));
-}
-// Inline primitive
-float32Min w8:res r8:a0 r8:a1 {
-    *res = chiFromFloat32(chi_Prim_float32Min(chiToFloat32(a0), chiToFloat32(a1)));
-}
-// Inline primitive
 float32Mul w8:res r8:a0 r8:a1 {
     *res = chiFromFloat32(chi_Prim_float32Mul(chiToFloat32(a0), chiToFloat32(a1)));
 }
@@ -251,14 +243,6 @@ float64Lt w8:res r8:a0 r8:a1 {
     *res = chiFromBool(chi_Prim_float64Lt(chiToFloat64(a0), chiToFloat64(a1)));
 }
 // Inline primitive
-float64Max w8:res r8:a0 r8:a1 {
-    *res = chiFromFloat64(chi_Prim_float64Max(chiToFloat64(a0), chiToFloat64(a1)));
-}
-// Inline primitive
-float64Min w8:res r8:a0 r8:a1 {
-    *res = chiFromFloat64(chi_Prim_float64Min(chiToFloat64(a0), chiToFloat64(a1)));
-}
-// Inline primitive
 float64Mul w8:res r8:a0 r8:a1 {
     *res = chiFromFloat64(chi_Prim_float64Mul(chiToFloat64(a0), chiToFloat64(a1)));
 }
@@ -337,6 +321,10 @@ float64Trunc w8:res r8:a0 {
 // Inline primitive
 int16ToInt32 w8:res r8:a0 {
     *res = chiFromInt32(chi_Prim_int16ToInt32(chiToInt16(a0)));
+}
+// Inline primitive
+int16ToUInt16 w8:res r8:a0 {
+    *res = chiFromUInt16(chi_Prim_int16ToUInt16(chiToInt16(a0)));
 }
 // Inline primitive
 int32Add w8:res r8:a0 r8:a1 {
@@ -543,6 +531,10 @@ int8ToInt32 w8:res r8:a0 {
     *res = chiFromInt32(chi_Prim_int8ToInt32(chiToInt8(a0)));
 }
 // Inline primitive
+int8ToUInt8 w8:res r8:a0 {
+    *res = chiFromUInt8(chi_Prim_int8ToUInt8(chiToInt8(a0)));
+}
+// Inline primitive
 intAdd w8:res r8:a0 r8:a1 {
     *res = chi_Prim_intAdd(a0, a1);
 }
@@ -709,6 +701,10 @@ stringSlice w8:res r8:a0 r8:a1 r8:a2 {
 // Inline primitive
 uint16ToUInt32 w8:res r8:a0 {
     *res = chiFromUInt32(chi_Prim_uint16ToUInt32(chiToUInt16(a0)));
+}
+// Inline primitive
+uint16ToInt16 w8:res r8:a0 {
+    *res = chiFromInt16(chi_Prim_uint16ToInt16(chiToUInt16(a0)));
 }
 // Inline primitive
 uint32Add w8:res r8:a0 r8:a1 {
@@ -902,10 +898,37 @@ uint64Xor w8:res r8:a0 r8:a1 {
 uint8ToUInt32 w8:res r8:a0 {
     *res = chiFromUInt32(chi_Prim_uint8ToUInt32(chiToUInt8(a0)));
 }
-// Primitive in tail position
-lazyForce r8:a0 {
-    INSN_LEAVE;
-    chi_Prim_lazyForce(a0);
+// Inline primitive
+uint8ToInt8 w8:res r8:a0 {
+    *res = chiFromInt8(chi_Prim_uint8ToInt8(chiToUInt8(a0)));
+}
+
+// Force thunk
+lazyForce r8:thk {
+    /* This is basically the same code as in cont.h (FORCE macro),
+     * optimized for the interpreter reentry.
+     * Furthermore we push the update frame here instead of in the continuation.
+     */
+    if ((CHI_MARK_COLLAPSE_ENABLED ||
+         CHI_SCAV_COLLAPSE_ENABLED) &&
+        !_chiRefType(thk, CHI_THUNK)) {
+        Chili v0 = thk;
+        %goto ret1;
+    }
+
+    Chili fn = chiFieldRead(&chiToThunk(thk)->cont);
+    if (chiToCont(fn) != &interpThunk) {
+        PUSH_UPDATE(thk);
+        ASET(0, thk);
+        INSN_LEAVE;
+        JUMP_FN(fn);
+    }
+
+    LEAVE;
+    CURRFN = thk;
+    REG = SP;
+    IP = chiToIP(chiToCbyFn(thk)->ip);
+    ENTER(true);
 }
 // Inline primitive
 stringBuilderNew w8:res r8:a0 {

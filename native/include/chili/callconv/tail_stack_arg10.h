@@ -21,26 +21,35 @@ struct _ChiRegStore {
 #define SP   _chiRegSP
 #define HP   _chiRegHP
 #define SLRW _chiRegSL
-#define A(i) (*({ size_t _i = (i); CHI_ASSERT(_i < CHI_AMAX);           \
-                _i == 0 ? &_chiRegA0                                    \
-                    : _i == 1 ? &_chiRegA1                              \
-                    : _i == 2 ? &_chiRegA2                              \
-                    : _i == 3 ? &_chiRegA3                              \
-                    : _i == 4 ? &_chiRegA4                              \
-                    : _i == 5 ? &_chiRegA5                              \
-                    : _chiReg->a + _i - 6; }))
+#define _A(i) ((i) == 0 ? &_chiRegA0            \
+               : (i) == 1 ? &_chiRegA1          \
+               : (i) == 2 ? &_chiRegA2          \
+               : (i) == 3 ? &_chiRegA3          \
+               : (i) == 4 ? &_chiRegA4          \
+               : (i) == 5 ? &_chiRegA5          \
+               : _chiReg->a + (i) - 6)
 
-#define _PROLOGUE(na)                           \
+#define _PROLOGUE                               \
     CHI_NOWARN_UNUSED(_chiReg);                 \
     CHI_NOWARN_UNUSED(_chiRegSP);               \
     CHI_NOWARN_UNUSED(_chiRegSL);               \
     CHI_NOWARN_UNUSED(_chiRegHP);               \
     CHI_NOWARN_UNUSED(_chiRegA0);               \
-    if ((na) < 1) CHI_UNDEF(_chiRegA1);         \
-    if ((na) < 2) CHI_UNDEF(_chiRegA2);         \
-    if ((na) < 3) CHI_UNDEF(_chiRegA3);         \
-    if ((na) < 4) CHI_UNDEF(_chiRegA4);         \
-    if ((na) < 5) CHI_UNDEF(_chiRegA5)
+    CHI_NOWARN_UNUSED(_chiRegA1);               \
+    CHI_NOWARN_UNUSED(_chiRegA2);               \
+    CHI_NOWARN_UNUSED(_chiRegA3);               \
+    CHI_NOWARN_UNUSED(_chiRegA4);               \
+    CHI_NOWARN_UNUSED(_chiRegA5)
+
+#define _UNDEF_ARGS(n)                          \
+    ({                                          \
+        if ((n) <= 0) CHI_UNDEF(_chiRegA0);     \
+        if ((n) <= 1) CHI_UNDEF(_chiRegA1);     \
+        if ((n) <= 2) CHI_UNDEF(_chiRegA2);     \
+        if ((n) <= 3) CHI_UNDEF(_chiRegA3);     \
+        if ((n) <= 4) CHI_UNDEF(_chiRegA4);     \
+        if ((n) <= 5) CHI_UNDEF(_chiRegA5);     \
+    })
 
 #define CALLCONV_INIT                                                   \
     struct _ChiRegStore _chiRegStore = {}, *_chiReg = &_chiRegStore;   \

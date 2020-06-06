@@ -12,15 +12,16 @@ struct _ChiRegStore {
     ChiAuxRegs  aux;
 };
 
-#define SP   (_chiReg->sp)
-#define HP   (_chiReg->hp)
-#define SLRW (_chiReg->sl)
-#define A(i) (*({ size_t _i = (i); CHI_ASSERT(_i < CHI_AMAX); _chiReg-> a + _i; }))
+#define SP    (_chiReg->sp)
+#define HP    (_chiReg->hp)
+#define SLRW  (_chiReg->sl)
+#define _A(i) (_chiReg-> a + (i))
 
 #define JUMP(c)       ({ ChiContFn* _c = (ChiContFn*)(c); return _c; })
 #define FIRST_JUMP(n) ({ ChiContFn* _c = CHI_CONT_FN(n); for (;;) _c = (ChiContFn*)(*_c)(_chiReg); })
 
-#define _PROLOGUE(na)     CHI_NOWARN_UNUSED(_chiReg)
+#define _PROLOGUE         CHI_NOWARN_UNUSED(_chiReg)
+#define _UNDEF_ARGS(n)    ({})
 #define CALLCONV_INIT     struct _ChiRegStore _chiRegStore = {}, *_chiReg = &_chiRegStore
 #define CALLCONV_REGSTORE
 

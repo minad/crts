@@ -64,4 +64,4 @@ CHI_INL CHI_WU bool chiChunkSizeValid(size_t size) {
                .arenaSize = CHI_CHUNK_MAX_SIZE)     \
     }
 
-CHI_EXTERN const ChiOption chiChunkOptionList[];
+CHI_EXTERN ChiOptionGroup chiChunkOptions;

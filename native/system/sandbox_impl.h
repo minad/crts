@@ -8,7 +8,7 @@ int sb_main(int argc, char** argv) {
 }
 
 ChiNanos chiCondTimedWait(ChiCond* CHI_UNUSED(c), ChiMutex* CHI_UNUSED(m), ChiNanos ns) {
-    ChiNanos begin = chiClockMonotonicFine();
+    ChiNanos begin = chiClockFine();
     sb_yield(CHI_UN(Nanos, ns), &(struct sb_mask){});
-    return chiNanosDelta(chiClockMonotonicFine(), begin);
+    return chiNanosDelta(chiClockFine(), begin);
 }

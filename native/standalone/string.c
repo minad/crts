@@ -12,8 +12,8 @@
 
 typedef uintptr_t word_t;
 #define WSIZE        (sizeof (word_t))
-#define WALIGNED(p)  (!(((uintptr_t)p) & (WSIZE - 1)))
-#define CONSTCAST(p) ((void*)(uintptr_t)(p))
+#define WALIGN(p)    (((uintptr_t)p) & (WSIZE - 1))
+#define CONSTCAST(p) ((char*)(uintptr_t)(p))
 
 // Enable vectorizer, but ensure that functions are not self-referential
 #ifndef __clang__
@@ -26,7 +26,7 @@ void* memset(void* dst, int x, size_t n) {
     word_t w = ((word_t)-1 / 255) * (unsigned char)c;
     char* d = (char*)dst;
 
-    while (!WALIGNED(d) && n) {
+    while (WALIGN(d) && n) {
         *d++ = c;
         --n;
     }
@@ -57,12 +57,12 @@ static inline void* memcpy_forward(void* dst, const void* src, size_t n) {
     char* d = (char*)dst;
     const char* s = (const char*)src;
 
-    while (!WALIGNED(d) && n) {
+    while (WALIGN(d) && n) {
         *d++ = *s++;
         --n;
     }
 
-    if (WALIGNED(s)) {
+    if (!WALIGN(s)) {
         while (n >= 4 * WSIZE) {
             word_t* dw = (word_t*)(void*)d;
             const word_t* sw = (const word_t*)(const void*)s;
@@ -94,12 +94,12 @@ static inline void* memcpy_backward(void* dst, const void* src, size_t n) {
     char* d = (char*)dst + n;
     const char* s = (const char*)src + n;
 
-    while (!WALIGNED(d) && n) {
+    while (WALIGN(d) && n) {
         *--d = *--s;
         --n;
     }
 
-    if (WALIGNED(s)) {
+    if (!WALIGN(s)) {
         while (n >= 4 * WSIZE) {
             d -= 4 * WSIZE;
             s -= 4 * WSIZE;
@@ -137,12 +137,12 @@ void* memmove(void* dst, const void* src, size_t n) {
 
 int memcmp(const void* a, const void* b, size_t n) {
     const unsigned char* p = (const unsigned char*)a, *q = (const unsigned char*)b;
-    while (!WALIGNED(p) && n && *p == *q) {
+    while (WALIGN(p) && n && *p == *q) {
         ++p;
         ++q;
         --n;
     }
-    if (WALIGNED(q)) {
+    if (!WALIGN(q)) {
         while (n >= 4 * WSIZE) {
             const word_t *pw = (const word_t*)(const void*)p, *qw = (const word_t*)(const void*)q;
             if ((pw[0] - qw[0]) | (pw[1] - qw[1]) | (pw[2] - qw[2]) | (pw[3] - qw[3]))
@@ -196,7 +196,7 @@ int strncmp(const char* p, const char* q, size_t n) {
 char* strchr(const char* s, int c) {
     while (*s) {
         if (*s == c)
-            return (char*)CONSTCAST(s);
+            return CONSTCAST(s);
         ++s;
     }
     return 0;

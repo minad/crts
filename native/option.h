@@ -3,8 +3,6 @@
 #include "private.h"
 
 typedef enum {
-    CHI_OPTTYPE_END,
-    CHI_OPTTYPE_TITLE,
     CHI_OPTTYPE_FLAG,
     CHI_OPTTYPE_UINT32,
     CHI_OPTTYPE_UINT64,
@@ -20,12 +18,11 @@ typedef enum {
     CHI_OPTRESULT_ERROR,
 } ChiOptionResult;
 
+#define CHI_OPT_GROUP(n, t, ...) ChiOptionGroup n = { .title = t, .options = (ChiOption[]){__VA_ARGS__}, .count = sizeof((ChiOption[]){__VA_ARGS__})/sizeof(ChiOption) };
 #define CHI_OPT_FIELD(ft, f)                                          \
     (CHI_STATIC_FAIL(__builtin_types_compatible_p(CHI_FIELD_TYPE(CHI_OPT_STRUCT, f), ft)) + \
      offsetof(CHI_OPT_STRUCT, f))
 #define _CHI_OPT(t, ...) { .type = CHI_OPTTYPE_##t, ##__VA_ARGS__ },
-#define CHI_OPT_TITLE(n) _CHI_OPT(TITLE, .name = CHI_MUST_BE_STRING(n))
-#define CHI_OPT_END      _CHI_OPT(END)
 #define CHI_OPT_FLAG(f, n, d)                                      \
     _CHI_OPT(FLAG, .field = CHI_OPT_FIELD(bool, f), .name = CHI_MUST_BE_STRING(n) "\0" CHI_MUST_BE_STRING(d))
 #define CHI_OPT_UINT32(f, a, b, n, d)                              \
@@ -42,9 +39,10 @@ typedef enum {
 
 typedef struct ChiSink_ ChiSink;
 typedef const struct ChiOption_ ChiOption;
-typedef const struct ChiOptionList_ ChiOptionList;
+typedef const struct ChiOptionGroup_ ChiOptionGroup;
+typedef const struct ChiOptionAssoc_ ChiOptionAssoc;
 typedef const struct ChiOptionParser_ ChiOptionParser;
-typedef ChiOptionResult (*ChiOptionCallback)(const ChiOptionParser*, const ChiOptionList*, const ChiOption*, const void*);
+typedef ChiOptionResult (*ChiOptionCallback)(ChiOptionParser*, ChiOptionAssoc*, ChiOption*, const void*);
 
 struct CHI_PACKED ChiOption_ {
     const char        *name;      ///< Option name and description
@@ -63,26 +61,32 @@ struct CHI_PACKED ChiOption_ {
     };
 };
 
-struct ChiOptionList_ {
-    const ChiOption* desc;
+struct CHI_PACKED ChiOptionGroup_ {
+    ChiOption* options;
+    uint16_t count;
+    char title[];
+};
+
+struct ChiOptionAssoc_ {
+    ChiOptionGroup* group;
     void* target;
 };
 
 struct ChiOptionParser_ {
     ChiSink *help, *usage;
-    const ChiOptionList* list;
+    ChiOptionAssoc* assocs;
 };
 
 #if CHI_OPTION_ENABLED
-CHI_INTERN void chiOptionHelp(const ChiOptionParser*);
-CHI_INTERN CHI_WU ChiOptionResult chiOptionArgs(const ChiOptionParser*, int*, char**);
-CHI_INTERN CHI_WU ChiOptionResult chiOptionEnv(const ChiOptionParser*, const char*);
+CHI_INTERN void chiOptionHelp(ChiOptionParser*);
+CHI_INTERN CHI_WU ChiOptionResult chiOptionArgs(ChiOptionParser*, int*, char**);
+CHI_INTERN CHI_WU ChiOptionResult chiOptionEnv(ChiOptionParser*, const char*);
 #else
-void chiOptionHelp(const ChiOptionParser* CHI_UNUSED(p)) {}
-CHI_INL CHI_WU ChiOptionResult chiOptionArgs(const ChiOptionParser* CHI_UNUSED(p), int* CHI_UNUSED(argc), char** CHI_UNUSED(argv)) {
+void chiOptionHelp(ChiOptionParser* CHI_UNUSED(p)) {}
+CHI_INL CHI_WU ChiOptionResult chiOptionArgs(ChiOptionParser* CHI_UNUSED(p), int* CHI_UNUSED(argc), char** CHI_UNUSED(argv)) {
     return CHI_OPTRESULT_OK;
 }
-CHI_INL CHI_WU ChiOptionResult chiOptionEnv(const ChiOptionParser* CHI_UNUSED(p), const char* CHI_UNUSED(var)) {
+CHI_INL CHI_WU ChiOptionResult chiOptionEnv(ChiOptionParser* CHI_UNUSED(p), const char* CHI_UNUSED(var)) {
     return CHI_OPTRESULT_OK;
 }
 #endif

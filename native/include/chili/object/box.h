@@ -35,7 +35,7 @@ CHI_INL CHI_WU int64_t chiToInt64(Chili c) {
 CHI_INL CHI_WU Chili chiFromFloat64(double f) {
     if (CHI_NANBOXING_ENABLED) {
         Chili c = { f == f ? _chiFloat64ToBits(f) : _CHILI_NAN };
-        CHI_ASSERT(_chiUnboxed(c));
+        CHI_ASSERT(!_chiRef(c));
         return c;
     }
     return CHI_FLOAT63_ENABLED
@@ -45,7 +45,7 @@ CHI_INL CHI_WU Chili chiFromFloat64(double f) {
 
 CHI_INL CHI_WU double chiToFloat64(Chili c) {
     if (CHI_NANBOXING_ENABLED) {
-        CHI_ASSERT(_chiUnboxed(c));
+        CHI_ASSERT(!_chiRef(c));
         return _chiBitsToFloat64(CHILI_UN(c));
     }
     return CHI_FLOAT63_ENABLED

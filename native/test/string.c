@@ -2,7 +2,7 @@
 #include "test.h"
 
 static bool isSmall(Chili c) {
-    return CHI_STRING_UNBOXING ? chiUnboxed(c) : chiType(c) == CHI_STRING;
+    return CHI_STRING_UNBOXING ? !chiRef(c) : chiType(c) == CHI_STRING;
 }
 
 TEST(chiCharToString) {

@@ -23,6 +23,7 @@
 #define interpBackend       CHI_CAT(INTERP_NAME, _interpBackend)
 #define interpCont          CHI_CAT(INTERP_NAME, _interpCont)
 #define interpFn            CHI_CAT(INTERP_NAME, _interpFn)
+#define interpThunk         CHI_CAT(INTERP_NAME, _interpThunk)
 #define interpProcStart     CHI_CAT(INTERP_NAME, _interpProcStart)
 #define interpProcStop      CHI_CAT(INTERP_NAME, _interpProcStop)
 #define interpSetup         CHI_CAT(INTERP_NAME, _interpSetup)

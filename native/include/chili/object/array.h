@@ -1,21 +1,22 @@
-CHI_OBJECT(ARRAY, Array, ChiField field[1])
-
 CHI_EXPORT void chiArrayCopy(Chili, uint32_t, Chili, uint32_t, uint32_t);
 CHI_EXPORT CHI_WU Chili chiArrayTryClone(Chili, uint32_t, uint32_t);
 CHI_EXPORT CHI_WU Chili chiArrayNewFlags(uint32_t, Chili, ChiNewFlags);
 CHI_EXPORT void chiArrayWrite(Chili, uint32_t, Chili);
 CHI_EXPORT CHI_WU bool chiArrayCas(Chili, uint32_t, Chili, Chili);
 
+CHI_INL CHI_WU uint32_t chiArraySize(Chili c) {
+    CHI_ASSERT(_chiType(c) == CHI_ARRAY_SMALL || _chiType(c) == CHI_ARRAY_LARGE);
+    return (uint32_t)_chiSize(c);
+}
+
 CHI_INL CHI_WU ChiField* CHI_PRIVATE(chiArrayField)(Chili c, uint32_t idx) {
     CHI_ASSERT(!_chiEmpty(c));
-    CHI_ASSERT(idx < _chiSize(c));
-    return _chiToArray(c)->field + idx;
+    CHI_ASSERT(idx < chiArraySize(c));
+    return (ChiField*)_chiRawPayload(c) + idx;
 }
 
 CHI_INL void CHI_PRIVATE(chiArrayInit)(Chili c, uint32_t idx, Chili val) {
-    CHI_ASSERT(!_chiEmpty(c));
-    CHI_ASSERT(idx < _chiSize(c));
-    _chiFieldInit(_chiToArray(c)->field + idx, val);
+    _chiFieldInit(_chiArrayField(c, idx), val);
 }
 
 CHI_INL CHI_WU Chili chiArrayRead(Chili c, uint32_t idx) {

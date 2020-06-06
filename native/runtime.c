@@ -3,8 +3,6 @@
 #include "barrier.h"
 #include "error.h"
 #include "event.h"
-#include "exception.h"
-#include "export.h"
 #include "new.h"
 #include "sink.h"
 #include "stack.h"
@@ -15,12 +13,12 @@
         CHI_ASSERT(chiIdentical(AUX.THREAD, CHI_CURRENT_PROCESSOR->thread)); \
         CHI_ASSERT(chiIdentical(AUX.PROC, chiFromPtr(CHI_CURRENT_PROCESSOR))); \
         CHI_ASSERT(chiIdentical(AUX.PLOCAL, CHI_CURRENT_PROCESSOR->local)); \
-        CHI_ASSERT(SP >= getStack(AUX.THREAD)->base);                         \
+        CHI_ASSERT(SP >= getStack(AUX.THREAD)->base);                   \
         CHI_ASSERT(SP <= getStackLimit(AUX.THREAD));                        \
         CHI_ASSERT(SL == getStackLimit(AUX.THREAD));                        \
         CHI_ASSERT(HP >= chiLocalHeapBumpBase(&CHI_CURRENT_PROCESSOR->heap)); \
         CHI_ASSERT(HP <= chiLocalHeapBumpLimit(&CHI_CURRENT_PROCESSOR->heap)); \
-        chiStackDebugWalk(AUX.THREAD, SP, SL);                          \
+        chiStackDebugWalk(chiThreadStack(CHI_CURRENT_PROCESSOR->thread), SP, SL); \
     })
 
 #define PROLOGUE_INVARIANTS(c) PROLOGUE(c); ASSERT_INVARIANTS
@@ -30,7 +28,7 @@
         CHI_ASSERT(chiIdentical(proc->thread, AUX.THREAD)); \
         SP = getStack(AUX.THREAD)->sp;               \
         SLRW = getStackLimit(AUX.THREAD);            \
-        CHI_ASSERT(SP >= getStack(AUX.THREAD)->base);  \
+        CHI_ASSERT(SP >= getStack(AUX.THREAD)->base);   \
         CHI_ASSERT(SP <= SL);                    \
     })
 
@@ -64,6 +62,15 @@
 
 CALLCONV_REGSTORE
 
+enum {
+    EP_BLACKHOLE,
+    EP_NOTIFYINTERRUPT,
+    EP_START,
+    EP_TIMERINTERRUPT,
+    EP_UNHANDLED,
+    EP_USERINTERRUPT,
+};
+
 CHI_INL ChiStack* getStack(Chili thread) {
     return chiToStack(chiThreadStack(thread));
 }
@@ -72,18 +79,70 @@ CHI_INL Chili* getStackLimit(Chili thread) {
     return chiStackLimit(chiThreadStack(thread));
 }
 
-STATIC_CONT(thunkUpdateCont, .type = CHI_FRAME_UPDATE, .size = 3) {
-    PROLOGUE_INVARIANTS(thunkUpdateCont);
-    SP -= 3;
-    Chili thunk = SP[1], val = A(0);
-    chiFieldWrite(CHI_CURRENT_PROCESSOR, thunk, &chiToThunk(thunk)->val, val);
-    RET(val);
+CONT(chiThunkUpdateCont, .na = 1, .size = 2) {
+    PROLOGUE_INVARIANTS(chiThunkUpdateCont);
+    Chili val = AGET(0);
+    UNDEF_ARGS(0);
+    SP -= 2;
+    Chili thunk = SP[0];
+    ChiThunk* obj = chiToThunk(thunk);
+    chiFieldWrite(CHI_CURRENT_PROCESSOR, thunk, &obj->val, val, CHI_BARRIER_GENERIC);
+    ASET(0, val);
+    RET;
 }
 
-STATIC_CONT(catchCont, .type = CHI_FRAME_CATCH, .size = 2) {
-    PROLOGUE_INVARIANTS(catchCont);
+INTERN_CONT(chiThunkForward, .na = 1) {
+    PROLOGUE_INVARIANTS(chiThunkForward);
+    Chili thunk = AGET(0);
+    UNDEF_ARGS(0);
+    ChiThunk* obj = chiToThunk(thunk);
+    Chili fw = chiFieldRead(&obj->val);
+    chiFieldWrite(CHI_CURRENT_PROCESSOR, thunk, &obj->val, thunk, CHI_BARRIER_GENERIC);
+    FORCE(fw, RET);
+}
+
+STATIC_CONT(blackholeCont, .size = 1) {
+    PROLOGUE_INVARIANTS(blackholeCont);
+    UNDEF_ARGS(0);
+    --SP;
+    Chili thunk = SP[-2];
+    ASET(0, thunk);
+    KNOWN_JUMP(chiThunkBlackhole);
+}
+
+STATIC_CONT(thunkReturn, .na = 1) {
+    PROLOGUE_INVARIANTS(thunkReturn);
+    Chili thunk = AGET(0);
+    UNDEF_ARGS(0);
+    ASET(0, chiFieldRead(&chiToThunk(thunk)->val));
+    RET;
+}
+
+CONT(chiThunkBlackhole, .na = 1) {
+    PROLOGUE_INVARIANTS(chiThunkBlackhole);
+    UNDEF_ARGS(1);
+    Chili thunk = AGET(0), val;
+    if (chiThunkForced(thunk, &val)) {
+        // Thunk forced twice, assume more forces?
+        // TODO: Investigate if we should better do this directly in chiThunkUpdateCont!
+        chiFieldInit(&chiToThunk(thunk)->cont, chiFromCont(&thunkReturn));
+        ASET(0, val);
+        RET;
+    }
+    LIMITS_PROC(.stack = 1);
+    *SP++ = chiFromCont(&blackholeCont);
+    ASET(0, chiIdx(CHI_CURRENT_RUNTIME->entryPoints, EP_BLACKHOLE));
+    ASET(1, CHI_FALSE);
+    APP(1);
+}
+
+INTERN_CONT(chiExceptionCatchCont, .na = 1, .size = 2) {
+    PROLOGUE_INVARIANTS(chiExceptionCatchCont);
+    Chili res = AGET(0);
+    UNDEF_ARGS(0);
     SP -= 2;
-    RET(A(0));
+    ASET(0, res);
+    RET;
 }
 
 #ifdef CHI_STANDALONE_WASM
@@ -92,169 +151,189 @@ STATIC_CONT(catchCont, .type = CHI_FRAME_CATCH, .size = 2) {
 extern int32_t wasmMainIdx(void);
 #  define MAIN_IDX wasmMainIdx()
 #else
-#  define MAIN_IDX z_Main_z_main
+extern int32_t main_z_Main;
+#  define MAIN_IDX main_z_Main
 #endif
 
-INTERN_CONT(chiRunMainCont, .size = 1) {
+INTERN_CONT(chiRunMainCont, .na = 1, .size = 1) {
     PROLOGUE_INVARIANTS(chiRunMainCont);
+    Chili mainMod = AGET(0);
+    UNDEF_ARGS(0);
 
     ChiProcessor* proc = CHI_CURRENT_PROCESSOR;
-    if (MAIN_IDX < -1)
-        CHI_THROW_RUNTIME_EX(proc, chiStringNew(proc, "No main function"));
+    if (MAIN_IDX < -1) {
+        ASET(0, chiStringNew(proc, "No main function"));
+        KNOWN_JUMP(chiThrowRuntimeException);
+    }
 
     --SP;
 
-    Chili mainMod = A(0);
-    A(0) = proc->rt->entryPoint.start;
-    A(1) = MAIN_IDX >= 0 ? chiIdx(mainMod, (size_t)MAIN_IDX) : mainMod;
-    A(2) = CHI_FALSE;
+    ASET(0, chiIdx(proc->rt->entryPoints, EP_START));
+    ASET(1, MAIN_IDX >= 0 ? chiIdx(mainMod, (size_t)MAIN_IDX) : mainMod);
+    ASET(2, CHI_FALSE);
     APP(2);
 }
 
-INTERN_CONT(chiRestoreCont, .type = CHI_FRAME_RESTORE, .size = CHI_VASIZE) {
+INTERN_CONT(chiRestoreCont, .size = CHI_VASIZE) {
     PROLOGUE_INVARIANTS(chiRestoreCont);
+    UNDEF_ARGS(0);
 
     ChiProcessor* proc = CHI_CURRENT_PROCESSOR;
     ChiRuntime* rt = proc->rt;
 
-    if (CHI_SYSTEM_HAS_INTERRUPT
-        && chiTriggered(&proc->trigger.userInterrupt)
-        && chiTrue(rt->entryPoint.userInterrupt)
-        && chiThreadInterruptible(proc->thread)) {
-        chiTrigger(&proc->trigger.userInterrupt, false);
-        A(0) = rt->entryPoint.userInterrupt;
-        A(1) = CHI_FALSE;
-        APP(1);
-    }
-
-    if (chiTriggered(&proc->trigger.tick)
-        && chiThreadInterruptible(proc->thread)
-        && chiTrue(rt->entryPoint.timerInterrupt)) {
-        chiTrigger(&proc->trigger.tick, false);
-        A(0) = rt->entryPoint.timerInterrupt;
-        A(1) = CHI_FALSE;
-        APP(1);
+    if (chiThreadInterruptible(proc->thread) && chiTrue(rt->entryPoints)) {
+        int32_t idx = -1;
+        if (CHI_SYSTEM_HAS_INTERRUPT && chiTriggered(&proc->trigger.userInterrupt)) {
+            chiTrigger(&proc->trigger.userInterrupt, false);
+            idx = EP_USERINTERRUPT;
+        } else if (chiTriggered(&proc->trigger.notifyInterrupt)) {
+            chiTrigger(&proc->trigger.notifyInterrupt, false);
+            idx = EP_NOTIFYINTERRUPT;
+        } else if (chiTriggered(&proc->trigger.timerInterrupt)) {
+            chiTrigger(&proc->trigger.timerInterrupt, false);
+            idx = EP_TIMERINTERRUPT;
+        }
+        if (idx >= 0) {
+            ASET(0, chiIdx(rt->entryPoints, (size_t)idx));
+            ASET(1, CHI_FALSE);
+            APP(1);
+        }
     }
 
     size_t size = (size_t)chiToUnboxed(SP[-2]);
     SP -= size;
 
-    size -= 4;
-    AUX.APPN = (uint8_t)size;
-    for (size_t i = 0; i <= size; ++i)
-        A(i) = SP[i + 1];
+    size -= 3;
+    AUX.VAARGS = (uint8_t)size;
+    for (size_t i = 0; i < size; ++i)
+        ASET(i, SP[i + 1]);
 
     JUMP_FN(SP[0]);
 }
 
 INTERN_CONT(chiJumpCont, .size = 2) {
     PROLOGUE_INVARIANTS(chiJumpCont);
+    UNDEF_ARGS(0);
     SP -= 2;
     JUMP_FN(SP[0]);
 }
 
-INTERN_CONT(chiSetupEntryPointsCont, .size = 1) {
+INTERN_CONT(chiSetupEntryPointsCont, .na = 1, .size = 1) {
     PROLOGUE_INVARIANTS(chiSetupEntryPointsCont);
+    Chili mod = AGET(0);
+    UNDEF_ARGS(0);
     --SP;
-
+    if (!chiSuccess(mod))
+        RET;
     ChiProcessor* proc = CHI_CURRENT_PROCESSOR;
     ChiRuntime* rt = proc->rt;
-    const Chili mod = A(0);
-    if (!chiSuccess(mod))
-        RET(CHI_FALSE);
-
-    ChiEntryPoint* ep = &rt->entryPoint;
-
-    chiGCUnroot(rt, ep->unhandled); // Remove root registered in setup()
-
-    ep->start = chiIdx(mod, (size_t)z_System__EntryPoints_z_start);
-    ep->unhandled = chiIdx(mod, (size_t)z_System__EntryPoints_z_unhandled);
-    ep->blackhole = chiIdx(mod, (size_t)z_System__EntryPoints_z_blackhole);
-    ep->userInterrupt = chiIdx(mod, (size_t)z_System__EntryPoints_z_userInterrupt);
-    ep->timerInterrupt = chiIdx(mod, (size_t)z_System__EntryPoints_z_timerInterrupt);
-
-    CHI_ASSERT(chiFnArity(ep->start) <= 2);
-    CHI_ASSERT(chiFnArity(ep->unhandled) <= 2);
-    CHI_ASSERT(chiFnArity(ep->userInterrupt) <= 1);
-    CHI_ASSERT(chiFnArity(ep->timerInterrupt) <= 1);
-    CHI_ASSERT(chiFnArity(ep->blackhole) <= 1);
-
-    ChiPromoteState ps;
-    chiPromoteSharedBegin(&ps, proc);
-    chiPromoteSharedObject(&ps, &ep->start);
-    chiPromoteSharedObject(&ps, &ep->unhandled);
-    chiPromoteSharedObject(&ps, &ep->blackhole);
-    chiPromoteSharedObject(&ps, &ep->userInterrupt);
-    chiPromoteSharedObject(&ps, &ep->timerInterrupt);
-    chiPromoteSharedEnd(&ps);
-
-    chiGCRoot(rt, ep->start);
-    chiGCRoot(rt, ep->unhandled);
-    chiGCRoot(rt, ep->blackhole);
-    chiGCRoot(rt, ep->userInterrupt);
-    chiGCRoot(rt, ep->timerInterrupt);
-
-    RET(CHI_FALSE);
+    rt->entryPoints = mod;
+    chiPromoteShared(proc, &rt->entryPoints);
+    chiGCRoot(rt, rt->entryPoints);
+    RET;
 }
 
 INTERN_CONT(chiStartupEndCont, .size = 1) {
     PROLOGUE_INVARIANTS(chiStartupEndCont);
+    UNDEF_ARGS(0);
     --SP;
     ChiRuntime* rt = CHI_CURRENT_RUNTIME;
     chiEvent0(rt, STARTUP_END);
-    RET(CHI_FALSE);
+    RET;
 }
 
-CONT(chiExceptionThrow) {
-    PROLOGUE_INVARIANTS(chiExceptionThrow);
-    ChiProcessor* proc = CHI_CURRENT_PROCESSOR;
+STATIC_CONT(showUnhandledCont, .na = 1, .size = 2) {
+    PROLOGUE_INVARIANTS(showUnhandledCont);
+    Chili except = AGET(0);
+    UNDEF_ARGS(0);
+    SP -= 2;
+    Chili name = SP[0];
+    chiSinkFmt(chiStderr, "Unhandled exception occurred:\n%S: %S\n",
+               chiStringRef(&name), chiStringRef(&except));
+    chiExit(1);
+    RET;
+}
 
-    const Chili except = A(0);
+STATIC_CONT(unhandledDefault, .na = 1) {
+    PROLOGUE_INVARIANTS(unhandledDefault);
+    LIMITS_PROC(.stack = 2);
+    const Chili except = AGET(0);
+    UNDEF_ARGS(0);
+
     const Chili info = chiIdx(except, 0);
     const Chili identifier = chiIdx(info, 0);
     const Chili name = chiIdx(identifier, 1);
 
-    Chili* catchFrame = chiStackUnwind(proc, SP);
+    SP[0] = name;
+    SP[1] = chiFromCont(&showUnhandledCont);
+    SP += 2;
 
+    ASET(0, chiIdx(info, 1));
+    ASET(1, chiIdx(except, 1));
+    APP(1);
+}
+
+CONT(chiExceptionThrow, .na = 1) {
+    PROLOGUE_INVARIANTS(chiExceptionThrow);
+    const Chili except = AGET(0);
+    UNDEF_ARGS(0);
+
+    const Chili info = chiIdx(except, 0);
+    const Chili identifier = chiIdx(info, 0);
+    const Chili name = chiIdx(identifier, 1);
+
+    ChiProcessor* proc = CHI_CURRENT_PROCESSOR;
     if (chiEventEnabled(proc, EXCEPTION)) {
         CHI_STRING_SINK(sink);
         chiStackDump(sink, proc, SP);
-        chiEvent(proc, EXCEPTION, .handled = !!catchFrame, .trace = chiSinkString(sink), .name = chiStringRef(&name));
+        chiEvent(proc, EXCEPTION, .trace = chiSinkString(sink), .name = chiStringRef(&name));
     }
 
-    if (catchFrame) {
-        SP = catchFrame;
-        A(0) = *SP;
-        A(1) = except;
+    bool handlerFound = chiStackUnwind(proc, SP);
+    RESTORE_STACK_REGS;
+    ASSERT_INVARIANTS;
+
+    if (handlerFound) {
+        ASET(0, *SP);
+        ASET(1, except);
         APP(1);
     }
 
     chiThreadSetInterruptible(proc, false);
-    SP = getStack(proc->thread)->base;
-    A(0) = proc->rt->entryPoint.unhandled;
-    A(1) = except;
-    A(2) = CHI_FALSE;
+
+    if (!chiTrue(proc->rt->entryPoints)) {
+        ASET(0, except);
+        KNOWN_JUMP(unhandledDefault);
+    }
+
+    ASET(0, chiIdx(proc->rt->entryPoints, EP_UNHANDLED));
+    ASET(1, except);
+    ASET(2, CHI_FALSE);
     APP(2);
 }
 
-CONT(chiThreadSwitch) {
+CONT(chiThreadSwitch, .na = 1) {
     PROLOGUE_INVARIANTS(chiThreadSwitch);
+    Chili next = AGET(0);
+    UNDEF_ARGS(0);
 
     ChiProcessor* proc = CHI_CURRENT_PROCESSOR;
-    Chili next = A(0);
-
     chiEvent(proc, THREAD_SWITCH, .nextTid = chiThreadId(next));
 
     DEACTIVATE_THREAD;
     proc->thread = next;
     ACTIVATE_THREAD;
 
-    RET(CHI_FALSE);
+    ASET(0, CHI_FALSE);
+    RET;
 }
 
-CONT(chiProtectEnd) {
-    _PROLOGUE(0); // invalid stack frame, use _PROLOGUE which does not have a tracepoint
-    CHI_ASSERT(chiUnboxed(A(0)) || chiGen(A(0)) == CHI_GEN_MAJOR);
+CONT(chiProtectEnd, .na = 1) {
+    _PROLOGUE; // invalid stack frame, use _PROLOGUE which does not have a tracepoint
+    Chili res = AGET(0);
+    UNDEF_ARGS(0);
+
+    CHI_ASSERT(!chiRef(res) || chiGen(res) == CHI_GEN_MAJOR);
 
     ChiProcessor* proc = CHI_CURRENT_PROCESSOR;
     chiProcessorProtectEnd(proc);
@@ -265,22 +344,115 @@ CONT(chiProtectEnd) {
     CHI_NOWARN_UNUSED(_chiCurrentCont);
     TRACE_FFI(protect);
 
-    RET(A(0));
+    ASET(0, res);
+    RET;
 }
 
 #if !CHI_SYSTEM_HAS_INTERRUPT
-static void pollTick(ChiProcessor* proc) {
-    ChiNanos time = chiClockMonotonicFine();
-    if (chiNanosLess(proc->trigger.lastTick, time)) {
+static void pollTimer(ChiProcessor* proc) {
+    ChiNanos time = chiClockFine();
+    if (chiNanosLess(proc->trigger.lastTimerInterrupt, time)) {
         chiTrigger(&proc->trigger.interrupt, true);
-        chiTrigger(&proc->trigger.tick, true);
-        proc->trigger.lastTick = chiNanosAdd(time, chiMillisToNanos(proc->rt->option.interval));
+        chiTrigger(&proc->trigger.timerInterrupt, true);
+        proc->trigger.lastTimerInterrupt = chiNanosAdd(time, chiMillisToNanos(proc->rt->option.interval));
     }
 }
 #endif
 
+STATIC_CONT(showAsyncException, .na = 2) {
+    PROLOGUE_INVARIANTS(showAsyncException);
+    Chili except = AGET(1);
+    UNDEF_ARGS(0);
+    static const char* const asyncExceptionName[] =
+        { "HeapOverflow",
+          "StackOverflow",
+          "ThreadInterrupt",
+          "UserInterrupt" };
+    ASET(0, chiStringFromRef(chiStringRef(asyncExceptionName[chiToUInt32(except)])));
+    RET;
+}
+
+STATIC_CONT(throwAsyncException, .na = 1) {
+    PROLOGUE_INVARIANTS(throwAsyncException);
+    LIMITS_PROC(.heap = 1 + 2 + 2 + 3);
+    Chili tag = AGET(0);
+    UNDEF_ARGS(0);
+
+    ChiProcessor* proc = CHI_CURRENT_PROCESSOR;
+
+    NEW(show, CHI_FN(1), 1);
+    NEW_INIT(show, 0, chiFromCont(&showAsyncException));
+
+    Chili id = chiStringNew(proc, "AsyncException"); // TODO use uint128 identifier
+    NEW(identifier, CHI_TAG(0), 2);
+    NEW_INIT(identifier, 0, id);
+    NEW_INIT(identifier, 1, id);
+
+    NEW(info, CHI_TAG(0), 2);
+    NEW_INIT(info, 0, identifier);
+    NEW_INIT(info, 1, show);
+
+    NEW(except, CHI_TAG(0), 3);
+    NEW_INIT(except, 0, info);
+    NEW_INIT(except, 1, tag);
+    NEW_INIT(except, 2, chiStackGetTrace(proc, SP));
+
+    ASET(0, except);
+    KNOWN_JUMP(chiExceptionThrow);
+}
+
+STATIC_CONT(identity, .na = 2) {
+    PROLOGUE_INVARIANTS(identity);
+    Chili res = AGET(1);
+    UNDEF_ARGS(0);
+    ASET(0, res);
+    RET;
+}
+
+INTERN_CONT(chiThrowRuntimeException, .na = 1) {
+    PROLOGUE_INVARIANTS(chiThrowRuntimeException);
+    LIMITS_PROC(.heap = 1 + 2 + 2 + 3);
+    Chili msg = AGET(0);
+    UNDEF_ARGS(0);
+
+    ChiProcessor* proc = CHI_CURRENT_PROCESSOR;
+
+    NEW(show, CHI_FN(1), 1);
+    NEW_INIT(show, 0, chiFromCont(&identity));
+
+    Chili id = chiStringNew(proc, "RuntimeException"); // TODO use uint128 identifier
+    NEW(identifier, CHI_TAG(0), 2);
+    NEW_INIT(identifier, 0, id);
+    NEW_INIT(identifier, 1, id);
+
+    NEW(info, CHI_TAG(0), 2);
+    NEW_INIT(info, 0, identifier);
+    NEW_INIT(info, 1, show);
+
+    NEW(except, CHI_TAG(0), 3);
+    NEW_INIT(except, 0, info);
+    NEW_INIT(except, 1, msg);
+    NEW_INIT(except, 2, chiStackGetTrace(proc, SP));
+
+    ASET(0, except);
+    KNOWN_JUMP(chiExceptionThrow);
+}
+
+INTERN_CONT(chiStackGrowCont, .size = 2, .na = CHI_VAARGS) {
+    PROLOGUE_INVARIANTS(chiStackGrowCont);
+
+    ChiProcessor* proc = CHI_CURRENT_PROCESSOR;
+    CHI_ASSERT(SP == getStack(proc->thread)->base + 2);
+    chiStackShrink(proc);
+
+    RESTORE_STACK_REGS;
+    ASSERT_INVARIANTS;
+
+    RET;
+}
+
 /**
- * chiInterrupt is the central entry point to the runtime.
+ * chiYield is the central entry point to the runtime.
  * In particular it acts as a safe point for garbage collection.
  *
  * * Stack resizing
@@ -289,13 +461,13 @@ static void pollTick(ChiProcessor* proc) {
  * * Handling stack dump signals, see ::chiStackDump.
  * * Handling processor service requests via ::chiProcessorService
  */
-CONT(chiInterrupt, .na = CHI_VAARGS) {
-    PROLOGUE(chiInterrupt); // invariant violated since SL is modified
+INTERN_CONT(chiYield, .na = CHI_VAARGS) {
+    PROLOGUE(chiYield); // invariant violated since SL is modified
 
     ChiProcessor* proc = CHI_CURRENT_PROCESSOR;
     ChiRuntime* rt = proc->rt;
 
-    CHI_UNLESS(CHI_SYSTEM_HAS_INTERRUPT, pollTick(proc);)
+    CHI_UNLESS(CHI_SYSTEM_HAS_INTERRUPT, pollTimer(proc);)
 
     /* Limits are used to pass arguments.
      * Thus we have to restore the old limits.
@@ -324,41 +496,38 @@ CONT(chiInterrupt, .na = CHI_VAARGS) {
             KNOWN_JUMP(chiHeapOverflow);
     }
 
-    // Ensure that there is enough stack space for restore frame
-    // restore frame: cont, a0, ..., a[na], size, chiRestoreCont
-    uint32_t na = chiContArgs(chiToCont(*SP), A(0), AUX.APPN);
-    newSL = CHI_MAX(newSL, SP + na + 4);
+    /* Ensure that there is enough stack space for restore frame
+     * restore frame: cont, a0, ..., a[na], size, chiRestoreCont
+     *
+     * For CHI_VAARGS frames the number of arguments must be stored in AUX.VAARGS!
+     */
+    uint32_t na = chiContInfo(chiToCont(AUX.YIELD))->na;
+    if (na == CHI_VAARGS)
+        na = AUX.VAARGS;
+    CHI_SETMAX(&newSL, SP + na + 3);
 
-    if (newSL != getStackLimit(proc->thread) && // resize requested
-        newSL > getStack(proc->thread)->base + rt->option.stack.max && // request to large
-        chiThreadInterruptible(proc->thread))
-        CHI_THROW_ASYNC_EX(proc, CHI_STACK_OVERFLOW);
+    if (newSL > SL) {
+        uint32_t ex = chiStackTryGrow(proc, SP, newSL);
+        if (ex != UINT32_MAX) {
+            ASET(0, chiFromUInt32(ex));
+            KNOWN_JUMP(throwAsyncException);
+        }
 
-    Chili newStack = chiStackTryResize(proc, SP, newSL);
-    if (!chiSuccess(newStack))
-        KNOWN_JUMP(chiHeapOverflow);
-
-    if (!chiIdentical(newStack, chiThreadStack(proc->thread))) {
-        chiStackDeactivate(proc, 0);
-        chiAtomicWrite(&chiToThread(proc->thread)->stack, newStack);
-        chiStackActivate(proc);
-        CHI_TTP(proc, .cont = chiToCont(SP[0]), .name = "stack resize", .thread = true);
+        RESTORE_STACK_REGS;
+        ASSERT_INVARIANTS;
     }
 
-    // Restore stack registers, stack might have been resized (Even if it is the same object!)
-    RESTORE_STACK_REGS;
-    ASSERT_INVARIANTS;
-
     if (!chiTriggered(&proc->trigger.interrupt))
-        JUMP_FN(SP[0]);
+        JUMP_FN(AUX.YIELD);
 
     // Create restore frame, save thread
-    CHI_ASSUME(na <= CHI_AMAX);
-    for (uint32_t i = 0; i <= na; ++i)
-        SP[i + 1] = A(i);
-    SP[na + 2] = chiFromUnboxed((ChiWord)na + 4);
-    SP[na + 3] = chiFromCont(&chiRestoreCont);
-    SP += na + 4;
+    CHI_ASSUME(na < CHI_AMAX);
+    SP[0] = AUX.YIELD;
+    for (uint32_t i = 0; i < na; ++i)
+        SP[i + 1] = AGET(i);
+    SP[na + 1] = chiFromUnboxed((ChiWord)na + 3);
+    SP[na + 2] = chiFromCont(&chiRestoreCont);
+    SP += na + 3;
     ASSERT_INVARIANTS;
 
     DEACTIVATE_THREAD;
@@ -376,136 +545,59 @@ CONT(chiInterrupt, .na = CHI_VAARGS) {
     KNOWN_JUMP(chiRestoreCont);
 }
 
-CONT(chiThunkForce, .na = 1) {
-    PROLOGUE_INVARIANTS(chiThunkForce);
-    LIMITS(.stack=3);
-
-    Chili clos = A(0), thk = A(1), fn = chiIdx(clos, 0);
-
-    /* Racing: Overwrite the closure entry point
-     * with the blackhole. This even works on 32 bit architectures,
-     * since then continuation pointer lives in the lower 32 bits.
-     * Therefore no reads of invalid addresses are possible.
-     * However on 32 bit architectures without prefix data,
-     * the upper 32 bits of the value are used to store the pointer
-     * to the continuation function. Therefore it could be possible to read
-     * an inconsistent continuation information/continuation function pointer.
-     * Fortunately this is not a problem, since the relevant continuation
-     * information (na and size) are equal for all thunk functions.
-     */
-    chiInit(clos, chiPayload(clos), chiFromCont(&chiThunkBlackhole));
-
-    SP[0] = fn;
-    SP[1] = thk;
-    SP[2] = chiFromCont(&thunkUpdateCont);
-    SP += 3;
-
-    JUMP_FN(fn);
+CONT(chiYieldClos, .na = CHI_VAARGS) {
+    PROLOGUE(chiYieldClos); // invariant violated since SL is modified
+    AUX.YIELD = chiIdx(AGET(0), 0);
+    KNOWN_JUMP(chiYield);
 }
 
-INTERN_CONT(chiThunkForward) {
-    PROLOGUE_INVARIANTS(chiThunkForward);
-    FORCE(chiIdx(A(0), 1));
-}
-
-STATIC_CONT(blackholeCont) {
-    PROLOGUE_INVARIANTS(blackholeCont);
-    --SP;
-    KNOWN_JUMP(chiThunkBlackhole);
-}
-
-INTERN_CONT(chiThunkBlackhole) {
-    PROLOGUE_INVARIANTS(chiThunkBlackhole);
-    LIMITS(.stack = 1);
-    Chili thunk = SP[-2], clos;
-    if (!chiThunkForced(thunk, &clos)) {
-        // Retry thunk if it has been restored to a non-blackhole
-        Chili fn = chiIdx(clos, 0);
-        if (chiToCont(fn) != &chiThunkBlackhole)
-            JUMP_FN(fn);
-        *SP++ = chiFromCont(&blackholeCont);
-        A(0) = CHI_CURRENT_RUNTIME->entryPoint.blackhole;
-        A(1) = CHI_FALSE;
-        APP(1);
-    }
-    SP -= 3;
-    RET(clos);
-}
-
-INTERN_CONT(chiShowAsyncException, .na = 1) {
-    PROLOGUE_INVARIANTS(chiShowAsyncException);
-    static const char* const asyncExceptionName[] =
-        { "HeapOverflow",
-          "StackOverflow",
-          "ThreadInterrupt",
-          "UserInterrupt" };
-    RET(chiStringFromRef(chiStringRef(asyncExceptionName[chiToUInt32(A(1))])));
+CONT(chiYieldCont, .na = CHI_VAARGS) {
+    PROLOGUE(chiYieldCont); // invariant violated since SL is modified
+    AUX.YIELD = SP[-1];
+    KNOWN_JUMP(chiYield);
 }
 
 CONT(chiStackTrace) {
     PROLOGUE_INVARIANTS(chiStackTrace);
-    RET(chiStackGetTrace(CHI_CURRENT_PROCESSOR, SP));
-}
-
-INTERN_CONT(chiIdentity, .na = 1) {
-    PROLOGUE_INVARIANTS(chiIdentity);
-    RET(A(1));
-}
-
-STATIC_CONT(showUnhandledCont, .size = 2) {
-    PROLOGUE_INVARIANTS(showUnhandledCont);
-    SP -= 2;
-    Chili name = SP[0], except = A(0);
-    chiSinkFmt(chiStderr, "Unhandled exception occurred:\n%S: %S\n",
-               chiStringRef(&name), chiStringRef(&except));
-    chiExit(1);
-    RET(CHI_FALSE);
-}
-
-INTERN_CONT(chiEntryPointUnhandledDefault, .na = 2) {
-    PROLOGUE_INVARIANTS(chiEntryPointUnhandledDefault);
-    LIMITS(.stack = 2);
-
-    const Chili except = A(1);
-    const Chili info = chiIdx(except, 0);
-    const Chili identifier = chiIdx(info, 0);
-    const Chili name = chiIdx(identifier, 1);
-
-    SP[0] = name;
-    SP[1] = chiFromCont(&showUnhandledCont);
-    SP += 2;
-
-    A(0) = chiIdx(info, 1);
-    A(1) = chiIdx(except, 1);
-    APP(1);
+    UNDEF_ARGS(0);
+    ASET(0, chiStackGetTrace(CHI_CURRENT_PROCESSOR, SP));
+    RET;
 }
 
 CONT(chiHeapOverflow) {
     PROLOGUE_INVARIANTS(chiHeapOverflow);
-    CHI_THROW_ASYNC_EX(CHI_CURRENT_PROCESSOR, CHI_HEAP_OVERFLOW);
+    UNDEF_ARGS(0);
+    ASET(0, chiFromUInt32(CHI_HEAP_OVERFLOW));
+    KNOWN_JUMP(throwAsyncException);
 }
 
-CONT(chiExceptionCatch, .na = 1) {
+CONT(chiExceptionCatch, .na = 2) {
     PROLOGUE_INVARIANTS(chiExceptionCatch);
-    LIMITS(.stack=3);
+    LIMITS_PROC(.stack=3);
+    Chili run = AGET(0), handler = AGET(1);
+    UNDEF_ARGS(0);
 
-    SP[0] = A(1);
-    SP[1] = chiFromCont(&catchCont);
+    SP[0] = handler;
+    SP[1] = chiFromCont(&chiExceptionCatchCont);
     SP += 2;
 
-    A(1) = CHI_FALSE;
+    ASET(0, run);
+    ASET(1, CHI_FALSE);
     APP(1);
-}
-
-CONT(chiMigrate) {
-    PROLOGUE_INVARIANTS(chiMigrate);
-    chiProcessorRequest(CHI_CURRENT_PROCESSOR, CHI_REQUEST_MIGRATE);
-    RET(CHI_FALSE);
 }
 
 STATIC_CONT(returnUnit) {
     PROLOGUE_INVARIANTS(returnUnit);
-    RET(CHI_FALSE);
+    ASET(0, CHI_FALSE);
+    RET;
+}
+
+CONT(chiPromoteAll) {
+    PROLOGUE_INVARIANTS(chiPromoteAll);
+    UNDEF_ARGS(0);
+    chiProcessorRequest(CHI_CURRENT_PROCESSOR, CHI_REQUEST_PROMOTE);
+    AUX.YIELD = chiFromCont(&returnUnit);
+    KNOWN_JUMP(chiYield); // Enter interrupt, execute garbage collector
 }
 
 static void parkEnd(ChiProcessor* proc) {
@@ -528,7 +620,7 @@ static void parkBegin(ChiProcessor* proc) {
 #endif
 _Static_assert(CHI_CAT(CHECK_CALLCONV_,CHI_CALLCONV), "Invalid callconv for wasm");
 _Noreturn void chiWasmContinue(void) {
-    _PROLOGUE(0);
+    _PROLOGUE;
     ChiProcessor* proc = CHI_CURRENT_PROCESSOR;
     parkEnd(proc);
     chiEvent0(proc, THREAD_RUN_BEGIN);
@@ -537,6 +629,7 @@ _Noreturn void chiWasmContinue(void) {
 
 CONT(chiProcessorPark) {
     PROLOGUE_INVARIANTS(chiProcessorPark);
+    UNDEF_ARGS(0);
     ChiProcessor* proc = CHI_CURRENT_PROCESSOR;
     chiEvent0(proc, THREAD_RUN_END);
     parkBegin(proc);
@@ -559,18 +652,21 @@ static void park(ChiProcessor* proc) {
 
 CONT(chiProcessorPark) {
     PROLOGUE_INVARIANTS(chiProcessorPark);
+    UNDEF_ARGS(0);
     PROTECT_VOID(park(CHI_CURRENT_PROCESSOR));
 }
 #endif
 
-CONT(chiProcessorInitLocal) {
+CONT(chiProcessorInitLocal, .na = 1) {
     PROLOGUE_INVARIANTS(chiProcessorInitLocal);
+    Chili local = AGET(0);
+    UNDEF_ARGS(0);
     CHI_ASSERT(!chiTrue(AUX.PLOCAL));
     ChiProcessor* proc = CHI_CURRENT_PROCESSOR;
-    Chili local = A(0);
     chiPromoteLocal(proc, &local);
     AUX.PLOCAL = proc->local = local;
-    RET(CHI_FALSE);
+    ASET(0, CHI_FALSE);
+    RET;
 }
 
 _Noreturn void chiProcessorEnter(ChiProcessor* proc) {
@@ -578,7 +674,7 @@ _Noreturn void chiProcessorEnter(ChiProcessor* proc) {
     proc->reg.aux = &AUX;
     proc->reg.hl = &HLRW;
     CHI_IF(CHI_TRACEPOINTS_CONT_ENABLED, proc->worker->tp = &AUX.TRACEPOINT);
-    chiHookRun(CHI_HOOK_PROC_START, proc);
+    chiHookProcRun(proc, START);
     AUX.PROC = chiFromPtr(proc);
     CHI_IF(CHI_FNLOG_ENABLED, AUX.FNLOG = chiEventEnabled(proc, FNLOG_CONT);)
     chiEvent0(proc, PROC_RUN_BEGIN);
@@ -588,50 +684,20 @@ _Noreturn void chiProcessorEnter(ChiProcessor* proc) {
     FIRST_JUMP(returnUnit);
 }
 
-#define APP_BODY(args, arity)                           \
-    CHI_ASSERT(arity < CHI_AMAX);                       \
-    if (args < arity) {                                 \
-        /*LIMITS(.heap=args + 2);*/                     \
-        LIMITS(.heap=CHI_AMAX + 2);                     \
-        PARTIAL(args, arity);                           \
-    }                                                   \
-    if ((__builtin_constant_p(args) ? args : 2) > 1 && args > arity) {  \
-        /*LIMITS(.stack=args - arity + 2);*/            \
-        LIMITS(.stack=CHI_AMAX + 2);                    \
-        OVERAPP(args, arity);                           \
-    }                                                   \
-    JUMP_FN0
-
-#define DEFINE_APP(args)                                \
-    CONT(chiApp##args, .na = args) {                    \
-        PROLOGUE_INVARIANTS(chiApp##args);              \
-        const size_t arity = chiFnArity(A(0));          \
-        APP_BODY(args, arity);                          \
-    }
-
-DEFINE_APP(1)
-DEFINE_APP(2)
-DEFINE_APP(3)
-DEFINE_APP(4)
-
-CONT(chiAppN, .type = CHI_FRAME_APPN, .na = CHI_VAARGS) {
-    PROLOGUE_INVARIANTS(chiAppN);
-    const size_t args = AUX.APPN, arity = chiFnArity(A(0));
-    CHI_ASSERT(args < CHI_AMAX);
-    APP_BODY(args, arity);
-}
-
-#define OVERAPP_BODY(rest)                      \
+#define OVERAPP_BODY(fn, rest)                  \
     CHI_ASSUME(rest <= CHI_AMAX);               \
+    ASET(0, fn);                                \
     for (size_t i = 0; i < rest; ++i)           \
-        A(i + 1) = SP[i];                       \
+        ASET(i + 1, SP[i]);                     \
     APP(rest)
 
-#define DEFINE_OVERAPP(rest)                    \
-    CONT(chiOverApp##rest, .size = rest + 1) {  \
-        PROLOGUE_INVARIANTS(chiOverApp##rest);  \
-        SP -= rest + 1;                         \
-        OVERAPP_BODY(rest);                     \
+#define DEFINE_OVERAPP(rest)                                    \
+    STATIC_CONT(overApp##rest, .na = 1, .size = rest + 1) {    \
+        PROLOGUE_INVARIANTS(overApp##rest);                     \
+        Chili fn = AGET(0);                                     \
+        UNDEF_ARGS(0);                                          \
+        SP -= rest + 1;                                         \
+        OVERAPP_BODY(fn, rest);                                 \
     }
 
 DEFINE_OVERAPP(1)
@@ -639,11 +705,16 @@ DEFINE_OVERAPP(2)
 DEFINE_OVERAPP(3)
 DEFINE_OVERAPP(4)
 
-CONT(chiOverAppN, .size = CHI_VASIZE) {
-    PROLOGUE_INVARIANTS(chiOverAppN);
+static const ChiCont overAppTable[] =
+    { &overApp1, &overApp2, &overApp3, &overApp4 };
+
+STATIC_CONT(overAppN, .na = 1, .size = CHI_VASIZE) {
+    PROLOGUE_INVARIANTS(overAppN);
+    Chili fn = AGET(0);
+    UNDEF_ARGS(0);
     const size_t rest = (size_t)chiToUnboxed(SP[-2]) - 2;
     SP -= rest + 2;
-    OVERAPP_BODY(rest);
+    OVERAPP_BODY(fn, rest);
 }
 
 #define PARTIAL_BODY(args, delta)               \
@@ -651,30 +722,96 @@ CONT(chiOverAppN, .size = CHI_VASIZE) {
     CHI_ASSERT(chiSize(clos) - 2 == args);      \
     CHI_ASSUME(delta <= CHI_AMAX);              \
     for (size_t i = delta; i > 0; --i)          \
-        A(args + i) = A(i);                     \
+        ASET(args + i, AGET(i));                \
     CHI_ASSUME(args <= CHI_AMAX - 1);           \
     for (size_t i = 0; i <= args; ++i)          \
-        A(i) = chiIdx(clos, i + 1);             \
-    JUMP_FN0
+        ASET(i, chiIdx(clos, i + 1));           \
+    JUMP_FN(chiIdx(AGET(0), 0))
 
 #define DEFINE_PARTIAL(args, arity)                             \
-    CONT(chiPartial##args##of##arity, .na = arity - args) {     \
-        PROLOGUE_INVARIANTS(chiPartial##args##of##arity);       \
-        const Chili clos = A(0);                                \
+    STATIC_CONT(partial##args##of##arity, .na = arity - args + 1) {    \
+        PROLOGUE_INVARIANTS(partial##args##of##arity);          \
         const size_t delta = arity - args;                      \
+        UNDEF_ARGS(delta + 1);                                  \
+        const Chili clos = AGET(0);                             \
         PARTIAL_BODY(args, delta);                              \
     }
 
 DEFINE_PARTIAL(1, 2)
 DEFINE_PARTIAL(1, 3)
 DEFINE_PARTIAL(1, 4)
+DEFINE_PARTIAL(1, 5)
 DEFINE_PARTIAL(2, 3)
 DEFINE_PARTIAL(2, 4)
+DEFINE_PARTIAL(2, 5)
 DEFINE_PARTIAL(3, 4)
+DEFINE_PARTIAL(3, 5)
+DEFINE_PARTIAL(4, 5)
 
-CONT(chiPartialNofM, .na = CHI_VAARGS) {
-    PROLOGUE_INVARIANTS(chiPartialNofM);
-    const Chili clos = A(0);
+STATIC_CONT(partialNofM, .na = CHI_VAARGS) {
+    PROLOGUE_INVARIANTS(partialNofM);
+    const Chili clos = AGET(0);
     const size_t args = chiSize(clos) - 2, delta = chiFnArity(clos);
     PARTIAL_BODY(args, delta);
+}
+
+#define CHI_PARTIAL_TABLE(args, arity, ...)                             \
+    static const ChiCont partialTable##args[CHI_AMAX - args - 1] =      \
+        { __VA_ARGS__, [arity - args ... CHI_AMAX - args - 2] = &partialNofM };
+CHI_PARTIAL_TABLE(1, 5, &partial1of2, &partial1of3, &partial1of4, &partial1of5)
+CHI_PARTIAL_TABLE(2, 5, &partial2of3, &partial2of4, &partial2of5)
+CHI_PARTIAL_TABLE(3, 5, &partial3of4, &partial3of5)
+CHI_PARTIAL_TABLE(4, 5, &partial4of5)
+#undef CHI_PARTIAL_TABLE
+
+#define APP_BODY(args, arity, partial)                                  \
+    CHI_ASSERT(arity < CHI_AMAX);                                       \
+    if (args < arity) {                                                 \
+        /*LIMITS_PROC(.heap=args + 2);*/                                \
+        LIMITS_PROC(.heap=CHI_AMAX + 2);                                \
+        NEW(clos, CHI_FN(arity - args), args + 2);                      \
+        NEW_INIT(clos, 0, chiFromCont(partial));                        \
+        for (size_t i = 0; i <= args; ++i)                              \
+            NEW_INIT(clos, i + 1, AGET(i));                             \
+        UNDEF_ARGS(0);                                                  \
+        ASET(0, clos);                                                  \
+        RET;                                                            \
+    }                                                                   \
+    if ((__builtin_constant_p(args) ? args : 2) > 1 && args > arity) {  \
+        /*LIMITS_PROC(.stack=rest + 2);*/                               \
+        LIMITS_PROC(.stack=CHI_AMAX + 2);                               \
+        const size_t rest = args - arity;                               \
+        for (size_t i = 0; i < rest; ++i) {                             \
+            SP[i] = AGET(1 + arity + i);                                \
+            AUNDEF(1 + arity + i);                                      \
+        }                                                               \
+        SP += rest;                                                     \
+        if ((__builtin_constant_p(args) ? args - 1 : rest) - 1 < CHI_DIM(overAppTable)) { \
+            *SP++ = chiFromCont(overAppTable[rest - 1]);                \
+        } else {                                                        \
+            *SP++ = _chiFromUnboxed(rest + 2);                          \
+            *SP++ = chiFromCont(&overAppN);                             \
+        }                                                               \
+    }                                                                   \
+    JUMP_FN(chiIdx(AGET(0), 0))
+
+#define DEFINE_APP(args)                                \
+    CONT(chiApp##args, .na = args + 1) {               \
+        PROLOGUE_INVARIANTS(chiApp##args);              \
+        UNDEF_ARGS(args + 1);                           \
+        const size_t arity = chiFnArity(AGET(0));       \
+        APP_BODY(args, arity,                           \
+                 partialTable##args[arity - args - 1]); \
+    }
+
+DEFINE_APP(1)
+DEFINE_APP(2)
+DEFINE_APP(3)
+DEFINE_APP(4)
+
+CONT(chiAppN, .na = CHI_VAARGS) {
+    PROLOGUE_INVARIANTS(chiAppN);
+    const size_t args = AUX.VAARGS - 1U, arity = chiFnArity(AGET(0));
+    CHI_ASSERT(args < CHI_AMAX);
+    APP_BODY(args, arity, &partialNofM);
 }

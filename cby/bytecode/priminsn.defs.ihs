@@ -1,13 +1,41 @@
 {{import Chili.Core.PrimInfo-}}
 {{import Chili.Common.Prim-}}
 {{import Chili.Emit.Native.FFI-}}
-{{import Data.List (intercalate)-}}
+{{import Data.List (intercalate,delete)-}}
 {{import Intro (fromString, convertString)-}}
 {{import qualified Chili.Emit.Native.Syntax as C-}}
 {{import qualified Chili.Pretty.Printer as Printer-}}
 
 {{-for_ bytecodePrimOps $ \op ->}}
-{{-if PrimTail `elem` primFlags op then-}}
+{{-if op == Prim_lazyForce then}}
+// Force thunk
+lazyForce r8:thk {
+    /* This is basically the same code as in cont.h (FORCE macro),
+     * optimized for the interpreter reentry.
+     * Furthermore we push the update frame here instead of in the continuation.
+     */
+    if ((CHI_MARK_COLLAPSE_ENABLED ||
+         CHI_SCAV_COLLAPSE_ENABLED) &&
+        !_chiRefType(thk, CHI_THUNK)) {
+        Chili v0 = thk;
+        %goto ret1;
+    }
+
+    Chili fn = chiFieldRead(&chiToThunk(thk)->cont);
+    if (chiToCont(fn) != &interpThunk) {
+        PUSH_UPDATE(thk);
+        ASET(0, thk);
+        INSN_LEAVE;
+        JUMP_FN(fn);
+    }
+
+    LEAVE;
+    CURRFN = thk;
+    REG = SP;
+    IP = chiToIP(chiToCbyFn(thk)->ip);
+    ENTER(true);
+}
+{{else if PrimTail `elem` primFlags op then-}}
 // Primitive in tail position
 {{=drop 5 $ show op}}{{-for_ [0..primArity op - 1] $ \i ->}} r8:a{{=i}}{{end}} {
     INSN_LEAVE;
@@ -16,7 +44,7 @@
 {{else-}}
 // Inline primitive
 {{=drop 5 $ show op}} w8:res{{-for_ [0..primArity op - 1] $ \i ->}} r8:a{{=i}}{{end}} {
-    {{=convertString $ Printer.render $ Printer.pretty $ fst $ inlinePrim (C.Assign (C.UnOp C.Deref (fromString "res")) . flip packFFI chiliType) op (map (\i -> (fromString $ "a" <> show i, toNamedType FFI_Chili)) [0..primArity op - 1]) :: String}}
+    {{=convertString $ Printer.render $ Printer.pretty $ fst $ inlinePrim (\e t -> C.Assign (C.UnOp C.Deref (fromString "res")) $ ffiCast e t chiliType) op (map (\i -> (fromString $ "a" <> show i, chiliType)) [0..primArity op - 1]) :: String}}
 }
 {{end-}}
 {{-end-}}

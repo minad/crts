@@ -19,13 +19,15 @@ enum {
 
 /**
  * Chili object used for interpreted functions. The format
- * of the object must be compatible with the normal runtime
- * functions chiApp etc. The first field holds a pointer
- * to the continuation associated with the function.
+ * of the object must be compatible with ChiThunk.
+ * The first field holds a pointer to the continuation.
  * Here this pointer points to the interpreter.
+ * Unfortunately we waste one word (val) for function closures,
+ * but doing that keeps things simpler than distinguishing
+ * thunks and functions in the interpreter.
  */
 typedef struct CHI_PACKED CHI_WORD_ALIGNED {
-    Chili fn, module, ip, clos[];
+    Chili cont, val, module, ip, clos[];
 } CbyFn;
 
 /**
@@ -39,20 +41,25 @@ typedef const struct {
     ChiCont    cont;
     CbyRewrite rewrite;
     CbySetup   setup;
-    ChiHookFn  procStart, procStop;
+    ChiHookFn(ChiProcessor) procStart, procStop;
 } CbyBackend;
 
+typedef struct CbyArchive_ CbyArchive;
+
+/**
+ * Hash table used to store loaded modules
+ */
 typedef struct {
-    void* handle;
-    char* name;
-} CbyArchiveCache;
+    size_t used, capacity;
+    CbyArchive* entry;
+} CbyArchiveHash;
 
 /**
  * Module loader
  */
 typedef struct {
     char* path;
-    CHI_IF(CBY_ARCHIVE_ENABLED, CbyArchiveCache cache;)
+    CHI_IF(CBY_ARCHIVE_ENABLED, CbyArchiveHash cache;)
 } CbyModuleLoader;
 
 /**
@@ -64,7 +71,7 @@ typedef struct {
     CHI_IF(CHI_EVENT_CONVERT_ENABLED, ChiEventFormat evconv;)
     CHI_IF(CBY_DISASM_ENABLED, bool disasm;)
     CHI_IF(CBY_LSMOD_ENABLED, bool lsmod;)
-    CHI_IF(CBY_BACKEND_DUMP_ENABLED, bool dumpFile;)
+    CHI_IF(CBY_BACKEND_DUMP_ENABLED, bool dumpFile; size_t dumpBuffer;)
 } CbyOption;
 CHI_WARN_ON
 
@@ -90,7 +97,7 @@ struct CbyInterpreter_ {
  * Module object (byteocode/native)
  */
 typedef struct CHI_PACKED CHI_WORD_ALIGNED {
-    Chili name, init, exports, imports;
+    Chili name, init, main, imports;
 } CbyModule;
 
 // We keep the handle to the shared object
@@ -111,7 +118,6 @@ CBY_OBJECT(FFI, FFI, void *fn; CbyDyn *handle)
 #endif
 
 CHI_INTERN CHI_WU bool cbyLibrary(const char*);
-CHI_INTERN CHI_WU int32_t cbyModuleExport(Chili, const char*);
 CHI_INTERN CHI_WU Chili cbyModuleLoadByName(ChiProcessor*, ChiStringRef);
 CHI_INTERN CHI_WU Chili cbyModuleLoadByNameOrFile(ChiProcessor*, const char*);
 CHI_INTERN void cbyAddPath(CbyModuleLoader*, ChiStringRef);
@@ -150,8 +156,20 @@ CHI_INL CbyCode* cbyInterpModuleCode(Chili c) {
     return cbyCode(chiToCbyInterpModule(c)->code);
 }
 
+CHI_INL CHI_WU Chili chiFromIP(const CbyCode* p) {
+    return chiFromPtr(p);
+}
+
+CHI_INL CHI_WU const CbyCode* chiToIP(Chili c) {
+    return (const CbyCode*)chiToPtr(c);
+}
+
+CHI_INL CHI_WU bool cbyFnOrThunk(ChiType t) {
+    return (t >= CHI_FIRST_FN && t <= CHI_LAST_FN) || t == CHI_THUNK;
+}
+
 CHI_INL CbyFn* chiToCbyFn(Chili c) {
-    CHI_ASSERT(chiFnOrThunk(chiType(c)));
+    CHI_ASSERT(cbyFnOrThunk(chiType(c)));
     return (CbyFn*)chiRawPayload(c);
 }
 
@@ -159,12 +177,12 @@ CHI_INL size_t cbyFnClos(Chili c) {
     return chiSize(c) - CHI_SIZEOF_WORDS(CbyFn);
 }
 
-CHI_INL CHI_WU Chili chiFromIP(const CbyCode* p) {
-    return chiFromPtr(p);
-}
-
-CHI_INL CHI_WU const CbyCode* chiToIP(Chili c) {
-    return (const CbyCode*)chiToPtr(c);
+CHI_INL CHI_WU uint32_t cbyFnOrThunkArity(Chili c) {
+    ChiType t = chiType(c);
+    CHI_ASSERT(cbyFnOrThunk(t));
+    uint32_t a = t == CHI_THUNK ? 0 : t - CHI_FIRST_FN + 1;
+    CHI_ASSERT(({ CbyFn* f = chiToCbyFn(c); uint32_t n = chiContInfo(chiToCont(f->cont))->na; n == CHI_VAARGS || n == a + 1; }));
+    return a;
 }
 
 CHI_EXTERN const char* const cbyOpName[];

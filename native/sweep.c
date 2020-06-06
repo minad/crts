@@ -26,7 +26,7 @@ static bool pageSweep(ChiHeapPage* page, ChiObject* start, ChiObject* obj,
                       ChiSweepClassStats* stats) {
     CHI_NOWARN_UNUSED(stats);
     bool alive = false;
-    uint32_t objectSize = page->objectSize;
+    uint32_t objectSize = CHI_UN(HeapPage, *page);
     // Sweep from the end in order to obtain a free list with increasing addresses
     while (obj >= start) {
         if (chiObjectGarbage(markState, obj)) {
@@ -49,26 +49,26 @@ static void segmentSweep(ChiHeapSegment* s, ChiMarkState markState,
     while (s->sweepIndex > 0 && chiTimeoutTick(timeout)) {
         --s->sweepIndex;
         ChiHeapPage* page = s->firstPage + s->sweepIndex;
-        if (page->nextIndex & CHI_HEAP_PAGE_FREE) {
+        if (CHI_UN(HeapPage, *page) & CHI_HEAP_PAGE_FREE) {
             // insert unused page in list of free pages
-            page->nextIndex = s->freePageList ? ((uint32_t)(s->freePageList - s->firstPage) | CHI_HEAP_PAGE_FREE) : UINT32_MAX;
+            CHI_UN(HeapPage, *page) = s->freePageList ? ((uint32_t)(s->freePageList - s->firstPage) | CHI_HEAP_PAGE_FREE) : UINT32_MAX;
             s->freePageList = page;
         } else {
-            uint32_t objectSize = page->objectSize,
+            uint32_t objectSize = CHI_UN(HeapPage, *page),
                 bin = cls->linear
                 ? objectSize - _CHI_OBJECT_HEADER_SIZE - 1
-                : chiLog2(objectSize - _CHI_OBJECT_HEADER_SIZE);
+                : chiLog2Floor(objectSize - _CHI_OBJECT_HEADER_SIZE);
             CHI_ASSERT(bin <= cls->bins);
 
             ChiObject* freeObjectList = s->freeObjectList[bin],
                 *start = (ChiObject*)s->chunk->start + s->sweepIndex * cls->pageWords,
-                *last = start + (cls->pageWords / objectSize) * objectSize - objectSize;
+                *last = start + CHI_FLOOR(cls->pageWords, objectSize) - objectSize;
             if (pageSweep(page, start, last, &freeObjectList, markState, stats)) {
                 s->freeObjectList[bin] = freeObjectList;
                 s->alive = true;
             } else {
                 // insert unused page in list of free pages
-                page->nextIndex = s->freePageList ? ((uint32_t)(s->freePageList - s->firstPage) | CHI_HEAP_PAGE_FREE) : UINT32_MAX;
+                CHI_UN(HeapPage, *page) = s->freePageList ? ((uint32_t)(s->freePageList - s->firstPage) | CHI_HEAP_PAGE_FREE) : UINT32_MAX;
                 s->freePageList = page;
             }
         }

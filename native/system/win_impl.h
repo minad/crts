@@ -36,15 +36,7 @@ static ChiNanos filetimeToNanos(FILETIME f) {
     return chiNanos((((uint64_t)f.dwHighDateTime << 32) | f.dwLowDateTime) * 100);
 }
 
-ChiNanos chiClockCpu(void) {
-    FILETIME creation, exit, system, user;
-    if (!GetProcessTimes(GetCurrentProcess(), &creation, &exit,
-                         &system, &user))
-        winErr("GetProcessTimes");
-    return chiNanosAdd(filetimeToNanos(system), filetimeToNanos(user));
-}
-
-ChiNanos chiClockMonotonicFine(void) {
+ChiNanos chiClockFine(void) {
     LARGE_INTEGER counter;
     if (!QueryPerformanceCounter(&counter))
         winErr("QueryPerformanceCounter");
@@ -52,16 +44,16 @@ ChiNanos chiClockMonotonicFine(void) {
 }
 
 ChiNanos chiCondTimedWait(ChiCond* c, ChiMutex* m, ChiNanos ns) {
-    ChiNanos begin = chiClockMonotonicFine();
+    ChiNanos begin = chiClockFine();
     if (!SleepConditionVariableSRW(CHI_UNP(Cond, c), CHI_UNP(Mutex, m), (DWORD)CHI_UN(Millis, chiNanosToMillis(ns)), 0)
         && GetLastError() != ERROR_TIMEOUT)
         winErr("SleepConditionVariableCS");
-    return chiNanosDelta(chiClockMonotonicFine(), begin);
+    return chiNanosDelta(chiClockFine(), begin);
 }
 
 static WINAPI BOOL ctrlHandler(DWORD type) {
     if (type == CTRL_C_EVENT) {
-        dispatchSig(type == CTRL_C_EVENT ? CHI_SIG_USERINTERRUPT : CHI_SIG_DUMPSTACK);
+        dispatchSig(type == CTRL_C_EVENT ? CHI_SIG_USERINTERRUPT : CHI_SIG_DUMP);
         return TRUE;
     }
     return FALSE;
@@ -178,7 +170,7 @@ uint64_t chiPhysMemory(void) {
     MEMORYSTATUSEX mem = { .dwLength = sizeof (mem) };
     if (!GlobalMemoryStatusEx(&mem))
         winErr("GlobalMemoryStatusEx");
-    return mem.ullTotalPhys / CHI_MiB(1) * CHI_MiB(1);
+    return CHI_FLOOR(mem.ullTotalPhys, CHI_MiB(1));
 }
 
 bool chiFilePerm(const char* file, int32_t CHI_UNUSED(perm)) {
@@ -206,7 +198,8 @@ void chiSystemStats(ChiSystemStats* a) {
     a->cpuTimeUser = filetimeToNanos(user);
     a->cpuTimeSystem = filetimeToNanos(system);
     a->pageFault = mem.PageFaultCount;
-    a->residentSize = mem.PeakWorkingSetSize; // TODO: Current RSS!
+    a->currResidentSize = mem.WorkingSetSize;
+    a->maxResidentSize = mem.PeakWorkingSetSize;
 }
 
 bool chiFileRead(ChiFile file, void* buf, size_t size, size_t* nread) {

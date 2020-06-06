@@ -5,6 +5,7 @@
 #include "instrument/fncall.h"
 #include "native/location.h"
 #include "native/sink.h"
+#include "native/strutil.h"
 
 #if CBY_BACKEND_CALLS_ENABLED
 
@@ -13,13 +14,13 @@ typedef struct {
     char*    name;
 } FnResultRecord;
 
-#define HT_HASH            FnResultHash
-#define HT_ENTRY           FnResultRecord
-#define HT_PREFIX          fnresultHash
-#define HT_KEY(e)          chiStringRef(e->name)
-#define HT_EXISTS(e)       e->name
-#define HT_KEYEQ(a, b)     chiStringRefEq(a, b)
-#define HT_HASHFN          chiHashStringRef
+#define HT_HASH    FnResultHash
+#define HT_ENTRY   FnResultRecord
+#define HT_PREFIX  fnresultHash
+#define HT_KEY(e)  e->name
+#define HT_KEYEQ   streq
+#define HT_KEYTYPE const char*
+#define HT_HASHFN  chiHashCString
 #include "native/generic/hashtable.h"
 
 #define S_ELEM       FnResultRecord
@@ -75,10 +76,10 @@ static void addFnStats(ChiStats* stats, uint32_t rows, fncallData* data) {
         ChiLocInfo loc;
         cbyReadLocation(r->ip, &loc);
         chiLocFmt(nameSink, &loc, CHI_LOCFMT_FN | CHI_LOCFMT_FILESEP);
-        ChiStringRef name = chiSinkString(nameSink);
+        const char* name = chiSinkCString(nameSink);
         FnResultRecord* fn;
         if (fnresultHashCreate(&resultHash, name, &fn))
-            fn->name = chiCStringUnsafeDup(name);
+            fn->name = chiCStringDup(name);
         fn->count += r->count;
         fn->cycles += r->cycles;
         totalCount  += r->count;

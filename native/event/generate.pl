@@ -568,12 +568,18 @@ while ($defs =~ /(DURATION|INSTANT)\s+(\w+)\s+(\w+)\s+(\w+)\s+([^\s]+)/g) {
 
             my $n = $count - 2;
             $chi_stub_types .= "${name}_BEGIN : IO Unit\n";
+            $chi_stub_types .= "${name}_BEGIN_ENABLED : IO Bool\n";
             $chi_stub_impl_native .= "${name}_BEGIN = whenEnabled $n (foreign (implicit IO Unit) \"chiEvent_${name}_BEGIN\")\n";
+            $chi_stub_impl_native .= "${name}_BEGIN_ENABLED = enabled $n\n";
             $chi_stub_impl_nop .= "${name}_BEGIN = skip applicativeIO\n";
+            $chi_stub_impl_nop .= "${name}_BEGIN_ENABLED = applicativeIO.pure False\n";
 
             $chi_stub_types .= "${name}_END : @{[join ' -> ', @chi_argtypes]}\n";
+            $chi_stub_types .= "${name}_END_ENABLED : IO Bool\n";
             $chi_stub_impl_native .= "${name}_END @{[join ' ', @chi_args]} = whenEnabled $n (foreign (implicit (@{[join ' -> ', @chi_argtypes]})) \"chiEvent_${name}_END\" @{[join ' ', @chi_args]})\n";
+            $chi_stub_impl_native .= "${name}_END_ENABLED = enabled $n\n";
             $chi_stub_impl_nop .= "${name}_END$nop_args = skip applicativeIO\n";
+            $chi_stub_impl_nop .= "${name}_END_ENABLED = applicativeIO.pure False\n";
         } else {
             $c_stub_header_enabled .= "CHI_EXPORT void chiEvent_${name}(@{[join ', ', @header_args_enabled]});\n";
             $c_stub_header_disabled .= "CHI_EXPORT_INL void chiEvent_${name}(@{[join ', ', @header_args_disabled]}) {}\n";
@@ -581,8 +587,11 @@ while ($defs =~ /(DURATION|INSTANT)\s+(\w+)\s+(\w+)\s+(\w+)\s+([^\s]+)/g) {
 
             my $n = $count - 1;
             $chi_stub_types .= "${name} : @{[join ' -> ', @chi_argtypes]}\n";
+            $chi_stub_types .= "${name}_ENABLED : IO Bool\n";
             $chi_stub_impl_native .= "${name} @{[join ' ', @chi_args]} = whenEnabled $n (foreign (implicit (@{[join ' -> ', @chi_argtypes]})) \"chiEvent_${name}\" @{[join ' ', @chi_args]})\n";
+            $chi_stub_impl_native .= "${name}_ENABLED = enabled $n\n";
             $chi_stub_impl_nop .= "${name}$nop_args = skip applicativeIO\n";
+            $chi_stub_impl_nop .= "${name}_ENABLED = applicativeIO.pure False\n";
         }
     }
 }
@@ -640,16 +649,16 @@ write_text "lib/System/Runtime/Event.chi",
 use Base/Applicative open
 use Base/Bool open
 use Base/Int open
-use Base/Int/Small open
 use Base/String open
+use Base/UInt32 open
 use Base/Unit open
 use Buffer/IO open
-use Foreign/Runtime open
-use Foreign/Types open
 use IO/Types open
-use IO/Unsafe as UnsafeIO
+use unsafe Foreign/Runtime open
+use unsafe Foreign/Types open
+use unsafe IO/Unsafe as UnsafeIO
 
-module System/Runtime/Event where
+trusted module System/Runtime/Event where
 
 $chi_stub_types
 #if target.native
@@ -663,10 +672,14 @@ filterEnabled : CPtr (CConst CVoid) -> UInt32 -> IO Bool
 filterEnabled = foreign "chiEventFilterEnabled"
 
 private
+enabled : Int -> IO Bool
+enabled n = filterEnabled filter (downsizeIntUInt32.downsize' n)
+
+private
 whenEnabled : Int -> IO Unit -> IO Unit
 whenEnabled n m = do
-  x <- filterEnabled filter (downsizeIntUInt32.downsize n)
-  when applicativeIO x (delay m)
+  x <- enabled n
+  when applicativeIO x m
 
 $chi_stub_impl_native
 #else
@@ -696,7 +709,7 @@ enum {
     _CHI_EVENT_MAXLEN = $maxlen,
 };
 
-#define _CHI_EVENT_FILTER_SIZE CHI_DIV_ROUNDUP(_CHI_EVENT_COUNT, 8 * sizeof (uintptr_t))
+#define _CHI_EVENT_FILTER_SIZE CHI_DIV_CEIL(_CHI_EVENT_COUNT, 8 * sizeof (uintptr_t))
 
 typedef enum {
 $enum} ChiEvent;

@@ -2,12 +2,13 @@
 #include "cby.h"
 #include "native/error.h"
 #include "native/sink.h"
+#include "native/strutil.h"
 
-static ChiOptionResult addPath(const ChiOptionParser* CHI_UNUSED(parser),
-                               const ChiOptionList* list,
-                               const ChiOption* CHI_UNUSED(desc),
+static ChiOptionResult addPath(ChiOptionParser* CHI_UNUSED(parser),
+                               ChiOptionAssoc* assoc,
+                               ChiOption* CHI_UNUSED(desc),
                                const void* val) {
-    cbyAddPath(&((CbyInterpreter*)list->target)->ml, chiStringRef((const char*)val));
+    cbyAddPath(&((CbyInterpreter*)assoc->target)->ml, chiStringRef((const char*)val));
     return CHI_OPTRESULT_OK;
 }
 
@@ -29,27 +30,23 @@ static const CbyBackend* backends[] = { FOREACH_BACKEND(_BACKEND,) };
 #undef _BACKEND
 
 #define CHI_OPT_STRUCT CbyInterpreter
-static const ChiOption interpOptionList[] = {
-#if CHI_EVENT_CONVERT_ENABLED
 #define _EVFMT(N, n) #n
-    CHI_OPT_TITLE("EVENT CONVERTER")
-    CHI_OPT_CHOICE(option.evconv, "evconv", "Output format", CHI_FOREACH_EVENT_FORMAT(_EVFMT, ", "))
-#undef _EVFMT
-#endif
-    CHI_OPT_TITLE("INTERPRETER")
-    CHI_OPT_CB(STRING, addPath, "path", "Search path")
-    CHI_IF(CBY_LSMOD_ENABLED, CHI_OPT_FLAG(option.lsmod, "lsmod", "List modules on path"))
-    CHI_IF(CBY_DISASM_ENABLED, CHI_OPT_FLAG(option.disasm, "asm", "Print module bytecode assembly"))
 #define _BACKEND(s, n) s #n
-    CHI_OPT_CHOICE(backend.id, "backend", "Interpreter backend", FOREACH_BACKEND(_BACKEND, ", "))
+CHI_IF(CHI_EVENT_CONVERT_ENABLED,
+       static CHI_OPT_GROUP(evconvOptions, "EVENT CONVERTER",
+                            CHI_OPT_CHOICE(option.evconv, "evconv", "Output format", CHI_FOREACH_EVENT_FORMAT(_EVFMT, ", "))))
+static CHI_OPT_GROUP(interpOptions, "INTERPRETER",
+                     CHI_OPT_CB(STRING, addPath, "path", "Search path")
+                     CHI_IF(CBY_LSMOD_ENABLED, CHI_OPT_FLAG(option.lsmod, "lsmod", "List modules on path"))
+                     CHI_IF(CBY_DISASM_ENABLED, CHI_OPT_FLAG(option.disasm, "asm", "Print module bytecode assembly"))
+                     CHI_OPT_CHOICE(backend.id, "backend", "Interpreter backend", FOREACH_BACKEND(_BACKEND, ", "))
+                     CHI_IF(CBY_BACKEND_DUMP_ENABLED, CHI_OPT_FLAG(option.dumpFile, "dump:f", "Dump instructions to file"))
+                     CHI_IF(CBY_BACKEND_DUMP_ENABLED, CHI_OPT_SIZE(option.dumpBuffer, 0, CHI_MiB(64), "dump:b", "Dump buffer size")))
 #undef _BACKEND
-    CHI_IF(CBY_BACKEND_DUMP_ENABLED, CHI_OPT_FLAG(option.dumpFile, "dfile", "Dump instructions to file"))
-    CHI_OPT_END
-};
+#undef _EVFMT
 #undef CHI_OPT_STRUCT
 
-static void interpDestroy(ChiHookType CHI_UNUSED(type), void* ctx) {
-    ChiProcessor* proc = (ChiProcessor*)ctx;
+static void interpDestroy(ChiHookType CHI_UNUSED(type), ChiProcessor* proc) {
     if (chiProcessorMain(proc))
         cbyModuleLoaderDestroy(&cbyInterpreter(proc)->ml);
 }
@@ -57,17 +54,24 @@ static void interpDestroy(ChiHookType CHI_UNUSED(type), void* ctx) {
 static ChiOptionResult parseInterpOptions(CbyInterpreter* interp, ChiChunkOption* chunkOption,
                                           int* argc, char** argv) {
     CHI_AUTO_SINK(helpSink, chiSinkColor(CHI_SINK_COLOR_AUTO));
-    const ChiOptionList list[] =
-        { { chiRuntimeOptionList, &interp->rt.option },
-          { chiChunkOptionList, chunkOption },
-          { interpOptionList, interp },
-          CHI_IF(CBY_BACKEND_PROF_ENABLED, { chiProfOptionList, &interp->option.prof },)
-          { 0, 0 }
-        };
-    const ChiOptionParser parser =
+    ChiRuntimeOption* opt = &interp->rt.option;
+    ChiOptionParser parser =
         { .help = helpSink,
           .usage = chiStderr,
-          .list = list,
+          .assocs = (ChiOptionAssoc[])
+          { { &chiGeneralOptions, opt },
+            { &chiStackOptions, opt },
+            { &chiNurseryOptions, opt },
+            { &chiHeapOptions, opt },
+            { &chiGCOptions, opt },
+            { &chiChunkOptions, chunkOption },
+            CHI_IF(CHI_EVENT_ENABLED, { &chiEventOptions, opt },)
+            CHI_IF(CHI_EVENT_CONVERT_ENABLED, { &evconvOptions, interp },)
+            CHI_IF(CHI_STATS_ENABLED, { &chiStatsOptions, opt },)
+            { &interpOptions, interp },
+            CHI_IF(CBY_BACKEND_PROF_ENABLED, { &chiProfOptions, &interp->option.prof },)
+            { 0 }
+          }
         };
     ChiOptionResult res = chiOptionEnv(&parser, "CHI_NATIVE_OPTS");
     if (res == CHI_OPTRESULT_OK)
@@ -89,10 +93,11 @@ int main(int argc, char** argv) {
 
     ChiChunkOption chunkOption = CHI_DEFAULT_CHUNK_OPTION;
     CbyInterpreter interp =
-        { .option = { CHI_IF(CBY_BACKEND_PROF_ENABLED, .prof = CHI_DEFAULT_PROF_OPTION) } };
+        { .option = { CHI_IF(CBY_BACKEND_PROF_ENABLED, .prof = CHI_DEFAULT_PROF_OPTION,)
+                      CHI_IF(CBY_BACKEND_DUMP_ENABLED, .dumpBuffer = CHI_MiB(4)) } };
     ChiRuntime* rt = &interp.rt;
     chiRuntimeInit(rt, exit);
-    chiHook(rt, CHI_HOOK_PROC_STOP, interpDestroy);
+    chiHookProc(rt, STOP, interpDestroy);
 
     ChiOptionResult res = parseInterpOptions(&interp, &chunkOption, &argc, argv);
     if (res != CHI_OPTRESULT_OK)
@@ -100,11 +105,9 @@ int main(int argc, char** argv) {
 
     for (int i = 1; i < argc; ++i) {
         const char* s = argv[i];
-        if (cbyLibrary(s)) {
-            const char* p = strchr(s, ':');
-            cbyAddPath(&interp.ml, (ChiStringRef){ .size = p ? (uint32_t)(p - s) : (uint32_t)strlen(s),
-                                                      .bytes = (const uint8_t*)s });
-        }
+        if (cbyLibrary(s))
+            cbyAddPath(&interp.ml, (ChiStringRef){ .size = (uint32_t)(strchrnul(s, ':') - s),
+                                                   .bytes = (const uint8_t*)s });
     }
 
     CHI_AUTO_FREE(path, chiGetEnv("CBY_PATH"));
@@ -160,8 +163,8 @@ int main(int argc, char** argv) {
         interp.option.prof.flat = true;
 #endif
 
-    chiHook(rt, CHI_HOOK_PROC_START, interp.backend.impl->procStart);
-    chiHook(rt, CHI_HOOK_PROC_STOP, interp.backend.impl->procStop);
+    chiHookProc(rt, START, interp.backend.impl->procStart);
+    chiHookProc(rt, STOP, interp.backend.impl->procStop);
     interp.backend.impl->setup(&interp);
     chiChunkSetup(&chunkOption);
     chiRuntimeEnter(rt, argc, argv);

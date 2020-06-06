@@ -1,8 +1,6 @@
 #include <chili/cont.h>
 #include "bytecode/decode.h"
 #include "cby.h"
-#include "native/exception.h"
-#include "native/export.h"
 #include "native/location.h"
 #include "native/new.h"
 #include "native/sink.h"
@@ -22,13 +20,8 @@ struct ChiModuleEntry_ {
 #define HT_HASHFN      chiHashStringRef
 #include "native/generic/hashtable.h"
 
-int32_t
-    z_System__EntryPoints_z_start,
-    z_System__EntryPoints_z_blackhole,
-    z_System__EntryPoints_z_unhandled,
-    z_System__EntryPoints_z_userInterrupt,
-    z_System__EntryPoints_z_timerInterrupt,
-    z_Main_z_main;
+extern int32_t main_z_Main;
+int32_t main_z_Main;
 
 static Chili findModule(ChiRuntime* rt, ChiStringRef name) {
     ChiModuleEntry* mod = moduleHashFind(&rt->moduleHash, name);
@@ -36,7 +29,6 @@ static Chili findModule(ChiRuntime* rt, ChiStringRef name) {
 }
 
 CHI_STATIC_CONT_DECL(loadModule)
-CHI_STATIC_CONT_DECL(interpInitImport)
 
 static ChiLoc locateInit(Chili mod) {
     if (chiType(mod) == CBY_NATIVE_MODULE)
@@ -46,11 +38,12 @@ static ChiLoc locateInit(Chili mod) {
     return (ChiLoc){ .type = CHI_LOC_INTERP, .id = IP + initOffset };
 }
 
-STATIC_CONT(interpInitModuleCont, .size = 2) {
+STATIC_CONT(interpInitModuleCont, .size = 2, .na = 1) {
     PROLOGUE(interpInitModuleCont);
+    Chili value = AGET(0);
+    UNDEF_ARGS(0);
     SP -= 2;
     Chili mod = SP[0];
-    Chili value = A(0);
     ChiStringRef name = chiStringRef(&chiToCbyModule(mod)->name);
     ChiProcessor* proc = CHI_CURRENT_PROCESSOR;
     Chili pair = chiNewTupleFlags(proc, CHI_NEW_LOCAL, value, mod);
@@ -61,52 +54,47 @@ STATIC_CONT(interpInitModuleCont, .size = 2) {
         chiLocResolve(&resolve, locateInit(mod), proc->rt->option.stack.traceMangled);
         chiEventStruct(proc, MODULE_INIT, &resolve.loc);
     }
-    RET(value);
+    ASET(0, value);
+    RET;
 }
 
-STATIC_CONT(interpInitImportCont, .size = 3) {
+STATIC_CONT(interpInitImportCont, .size = CHI_VASIZE, .na = 1) {
     PROLOGUE(interpInitImportCont);
-    SP -= 3;
-    Chili ret = A(0);
-    uint32_t nimports = chiToUInt32(SP[0]);
-    uint32_t idx = chiToUInt32(SP[1]);
-    SP[(int32_t)idx - 1 - (int32_t)chiFrameSize(SP - 1)] = ret;
-    A(0) = chiFromUInt32(nimports);
-    A(1) = chiFromUInt32(idx);
-    KNOWN_JUMP(interpInitImport);
-}
+    Chili ret = AGET(0);
+    UNDEF_ARGS(0);
+    uint32_t pos = chiToUInt32(SP[-2]), idx = chiToUInt32(SP[-3]);
+    SP[(int32_t)idx - (int32_t)pos] = ret;
 
-STATIC_CONT(interpInitImport, .na = 1) {
-    PROLOGUE(interpInitImport);
-    LIMITS(.stack = 3);
+    if (!idx) {
+        SP -= 3;
+        RET;
+    }
+    --idx;
 
-    uint32_t nimports = chiToUInt32(A(0));
-    uint32_t idx = chiToUInt32(A(1));
-
-    if (idx == nimports)
-        RET(CHI_FALSE);
-
-    SP[0] = chiFromUInt32(nimports);
-    SP[1] = chiFromUInt32(idx + 1);
-    SP[2] = chiFromCont(&interpInitImportCont);
-    SP += 3;
-
-    A(0) = SP[(int32_t)idx - 3 - (int32_t)chiFrameSize(SP - 3 - 1)];
+    SP[-3] = chiFromUInt32(idx);
+    ASET(0, SP[(int32_t)idx - (int32_t)pos]);
     KNOWN_JUMP(loadModule);
 }
 
-CONT(cbyModuleInit) {
+CONT(cbyModuleInit, .na = 1) {
     PROLOGUE(cbyModuleInit);
 
-    Chili mod = A(0);
+    Chili mod = AGET(0);
     CbyModule* m = chiToCbyModule(mod);
+    uint32_t nimports = (uint32_t)chiSize(m->imports);
+    LIMITS_PROC(.stack = 2 + // interpInitModuleCont
+                nimports + CBY_CONTEXT_SIZE + // imports + module init continuation
+                3, // interpInitImport
+                .heap = CHI_SIZEOF_WORDS(CbyFn));
+
+    UNDEF_ARGS(0);
+
     ChiProcessor* proc = CHI_CURRENT_PROCESSOR;
     Chili loaded = findModule(proc->rt, chiStringRef(&m->name));
-    if (chiTrue(loaded))
-        RET(loaded);
-
-    uint32_t nimports = (uint32_t)chiSize(m->imports);
-    LIMITS(.stack = 2 + nimports + CBY_CONTEXT_SIZE, .heap = CHI_SIZEOF_WORDS(CbyFn));
+    if (chiTrue(loaded)) {
+        ASET(0, loaded);
+        RET;
+    }
 
     SP[0] = mod;
     SP[1] = chiFromCont(&interpInitModuleCont);
@@ -131,7 +119,7 @@ CONT(cbyModuleInit) {
 
         NEW(fn, CHI_FIRST_FN, CHI_SIZEOF_WORDS(CbyFn));
         CbyFn* f = NEW_PAYLOAD(CbyFn, fn);
-        f->fn = CHI_FALSE;
+        f->cont = f->val = CHI_FALSE;
         f->module = mod;
         f->ip = init;
 
@@ -142,30 +130,46 @@ CONT(cbyModuleInit) {
         SP += CBY_CONTEXT_SIZE;
     }
 
-    A(0) = chiFromUInt32(nimports);
-    A(1) = CHI_FALSE;
-    KNOWN_JUMP(interpInitImport);
+    if (!nimports)
+        RET;
+
+    SP[0] = chiFromUInt32(nimports - 1);
+    SP[1] = chiFromUInt32(3 + chiFrameSize(SP - 1));
+    SP[2] = chiFromCont(&interpInitImportCont);
+    SP += 3;
+
+    chiStackDebugWalk(chiThreadStack(proc->thread), SP, SL);
+
+    ASET(0, chiArrayRead(m->imports, nimports - 1));
+    KNOWN_JUMP(loadModule);
 }
 
-STATIC_CONT(loadModule) {
+STATIC_CONT(loadModule, .na = 1) {
     PROLOGUE(loadModule);
+    Chili name = AGET(0);
+    UNDEF_ARGS(0);
 
     ChiProcessor* proc = CHI_CURRENT_PROCESSOR;
-    ChiStringRef name = chiStringRef(&A(0));
-    Chili loaded = findModule(proc->rt, name);
-    if (chiTrue(loaded))
-        RET(loaded);
+    ChiStringRef nameRef = chiStringRef(&name);
+    Chili loaded = findModule(proc->rt, nameRef);
+    if (chiTrue(loaded)) {
+        ASET(0, loaded);
+        RET;
+    }
 
-    Chili mod = cbyModuleLoadByName(proc, name);
-    if (!chiEither(&mod))
-        CHI_THROW_RUNTIME_EX(proc, mod);
+    Chili mod = cbyModuleLoadByName(proc, nameRef);
+    if (!chiEither(&mod)) {
+        ASET(0, mod);
+        KNOWN_JUMP(chiThrowRuntimeException);
+    }
 
-    A(0) = mod;
+    ASET(0, mod);
     KNOWN_JUMP(cbyModuleInit);
 }
 
 STATIC_CONT(interpreterMain) {
     PROLOGUE(interpreterMain);
+    UNDEF_ARGS(0);
 
     ChiProcessor* proc = CHI_CURRENT_PROCESSOR;
     ChiRuntime* rt = proc->rt;
@@ -173,12 +177,12 @@ STATIC_CONT(interpreterMain) {
     --rt->argc;
     memmove(rt->argv + 1, rt->argv + 2, sizeof (char*) * rt->argc);
     Chili mod = cbyModuleLoadByNameOrFile(proc, name);
-    if (!chiEither(&mod))
-        CHI_THROW_RUNTIME_EX(proc, mod);
-
-    z_Main_z_main = cbyModuleExport(mod, "main");
-
-    A(0) = mod;
+    if (!chiEither(&mod)) {
+        ASET(0, mod);
+        KNOWN_JUMP(chiThrowRuntimeException);
+    }
+    main_z_Main = chiToInt32(chiToCbyModule(mod)->main);
+    ASET(0, mod);
     KNOWN_JUMP(cbyModuleInit);
 }
 
@@ -208,8 +212,10 @@ static void disasm(ChiProcessor* proc) {
     rt->exitHandler(res);
 }
 
+CHI_EXTERN_CONT_DECL(z_Main)
 CONT(z_Main) {
     PROLOGUE(z_Main);
+    UNDEF_ARGS(0);
 
     ChiProcessor* proc = CHI_CURRENT_PROCESSOR;
     if (CHI_AND(CBY_DISASM_ENABLED, cbyInterpreter(proc)->option.disasm))
@@ -218,45 +224,36 @@ CONT(z_Main) {
     KNOWN_JUMP(interpreterMain);
 }
 
-#define LOAD_FUNCTION(mod, name, fn)                                    \
-    ({                                                                  \
-        int32_t idx = cbyModuleExport((mod), (fn));                    \
-        if (idx < 0)                                                    \
-            CHI_THROW_RUNTIME_EX(proc,                                  \
-                                 chiFmtString(proc, "Could not load exported function '%s' from '%S'.", \
-                                               (fn), (name)));          \
-        idx;                                                            \
-    })
-
+CHI_EXTERN_CONT_DECL(z_System__EntryPoints)
 CONT(z_System__EntryPoints) {
     PROLOGUE(z_System__EntryPoints);
+    UNDEF_ARGS(0);
 
     ChiProcessor* proc = CHI_CURRENT_PROCESSOR;
     ChiStringRef name = CHI_STRINGREF("System/EntryPoints");
     Chili loaded = findModule(proc->rt, name);
-    if (chiTrue(loaded))
-        RET(loaded);
+    if (chiTrue(loaded)) {
+        ASET(0, loaded);
+        RET;
+    }
 
     Chili mod = cbyModuleLoadByName(proc, name);
-    if (!chiEither(&mod))
-        RET(CHI_FAIL);
+    if (!chiEither(&mod)) {
+        ASET(0, proc->rt->fail);
+        RET;
+    }
 
-    z_System__EntryPoints_z_start = LOAD_FUNCTION(mod, name, "start");
-    z_System__EntryPoints_z_blackhole = LOAD_FUNCTION(mod, name, "blackhole");
-    z_System__EntryPoints_z_unhandled = LOAD_FUNCTION(mod, name, "unhandled");
-    z_System__EntryPoints_z_timerInterrupt = LOAD_FUNCTION(mod, name, "timerInterrupt");
-    z_System__EntryPoints_z_userInterrupt = LOAD_FUNCTION(mod, name, "userInterrupt");
-
-    A(0) = mod;
+    ASET(0, mod);
     KNOWN_JUMP(cbyModuleInit);
 }
 
-CONT(cbyFFIError) {
+CONT(cbyFFIError, .na = 1) {
     PROLOGUE(cbyFFIError);
-    const CbyCode* IP = chiToIP(A(0));
+    const CbyCode* IP = chiToIP(AGET(0));
+    UNDEF_ARGS(0);
     ChiStringRef name = FETCH_STRING;
-    ChiProcessor* proc = CHI_CURRENT_PROCESSOR;
-    CHI_THROW_RUNTIME_EX(proc, chiFmtString(proc, "FFI function '%S' not loaded", name));
+    ASET(0, chiFmtString(CHI_CURRENT_PROCESSOR, "FFI function '%S' not loaded", name));
+    KNOWN_JUMP(chiThrowRuntimeException);
 }
 
 void cbyModuleUnload(Chili name) {

@@ -29,21 +29,23 @@ typedef struct CHI_ALIGNED(8) {
 typedef struct CHI_ALIGNED(8) {
     ChiNanos cpuTimeUser;
     ChiNanos cpuTimeSystem;
-    size_t   residentSize;
+    size_t   maxResidentSize;
+    size_t   currResidentSize;
     uint64_t pageFault;
-    uint64_t contextSwitch;
+    uint64_t voluntaryContextSwitch;
+    uint64_t involuntaryContextSwitch;
 } ChiSystemStats;
 
 typedef struct CHI_ALIGNED(8) {
-    uint64_t allocWords;
-    size_t   totalWords;
+    uint64_t allocSize;
+    size_t   totalSize;
 } ChiHeapClassUsage;
 
 typedef struct CHI_ALIGNED(8) {
     ChiHeapClassUsage small;
     ChiHeapClassUsage medium;
     ChiHeapClassUsage large;
-    size_t            totalChunkWords;
+    size_t            totalSize;
 } ChiHeapUsage;
 
 typedef struct CHI_ALIGNED(8) {
@@ -68,13 +70,14 @@ typedef struct CHI_ALIGNED(8) {
 } ChiScavengerRawCount;
 
 typedef struct CHI_ALIGNED(8) {
-    ChiObjectCount major;
-    ChiObjectCount stacks;
+    ChiObjectCount object;
+    ChiObjectCount stack;
+    ChiObjectCount card;
 } ChiScavengerDirtyCount;
 
 typedef struct CHI_ALIGNED(8) {
-    size_t usedWords;
-    size_t totalWords;
+    size_t usedSize;
+    size_t totalSize;
 } ChiMinorHeapUsage;
 
 typedef struct CHI_ALIGNED(8) {
@@ -111,12 +114,10 @@ typedef struct CHI_ALIGNED(8) {
 } ChiScanStats;
 
 typedef struct CHI_ALIGNED(8) {
-    uintptr_t oldStack;
-    uintptr_t newStack;
-    size_t reqSize;
-    size_t oldSize;
-    size_t newSize;
-    size_t usedSize;
+    uintptr_t stack;
+    size_t size;
+    size_t step;
+    size_t copied;
 } ChiEventStackSize;
 
 typedef struct CHI_ALIGNED(8) {
@@ -126,8 +127,7 @@ typedef struct CHI_ALIGNED(8) {
 
 typedef struct CHI_ALIGNED(8) {
     uintptr_t stack;
-    bool scanned;
-} ChiEventStackActive;
+} ChiEventStack;
 
 typedef struct CHI_ALIGNED(8) {
     ChiStringRef name;
@@ -136,17 +136,17 @@ typedef struct CHI_ALIGNED(8) {
 typedef struct CHI_ALIGNED(8) {
     ChiStringRef name;
     ChiStringRef trace;
-    bool         handled;
 } ChiEventException;
 
 typedef enum {
     CHI_REQUEST_EXIT,
-    CHI_REQUEST_TICK,
-    CHI_REQUEST_DUMPSTACK,
+    CHI_REQUEST_DUMP,
+    CHI_REQUEST_NOTIFYINTERRUPT,
+    CHI_REQUEST_TIMERINTERRUPT,
     CHI_REQUEST_USERINTERRUPT,
     CHI_REQUEST_HANDSHAKE,
     CHI_REQUEST_SCAVENGE,
-    CHI_REQUEST_MIGRATE,
+    CHI_REQUEST_PROMOTE,
 } ChiProcessorRequest;
 
 typedef struct CHI_ALIGNED(8) {
@@ -205,7 +205,7 @@ typedef struct CHI_ALIGNED(8) {
 
 typedef enum {
     CHI_SIG_USERINTERRUPT,
-    CHI_SIG_DUMPSTACK
+    CHI_SIG_DUMP
 } ChiSig;
 
 typedef struct CHI_ALIGNED(8) {
@@ -219,26 +219,16 @@ typedef enum {
     CHI_GC_ASYNC,
 } ChiGCPhase;
 
-typedef enum {
-    CHI_HEAP_LIMIT_ALLOC,
-    CHI_HEAP_LIMIT_SOFT,
-    CHI_HEAP_LIMIT_HARD,
-} ChiHeapLimit;
-
-typedef struct CHI_ALIGNED(8) {
-    size_t heapSize;
-    size_t softLimit;
-    size_t hardLimit;
-    ChiHeapLimit limit;
-} ChiEventHeapLimit;
-
 typedef struct CHI_ALIGNED(8) {
     ChiStringRef type;
     size_t       size;
 } ChiEventHeapAlloc;
 
 typedef struct CHI_ALIGNED(8) {
-    ChiWid suspendWid;
+    ChiWid notifyWid;
+} ChiEventProcNotify;
+
+typedef struct CHI_ALIGNED(8) {
     uint32_t ms;
 } ChiEventProcSuspend;
 
@@ -291,11 +281,11 @@ typedef ChiScanStats   ChiEventMark;
 enum {
     _CHI_EVENT_DURATION_WORKER = 9,
     _CHI_EVENT_DURATION_RUNTIME = 3,
-    _CHI_EVENT_COUNT = 84,
+    _CHI_EVENT_COUNT = 87,
     _CHI_EVENT_MAXLEN = 19,
 };
 
-#define _CHI_EVENT_FILTER_SIZE CHI_DIV_ROUNDUP(_CHI_EVENT_COUNT, 8 * sizeof (uintptr_t))
+#define _CHI_EVENT_FILTER_SIZE CHI_DIV_CEIL(_CHI_EVENT_COUNT, 8 * sizeof (uintptr_t))
 
 typedef enum {
     CHI_EVENT_GC_MARK_PHASE_BEGIN,
@@ -326,6 +316,7 @@ typedef enum {
     CHI_EVENT_BLOCK_CHUNK_FREE,
     CHI_EVENT_BLOCK_CHUNK_NEW,
     CHI_EVENT_ENTRY_BLACKHOLE,
+    CHI_EVENT_ENTRY_NOTIFY_INT,
     CHI_EVENT_ENTRY_START,
     CHI_EVENT_ENTRY_TIMER_INT,
     CHI_EVENT_ENTRY_UNHANDLED,
@@ -337,14 +328,14 @@ typedef enum {
     CHI_EVENT_FNLOG_ENTER_JMP,
     CHI_EVENT_FNLOG_FFI,
     CHI_EVENT_FNLOG_LEAVE,
-    CHI_EVENT_GC_NOTIFY,
     CHI_EVENT_GC_PHASE_GLOBAL,
     CHI_EVENT_GC_PHASE_LOCAL,
     CHI_EVENT_GC_TRIGGER,
     CHI_EVENT_HEAP_ALLOC_FAILED,
     CHI_EVENT_HEAP_CHUNK_FREE,
     CHI_EVENT_HEAP_CHUNK_NEW,
-    CHI_EVENT_HEAP_LIMIT,
+    CHI_EVENT_HEAP_LIMIT_GC,
+    CHI_EVENT_HEAP_LIMIT_OVERFLOW,
     CHI_EVENT_HEAP_USAGE,
     CHI_EVENT_LOG_BEGIN,
     CHI_EVENT_LOG_END,
@@ -355,6 +346,7 @@ typedef enum {
     CHI_EVENT_PROC_INIT,
     CHI_EVENT_PROC_MSG_RECV,
     CHI_EVENT_PROC_MSG_SEND,
+    CHI_EVENT_PROC_NOTIFY,
     CHI_EVENT_PROC_REQUEST,
     CHI_EVENT_PROC_STALL,
     CHI_EVENT_PROC_SUSPEND,
@@ -364,7 +356,9 @@ typedef enum {
     CHI_EVENT_SIGNAL,
     CHI_EVENT_STACK_ACTIVATE,
     CHI_EVENT_STACK_DEACTIVATE,
-    CHI_EVENT_STACK_RESIZE,
+    CHI_EVENT_STACK_GROW,
+    CHI_EVENT_STACK_SCANNED,
+    CHI_EVENT_STACK_SHRINK,
     CHI_EVENT_STACK_TRACE,
     CHI_EVENT_STRBUILDER_OVERFLOW,
     CHI_EVENT_SYSTEM_STATS,
@@ -376,7 +370,6 @@ typedef enum {
     CHI_EVENT_THREAD_TAKEOVER,
     CHI_EVENT_THREAD_TERMINATED,
     CHI_EVENT_THREAD_YIELD,
-    CHI_EVENT_TICK,
     CHI_EVENT_USER_BUFFER,
     CHI_EVENT_USER_STRING,
     CHI_EVENT_WORKER_DESTROY,
@@ -403,21 +396,23 @@ typedef union {
     ChiEventHeapAlloc HEAP_ALLOC_FAILED;
     ChiEventChunk HEAP_CHUNK_FREE;
     ChiEventChunk HEAP_CHUNK_NEW;
-    ChiEventHeapLimit HEAP_LIMIT;
     ChiEventHeapUsage HEAP_USAGE;
     ChiEventModuleInit MODULE_INIT;
     ChiEventModuleLoad MODULE_LOAD;
     ChiEventModuleName MODULE_UNLOAD;
     ChiEventProcMsgRecv PROC_MSG_RECV;
     ChiEventProcMsgSend PROC_MSG_SEND;
+    ChiEventProcNotify PROC_NOTIFY;
     ChiEventProcRequest PROC_REQUEST;
     ChiEventProcStall PROC_STALL;
     ChiEventProcSuspend PROC_SUSPEND;
     ChiEventStackTrace PROF_TRACE;
     ChiEventSignal SIGNAL;
-    ChiEventStackActive STACK_ACTIVATE;
-    ChiEventStackActive STACK_DEACTIVATE;
-    ChiEventStackSize STACK_RESIZE;
+    ChiEventStack STACK_ACTIVATE;
+    ChiEventStack STACK_DEACTIVATE;
+    ChiEventStackSize STACK_GROW;
+    ChiEventStack STACK_SCANNED;
+    ChiEventStackSize STACK_SHRINK;
     ChiEventStackTrace STACK_TRACE;
     ChiEventSystemStats SYSTEM_STATS;
     ChiEventThreadEnqueue THREAD_ENQUEUE;
@@ -466,6 +461,7 @@ CHI_INL void _CHI_EVENT_BIGINT_OVERFLOW(ChiProcessor* x) { chiEventWrite(x, CHI_
 CHI_INL void _CHI_EVENT_BLOCK_CHUNK_FREE(ChiRuntime* x, const ChiEventChunk* d) { chiEventWrite(x, CHI_EVENT_BLOCK_CHUNK_FREE, (const ChiEventPayload*)d); }
 CHI_INL void _CHI_EVENT_BLOCK_CHUNK_NEW(ChiRuntime* x, const ChiEventChunk* d) { chiEventWrite(x, CHI_EVENT_BLOCK_CHUNK_NEW, (const ChiEventPayload*)d); }
 CHI_INL void _CHI_EVENT_ENTRY_BLACKHOLE(ChiProcessor* x) { chiEventWrite(x, CHI_EVENT_ENTRY_BLACKHOLE, 0); }
+CHI_INL void _CHI_EVENT_ENTRY_NOTIFY_INT(ChiProcessor* x) { chiEventWrite(x, CHI_EVENT_ENTRY_NOTIFY_INT, 0); }
 CHI_INL void _CHI_EVENT_ENTRY_START(ChiProcessor* x) { chiEventWrite(x, CHI_EVENT_ENTRY_START, 0); }
 CHI_INL void _CHI_EVENT_ENTRY_TIMER_INT(ChiProcessor* x) { chiEventWrite(x, CHI_EVENT_ENTRY_TIMER_INT, 0); }
 CHI_INL void _CHI_EVENT_ENTRY_UNHANDLED(ChiProcessor* x) { chiEventWrite(x, CHI_EVENT_ENTRY_UNHANDLED, 0); }
@@ -477,14 +473,14 @@ CHI_INL void _CHI_EVENT_FNLOG_ENTER(ChiProcessor* x, const ChiEventFnLog* d) { c
 CHI_INL void _CHI_EVENT_FNLOG_ENTER_JMP(ChiProcessor* x, const ChiEventFnLog* d) { chiEventWrite(x, CHI_EVENT_FNLOG_ENTER_JMP, (const ChiEventPayload*)d); }
 CHI_INL void _CHI_EVENT_FNLOG_FFI(ChiProcessor* x, const ChiEventFnLogFFI* d) { chiEventWrite(x, CHI_EVENT_FNLOG_FFI, (const ChiEventPayload*)d); }
 CHI_INL void _CHI_EVENT_FNLOG_LEAVE(ChiProcessor* x, const ChiEventFnLog* d) { chiEventWrite(x, CHI_EVENT_FNLOG_LEAVE, (const ChiEventPayload*)d); }
-CHI_INL void _CHI_EVENT_GC_NOTIFY(ChiRuntime* x) { chiEventWrite(x, CHI_EVENT_GC_NOTIFY, 0); }
 CHI_INL void _CHI_EVENT_GC_PHASE_GLOBAL(ChiProcessor* x, const ChiEventGCPhase* d) { chiEventWrite(x, CHI_EVENT_GC_PHASE_GLOBAL, (const ChiEventPayload*)d); }
 CHI_INL void _CHI_EVENT_GC_PHASE_LOCAL(ChiProcessor* x, const ChiEventGCPhase* d) { chiEventWrite(x, CHI_EVENT_GC_PHASE_LOCAL, (const ChiEventPayload*)d); }
 CHI_INL void _CHI_EVENT_GC_TRIGGER(ChiRuntime* x) { chiEventWrite(x, CHI_EVENT_GC_TRIGGER, 0); }
 CHI_INL void _CHI_EVENT_HEAP_ALLOC_FAILED(ChiProcessor* x, const ChiEventHeapAlloc* d) { chiEventWrite(x, CHI_EVENT_HEAP_ALLOC_FAILED, (const ChiEventPayload*)d); }
 CHI_INL void _CHI_EVENT_HEAP_CHUNK_FREE(ChiRuntime* x, const ChiEventChunk* d) { chiEventWrite(x, CHI_EVENT_HEAP_CHUNK_FREE, (const ChiEventPayload*)d); }
 CHI_INL void _CHI_EVENT_HEAP_CHUNK_NEW(ChiRuntime* x, const ChiEventChunk* d) { chiEventWrite(x, CHI_EVENT_HEAP_CHUNK_NEW, (const ChiEventPayload*)d); }
-CHI_INL void _CHI_EVENT_HEAP_LIMIT(ChiRuntime* x, const ChiEventHeapLimit* d) { chiEventWrite(x, CHI_EVENT_HEAP_LIMIT, (const ChiEventPayload*)d); }
+CHI_INL void _CHI_EVENT_HEAP_LIMIT_GC(ChiRuntime* x) { chiEventWrite(x, CHI_EVENT_HEAP_LIMIT_GC, 0); }
+CHI_INL void _CHI_EVENT_HEAP_LIMIT_OVERFLOW(ChiRuntime* x) { chiEventWrite(x, CHI_EVENT_HEAP_LIMIT_OVERFLOW, 0); }
 CHI_INL void _CHI_EVENT_HEAP_USAGE(ChiProcessor* x, const ChiEventHeapUsage* d) { chiEventWrite(x, CHI_EVENT_HEAP_USAGE, (const ChiEventPayload*)d); }
 CHI_INL void _CHI_EVENT_LOG_BEGIN(ChiRuntime* x) { chiEventWrite(x, CHI_EVENT_LOG_BEGIN, 0); }
 CHI_INL void _CHI_EVENT_LOG_END(ChiRuntime* x) { chiEventWrite(x, CHI_EVENT_LOG_END, 0); }
@@ -495,6 +491,7 @@ CHI_INL void _CHI_EVENT_PROC_DESTROY(ChiProcessor* x) { chiEventWrite(x, CHI_EVE
 CHI_INL void _CHI_EVENT_PROC_INIT(ChiProcessor* x) { chiEventWrite(x, CHI_EVENT_PROC_INIT, 0); }
 CHI_INL void _CHI_EVENT_PROC_MSG_RECV(ChiProcessor* x, const ChiEventProcMsgRecv* d) { chiEventWrite(x, CHI_EVENT_PROC_MSG_RECV, (const ChiEventPayload*)d); }
 CHI_INL void _CHI_EVENT_PROC_MSG_SEND(ChiProcessor* x, const ChiEventProcMsgSend* d) { chiEventWrite(x, CHI_EVENT_PROC_MSG_SEND, (const ChiEventPayload*)d); }
+CHI_INL void _CHI_EVENT_PROC_NOTIFY(ChiProcessor* x, const ChiEventProcNotify* d) { chiEventWrite(x, CHI_EVENT_PROC_NOTIFY, (const ChiEventPayload*)d); }
 CHI_INL void _CHI_EVENT_PROC_REQUEST(ChiRuntime* x, const ChiEventProcRequest* d) { chiEventWrite(x, CHI_EVENT_PROC_REQUEST, (const ChiEventPayload*)d); }
 CHI_INL void _CHI_EVENT_PROC_STALL(ChiRuntime* x, const ChiEventProcStall* d) { chiEventWrite(x, CHI_EVENT_PROC_STALL, (const ChiEventPayload*)d); }
 CHI_INL void _CHI_EVENT_PROC_SUSPEND(ChiProcessor* x, const ChiEventProcSuspend* d) { chiEventWrite(x, CHI_EVENT_PROC_SUSPEND, (const ChiEventPayload*)d); }
@@ -502,9 +499,11 @@ CHI_INL void _CHI_EVENT_PROF_DISABLED(ChiWorker* x) { chiEventWrite(x, CHI_EVENT
 CHI_INL void _CHI_EVENT_PROF_ENABLED(ChiWorker* x) { chiEventWrite(x, CHI_EVENT_PROF_ENABLED, 0); }
 CHI_INL void _CHI_EVENT_PROF_TRACE(ChiWorker* x, const ChiEventStackTrace* d) { chiEventWrite(x, CHI_EVENT_PROF_TRACE, (const ChiEventPayload*)d); }
 CHI_INL void _CHI_EVENT_SIGNAL(ChiRuntime* x, const ChiEventSignal* d) { chiEventWrite(x, CHI_EVENT_SIGNAL, (const ChiEventPayload*)d); }
-CHI_INL void _CHI_EVENT_STACK_ACTIVATE(ChiProcessor* x, const ChiEventStackActive* d) { chiEventWrite(x, CHI_EVENT_STACK_ACTIVATE, (const ChiEventPayload*)d); }
-CHI_INL void _CHI_EVENT_STACK_DEACTIVATE(ChiProcessor* x, const ChiEventStackActive* d) { chiEventWrite(x, CHI_EVENT_STACK_DEACTIVATE, (const ChiEventPayload*)d); }
-CHI_INL void _CHI_EVENT_STACK_RESIZE(ChiProcessor* x, const ChiEventStackSize* d) { chiEventWrite(x, CHI_EVENT_STACK_RESIZE, (const ChiEventPayload*)d); }
+CHI_INL void _CHI_EVENT_STACK_ACTIVATE(ChiProcessor* x, const ChiEventStack* d) { chiEventWrite(x, CHI_EVENT_STACK_ACTIVATE, (const ChiEventPayload*)d); }
+CHI_INL void _CHI_EVENT_STACK_DEACTIVATE(ChiProcessor* x, const ChiEventStack* d) { chiEventWrite(x, CHI_EVENT_STACK_DEACTIVATE, (const ChiEventPayload*)d); }
+CHI_INL void _CHI_EVENT_STACK_GROW(ChiProcessor* x, const ChiEventStackSize* d) { chiEventWrite(x, CHI_EVENT_STACK_GROW, (const ChiEventPayload*)d); }
+CHI_INL void _CHI_EVENT_STACK_SCANNED(ChiProcessor* x, const ChiEventStack* d) { chiEventWrite(x, CHI_EVENT_STACK_SCANNED, (const ChiEventPayload*)d); }
+CHI_INL void _CHI_EVENT_STACK_SHRINK(ChiProcessor* x, const ChiEventStackSize* d) { chiEventWrite(x, CHI_EVENT_STACK_SHRINK, (const ChiEventPayload*)d); }
 CHI_INL void _CHI_EVENT_STACK_TRACE(ChiProcessor* x, const ChiEventStackTrace* d) { chiEventWrite(x, CHI_EVENT_STACK_TRACE, (const ChiEventPayload*)d); }
 CHI_INL void _CHI_EVENT_STRBUILDER_OVERFLOW(ChiProcessor* x) { chiEventWrite(x, CHI_EVENT_STRBUILDER_OVERFLOW, 0); }
 CHI_INL void _CHI_EVENT_SYSTEM_STATS(ChiRuntime* x, const ChiEventSystemStats* d) { chiEventWrite(x, CHI_EVENT_SYSTEM_STATS, (const ChiEventPayload*)d); }
@@ -516,7 +515,6 @@ CHI_INL void _CHI_EVENT_THREAD_SWITCH(ChiProcessor* x, const ChiEventThreadNext*
 CHI_INL void _CHI_EVENT_THREAD_TAKEOVER(ChiProcessor* x, const ChiEventThreadMigrate* d) { chiEventWrite(x, CHI_EVENT_THREAD_TAKEOVER, (const ChiEventPayload*)d); }
 CHI_INL void _CHI_EVENT_THREAD_TERMINATED(ChiProcessor* x) { chiEventWrite(x, CHI_EVENT_THREAD_TERMINATED, 0); }
 CHI_INL void _CHI_EVENT_THREAD_YIELD(ChiProcessor* x, const ChiEventThreadYield* d) { chiEventWrite(x, CHI_EVENT_THREAD_YIELD, (const ChiEventPayload*)d); }
-CHI_INL void _CHI_EVENT_TICK(ChiRuntime* x) { chiEventWrite(x, CHI_EVENT_TICK, 0); }
 CHI_INL void _CHI_EVENT_USER_BUFFER(ChiProcessor* x, const ChiEventUserBuffer* d) { chiEventWrite(x, CHI_EVENT_USER_BUFFER, (const ChiEventPayload*)d); }
 CHI_INL void _CHI_EVENT_USER_STRING(ChiProcessor* x, const ChiEventUserString* d) { chiEventWrite(x, CHI_EVENT_USER_STRING, (const ChiEventPayload*)d); }
 CHI_INL void _CHI_EVENT_WORKER_DESTROY(ChiWorker* x) { chiEventWrite(x, CHI_EVENT_WORKER_DESTROY, 0); }

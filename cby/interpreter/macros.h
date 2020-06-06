@@ -5,13 +5,10 @@
     chiStackCheckCanary(SL);                                            \
     instrumentInsnBegin(proc, &interpPS->data, IP - 2, _insnOp)
 
-#define INSN_END instrumentInsnEnd(proc, &interpPS->data, _insnOp)
-
-#define INSN_LEAVE                                              \
-    ({                                                          \
-        INSN_END;                                               \
-        instrumentLeave(proc, &interpPS->data, CURRFN, SP);     \
-    })                                                          \
+#define ENTER(jmp) instrumentEnter(proc, &interpPS->data, CURRFN, SP, jmp)
+#define LEAVE      instrumentLeave(proc, &interpPS->data, CURRFN, SP)
+#define INSN_END   instrumentInsnEnd(proc, &interpPS->data, _insnOp)
+#define INSN_LEAVE ({ INSN_END; LEAVE; })
 
 #define FFIDESC(ref)                                                    \
     ({                                                                  \
@@ -22,34 +19,27 @@
         CbyFFI* _ffi = chiToCbyFFI(_mod->ffi[_id]);                     \
         if (CHI_UNLIKELY(!_ffi->fn)) {                                  \
             INSN_LEAVE;                                                 \
-            A(0) = chiFromIP(IP);                                       \
+            ASET(0, chiFromIP(IP));                                     \
             KNOWN_JUMP(cbyFFIError);                                    \
         }                                                               \
         IP = _oldip;                                                    \
         _ffi;                                                           \
     })
 
-#define DECLARE_CONTEXT                         \
-    ChiProcessor* proc = CHI_CURRENT_PROCESSOR; \
-    CbyInterpPS* interpPS = proc->interpPS;     \
-    Chili CURRFN;                               \
-    const CbyCode* IP
+#define FETCH_ENTER                             \
+    CURRFN = SP[-4];                            \
+    IP = chiToIP(SP[-3]);                       \
+    FETCH16; /* OP_enter */                     \
+    uint8_t nargs = FETCH8;                     \
+    Chili* top = SP - CBY_CONTEXT_SIZE;         \
+    CHI_NOWARN_UNUSED(nargs);                   \
+    REG = SP -= chiToUnboxed(SP[-2])
 
-#define RESTORE_CONTEXT(var)                    \
-    ({                                          \
-        CURRFN = SP[-4];                        \
-        IP = chiToIP(SP[-3]);                   \
-        SP[0] = (var);                          \
-    })
-
-#define SAVE_CONTEXT(sp, ip)                                            \
-    ({                                                                  \
-        Chili* frame = (sp) + CBY_CONTEXT_SIZE;                         \
-        frame[-4] = CURRFN;                                             \
-        frame[-3] = chiFromIP(ip);                                      \
-        frame[-2] = chiFromUnboxed((ChiWord)(frame - SP));              \
-        frame[-1] = chiFromCont(&interpCont);                           \
-        CHI_ASSERT(frame > SP);                                         \
-        SP = frame;                                                     \
-        chiStackDebugWalk(proc->thread, SP, SL);                        \
+#define SAVE_CONT(ip)                                   \
+    ({                                                  \
+        SP = top + CBY_CONTEXT_SIZE;                    \
+        top[0] = CURRFN;                                \
+        top[1] = chiFromIP(ip);                         \
+        top[2] = chiFromUnboxed((ChiWord)(SP - REG));   \
+        top[3] = chiFromCont(&interpCont);              \
     })

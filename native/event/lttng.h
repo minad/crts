@@ -77,10 +77,12 @@ TRACEPOINT_EVENT(
         ctf_integer(size_t, promoted_scanned_count, d->promoted.scanned.count)
         ctf_integer(size_t, promoted_scanned_words, d->promoted.scanned.words)
         ctf_integer(size_t, promoted_thunk, d->promoted.thunk)
-        ctf_integer(size_t, scavenger_dirty_major_count, d->scavenger.dirty.major.count)
-        ctf_integer(size_t, scavenger_dirty_major_words, d->scavenger.dirty.major.words)
-        ctf_integer(size_t, scavenger_dirty_stacks_count, d->scavenger.dirty.stacks.count)
-        ctf_integer(size_t, scavenger_dirty_stacks_words, d->scavenger.dirty.stacks.words)
+        ctf_integer(size_t, scavenger_dirty_object_count, d->scavenger.dirty.object.count)
+        ctf_integer(size_t, scavenger_dirty_object_words, d->scavenger.dirty.object.words)
+        ctf_integer(size_t, scavenger_dirty_stack_count, d->scavenger.dirty.stack.count)
+        ctf_integer(size_t, scavenger_dirty_stack_words, d->scavenger.dirty.stack.words)
+        ctf_integer(size_t, scavenger_dirty_card_count, d->scavenger.dirty.card.count)
+        ctf_integer(size_t, scavenger_dirty_card_words, d->scavenger.dirty.card.words)
         ctf_integer(size_t, scavenger_raw_promoted_count, d->scavenger.raw.promoted.count)
         ctf_integer(size_t, scavenger_raw_promoted_words, d->scavenger.raw.promoted.words)
         ctf_integer(size_t, scavenger_raw_copied_count, d->scavenger.raw.copied.count)
@@ -92,10 +94,10 @@ TRACEPOINT_EVENT(
         ctf_integer(size_t, scavenger_collapsed, d->scavenger.collapsed)
         ctf_integer(uint32_t, scavenger_aging, d->scavenger.aging)
         ctf_integer(bool, scavenger_snapshot, d->scavenger.snapshot)
-        ctf_integer(size_t, minorHeapBefore_usedWords, d->minorHeapBefore.usedWords)
-        ctf_integer(size_t, minorHeapBefore_totalWords, d->minorHeapBefore.totalWords)
-        ctf_integer(size_t, minorHeapAfter_usedWords, d->minorHeapAfter.usedWords)
-        ctf_integer(size_t, minorHeapAfter_totalWords, d->minorHeapAfter.totalWords)
+        ctf_integer(size_t, minorHeapBefore_usedSize, d->minorHeapBefore.usedSize)
+        ctf_integer(size_t, minorHeapBefore_totalSize, d->minorHeapBefore.totalSize)
+        ctf_integer(size_t, minorHeapAfter_usedSize, d->minorHeapAfter.usedSize)
+        ctf_integer(size_t, minorHeapAfter_totalSize, d->minorHeapAfter.totalSize)
     )
 )
 
@@ -340,6 +342,16 @@ TRACEPOINT_EVENT(
 
 TRACEPOINT_EVENT(
     chili,
+    ENTRY_NOTIFY_INT,
+    TP_ARGS(const ChiProcessor*, proc),
+    TP_FIELDS(
+        ctf_integer_hex(uintptr_t, rt, (uintptr_t)proc->rt)
+        ctf_integer(uint32_t, tid, chiThreadId(proc->thread))
+    )
+)
+
+TRACEPOINT_EVENT(
+    chili,
     ENTRY_START,
     TP_ARGS(const ChiProcessor*, proc),
     TP_FIELDS(
@@ -387,7 +399,6 @@ TRACEPOINT_EVENT(
         ctf_integer(uint32_t, tid, chiThreadId(proc->thread))
         ctf_sequence_text(uint8_t, name, d->name.bytes, uint32_t, d->name.size)
         ctf_sequence_text(uint8_t, trace, d->trace.bytes, uint32_t, d->trace.size)
-        ctf_integer(bool, handled, d->handled)
     )
 )
 
@@ -476,15 +487,6 @@ TRACEPOINT_EVENT(
 
 TRACEPOINT_EVENT(
     chili,
-    GC_NOTIFY,
-    TP_ARGS(const ChiRuntime*, rt),
-    TP_FIELDS(
-        ctf_integer_hex(uintptr_t, rt, (uintptr_t)rt)
-    )
-)
-
-TRACEPOINT_EVENT(
-    chili,
     GC_PHASE_GLOBAL,
     TP_ARGS(const ChiProcessor*, proc, const ChiEventGCPhase*, d),
     TP_FIELDS(
@@ -554,14 +556,19 @@ TRACEPOINT_EVENT(
 
 TRACEPOINT_EVENT(
     chili,
-    HEAP_LIMIT,
-    TP_ARGS(const ChiRuntime*, rt, const ChiEventHeapLimit*, d),
+    HEAP_LIMIT_GC,
+    TP_ARGS(const ChiRuntime*, rt),
     TP_FIELDS(
         ctf_integer_hex(uintptr_t, rt, (uintptr_t)rt)
-        ctf_integer(size_t, heapSize, d->heapSize)
-        ctf_integer(size_t, softLimit, d->softLimit)
-        ctf_integer(size_t, hardLimit, d->hardLimit)
-        ctf_integer(uint32_t, limit, d->limit)
+    )
+)
+
+TRACEPOINT_EVENT(
+    chili,
+    HEAP_LIMIT_OVERFLOW,
+    TP_ARGS(const ChiRuntime*, rt),
+    TP_FIELDS(
+        ctf_integer_hex(uintptr_t, rt, (uintptr_t)rt)
     )
 )
 
@@ -572,13 +579,13 @@ TRACEPOINT_EVENT(
     TP_FIELDS(
         ctf_integer_hex(uintptr_t, rt, (uintptr_t)proc->rt)
         ctf_integer(uint32_t, wid, proc->worker->wid)
-        ctf_integer(uint64_t, small_allocWords, d->small.allocWords)
-        ctf_integer(size_t, small_totalWords, d->small.totalWords)
-        ctf_integer(uint64_t, medium_allocWords, d->medium.allocWords)
-        ctf_integer(size_t, medium_totalWords, d->medium.totalWords)
-        ctf_integer(uint64_t, large_allocWords, d->large.allocWords)
-        ctf_integer(size_t, large_totalWords, d->large.totalWords)
-        ctf_integer(size_t, totalChunkWords, d->totalChunkWords)
+        ctf_integer(uint64_t, small_allocSize, d->small.allocSize)
+        ctf_integer(size_t, small_totalSize, d->small.totalSize)
+        ctf_integer(uint64_t, medium_allocSize, d->medium.allocSize)
+        ctf_integer(size_t, medium_totalSize, d->medium.totalSize)
+        ctf_integer(uint64_t, large_allocSize, d->large.allocSize)
+        ctf_integer(size_t, large_totalSize, d->large.totalSize)
+        ctf_integer(size_t, totalSize, d->totalSize)
     )
 )
 
@@ -684,6 +691,17 @@ TRACEPOINT_EVENT(
 
 TRACEPOINT_EVENT(
     chili,
+    PROC_NOTIFY,
+    TP_ARGS(const ChiProcessor*, proc, const ChiEventProcNotify*, d),
+    TP_FIELDS(
+        ctf_integer_hex(uintptr_t, rt, (uintptr_t)proc->rt)
+        ctf_integer(uint32_t, tid, chiThreadId(proc->thread))
+        ctf_integer(uint32_t, notifyWid, d->notifyWid)
+    )
+)
+
+TRACEPOINT_EVENT(
+    chili,
     PROC_REQUEST,
     TP_ARGS(const ChiRuntime*, rt, const ChiEventProcRequest*, d),
     TP_FIELDS(
@@ -709,7 +727,6 @@ TRACEPOINT_EVENT(
     TP_FIELDS(
         ctf_integer_hex(uintptr_t, rt, (uintptr_t)proc->rt)
         ctf_integer(uint32_t, tid, chiThreadId(proc->thread))
-        ctf_integer(uint32_t, suspendWid, d->suspendWid)
         ctf_integer(uint32_t, ms, d->ms)
     )
 )
@@ -759,40 +776,61 @@ TRACEPOINT_EVENT(
 TRACEPOINT_EVENT(
     chili,
     STACK_ACTIVATE,
-    TP_ARGS(const ChiProcessor*, proc, const ChiEventStackActive*, d),
+    TP_ARGS(const ChiProcessor*, proc, const ChiEventStack*, d),
     TP_FIELDS(
         ctf_integer_hex(uintptr_t, rt, (uintptr_t)proc->rt)
         ctf_integer(uint32_t, tid, chiThreadId(proc->thread))
         ctf_integer_hex(uintptr_t, stack, d->stack)
-        ctf_integer(bool, scanned, d->scanned)
     )
 )
 
 TRACEPOINT_EVENT(
     chili,
     STACK_DEACTIVATE,
-    TP_ARGS(const ChiProcessor*, proc, const ChiEventStackActive*, d),
+    TP_ARGS(const ChiProcessor*, proc, const ChiEventStack*, d),
     TP_FIELDS(
         ctf_integer_hex(uintptr_t, rt, (uintptr_t)proc->rt)
         ctf_integer(uint32_t, tid, chiThreadId(proc->thread))
         ctf_integer_hex(uintptr_t, stack, d->stack)
-        ctf_integer(bool, scanned, d->scanned)
     )
 )
 
 TRACEPOINT_EVENT(
     chili,
-    STACK_RESIZE,
+    STACK_GROW,
     TP_ARGS(const ChiProcessor*, proc, const ChiEventStackSize*, d),
     TP_FIELDS(
         ctf_integer_hex(uintptr_t, rt, (uintptr_t)proc->rt)
         ctf_integer(uint32_t, tid, chiThreadId(proc->thread))
-        ctf_integer_hex(uintptr_t, oldStack, d->oldStack)
-        ctf_integer_hex(uintptr_t, newStack, d->newStack)
-        ctf_integer(size_t, reqSize, d->reqSize)
-        ctf_integer(size_t, oldSize, d->oldSize)
-        ctf_integer(size_t, newSize, d->newSize)
-        ctf_integer(size_t, usedSize, d->usedSize)
+        ctf_integer_hex(uintptr_t, stack, d->stack)
+        ctf_integer(size_t, size, d->size)
+        ctf_integer(size_t, step, d->step)
+        ctf_integer(size_t, copied, d->copied)
+    )
+)
+
+TRACEPOINT_EVENT(
+    chili,
+    STACK_SCANNED,
+    TP_ARGS(const ChiProcessor*, proc, const ChiEventStack*, d),
+    TP_FIELDS(
+        ctf_integer_hex(uintptr_t, rt, (uintptr_t)proc->rt)
+        ctf_integer(uint32_t, tid, chiThreadId(proc->thread))
+        ctf_integer_hex(uintptr_t, stack, d->stack)
+    )
+)
+
+TRACEPOINT_EVENT(
+    chili,
+    STACK_SHRINK,
+    TP_ARGS(const ChiProcessor*, proc, const ChiEventStackSize*, d),
+    TP_FIELDS(
+        ctf_integer_hex(uintptr_t, rt, (uintptr_t)proc->rt)
+        ctf_integer(uint32_t, tid, chiThreadId(proc->thread))
+        ctf_integer_hex(uintptr_t, stack, d->stack)
+        ctf_integer(size_t, size, d->size)
+        ctf_integer(size_t, step, d->step)
+        ctf_integer(size_t, copied, d->copied)
     )
 )
 
@@ -826,9 +864,11 @@ TRACEPOINT_EVENT(
         ctf_integer_hex(uintptr_t, rt, (uintptr_t)rt)
         ctf_integer(uint64_t, cpuTimeUser, CHI_UN(Nanos, d->cpuTimeUser))
         ctf_integer(uint64_t, cpuTimeSystem, CHI_UN(Nanos, d->cpuTimeSystem))
-        ctf_integer(size_t, residentSize, d->residentSize)
+        ctf_integer(size_t, maxResidentSize, d->maxResidentSize)
+        ctf_integer(size_t, currResidentSize, d->currResidentSize)
         ctf_integer(uint64_t, pageFault, d->pageFault)
-        ctf_integer(uint64_t, contextSwitch, d->contextSwitch)
+        ctf_integer(uint64_t, voluntaryContextSwitch, d->voluntaryContextSwitch)
+        ctf_integer(uint64_t, involuntaryContextSwitch, d->involuntaryContextSwitch)
     )
 )
 
@@ -921,15 +961,6 @@ TRACEPOINT_EVENT(
         ctf_integer_hex(uintptr_t, rt, (uintptr_t)proc->rt)
         ctf_integer(uint32_t, tid, chiThreadId(proc->thread))
         ctf_integer(uint32_t, phase, d->phase)
-    )
-)
-
-TRACEPOINT_EVENT(
-    chili,
-    TICK,
-    TP_ARGS(const ChiRuntime*, rt),
-    TP_FIELDS(
-        ctf_integer_hex(uintptr_t, rt, (uintptr_t)rt)
     )
 )
 

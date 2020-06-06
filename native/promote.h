@@ -9,7 +9,7 @@ CHI_INTERN void chiPromoteShared(ChiProcessor*, Chili*);
 typedef struct {
     CHI_IF(CHI_COUNT_ENABLED, ChiPromoteStats stats;)
     ChiProcessor*   proc;
-    ChiBlockVec     stack;
+    ChiObjVec       postponed;
     uintptr_t       blockMask;
     uint32_t        depth;
     bool            forward;
@@ -17,10 +17,10 @@ typedef struct {
 
 CHI_INTERN void chiPromoteSharedBegin(ChiPromoteState*, ChiProcessor*);
 CHI_INTERN void chiPromoteSharedEnd(ChiPromoteState*);
-CHI_INTERN void chiPromoteSharedObject(ChiPromoteState*, Chili*);
+CHI_INTERN void chiPromoteSharedAdd(ChiPromoteState*, Chili*);
 #else
 typedef ChiProcessor* ChiPromoteState;
 CHI_INL void chiPromoteSharedBegin(ChiPromoteState* state, ChiProcessor* proc) { *state = proc; }
 CHI_INL void chiPromoteSharedEnd(ChiPromoteState* state) { *state = 0; }
-CHI_INL void chiPromoteSharedObject(ChiPromoteState* state, Chili* cp) { chiPromoteLocal(*state, cp); }
+CHI_INL void chiPromoteSharedAdd(ChiPromoteState* state, Chili* cp) { chiPromoteLocal(*state, cp); }
 #endif

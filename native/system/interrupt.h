@@ -118,7 +118,7 @@ static void dispatcherNotify(void);
 void chiTimerInstall(ChiTimer* t) {
     CHI_ASSERT(chiMicrosZero(t->_timeoutAbs));
     CHI_ASSERT(t->handler);
-    t->_timeoutAbs = chiMicrosAdd(t->timeout, chiNanosToMicros(chiClockMonotonicFine()));
+    t->_timeoutAbs = chiMicrosAdd(t->timeout, chiNanosToMicros(chiClockFine()));
     bool updated;
     {
         CHI_LOCK_MUTEX(&interruptMutex);
@@ -136,7 +136,7 @@ void chiTimerRemove(ChiTimer* t) {
 }
 
 static ChiMicros dispatchTimers(void) {
-    ChiMicros us = chiNanosToMicros(chiClockMonotonicFine());
+    ChiMicros us = chiNanosToMicros(chiClockFine());
     CHI_LOCK_MUTEX(&interruptMutex);
     return timerDispatch(&timerHeap, us);
 }

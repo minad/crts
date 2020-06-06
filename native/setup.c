@@ -1,7 +1,6 @@
 #include <stdlib.h>
 #include "error.h"
 #include "event.h"
-#include "export.h"
 #include "new.h"
 #include "profiler.h"
 #include "runtime.h"
@@ -14,47 +13,31 @@
 #define VEC_PREFIX hookVec
 #include "generic/vec.h"
 
-typedef struct {
-    size_t hard, soft;
-} HeapLimits;
-
-CHI_INL HeapLimits heapLimits(const ChiRuntimeOption* opt) {
-    return (HeapLimits) {
-        .hard = (size_t)(((uint64_t)opt->heap.limit.hard * opt->heap.limit.max) / 100),
-        .soft = (size_t)(((uint64_t)opt->heap.limit.soft * opt->heap.limit.max) / 100)
-    };
-}
-
-static bool heapLimitReached(ChiRuntime* rt, size_t size) {
-    return atomic_load_explicit(&rt->totalHeapChunkSize, memory_order_relaxed) + size > heapLimits(&rt->option).hard;
-}
-
 static size_t heapGrow(ChiRuntime* rt, size_t size) {
-    size_t heapSize = atomic_fetch_add_explicit(&rt->totalHeapChunkSize, size, memory_order_relaxed) + size;
-    HeapLimits limits = heapLimits(&rt->option);
-    if (heapSize > limits.soft || heapSize > limits.hard) {
-        if (heapSize > limits.hard)
-            chiTrigger(&rt->heapOverflow, true);
-        chiEvent(rt, HEAP_LIMIT,
-                 .heapSize = heapSize,
-                 .softLimit = limits.soft,
-                 .hardLimit = limits.hard,
-                 .limit = heapSize > limits.hard ? CHI_HEAP_LIMIT_HARD : CHI_HEAP_LIMIT_SOFT);
+    size_t heapSize = atomic_fetch_add_explicit(&rt->heapTotalSize, size, memory_order_relaxed) + size;
+    if (heapSize > rt->heapOverflowLimit) {
+        chiTrigger(&rt->heapOverflow, true);
+        chiEvent0(rt, HEAP_LIMIT_OVERFLOW);
         chiGCTrigger(rt);
     }
     return heapSize;
 }
 
 static size_t heapShrink(ChiRuntime* rt, size_t size) {
-    return atomic_fetch_sub_explicit(&rt->totalHeapChunkSize, size, memory_order_relaxed) - size;
+    return atomic_fetch_sub_explicit(&rt->heapTotalSize, size, memory_order_relaxed) - size;
 }
 
-void chiBlockAllocLimitReached(ChiBlockManager* bm) {
-    ChiProcessor* proc = CHI_OUTER(ChiProcessor, heap, CHI_OUTER(ChiLocalHeap, manager, bm));
-    chiProcessorRequest(proc, CHI_REQUEST_SCAVENGE);
+void chiBlockManagerAllocHook(ChiBlockManager* bm) {
+    ChiLocalHeap* heap = CHI_OUTER(ChiLocalHeap, manager, bm);
+    if (heap->nursery.limit <
+        heap->nursery.alloc.usedList.length +
+        heap->dirty.objects.list.length +
+        heap->dirty.cards.list.length +
+        heap->promoted.objects.list.length)
+        chiProcessorRequest(CHI_OUTER(ChiProcessor, heap, heap), CHI_REQUEST_SCAVENGE);
 }
 
-ChiChunk* chiBlockManagerChunkNew(ChiRuntime* rt, size_t size, size_t align) {
+ChiChunk* chiBlockManagerChunkNew(ChiBlockManager* bm, size_t size, size_t align) {
     ChiChunk* chunk = chiChunkNew(size, align);
     /* Block allocations must never fail.
      * If we cannot allocate the fairly small chunks used by
@@ -63,30 +46,31 @@ ChiChunk* chiBlockManagerChunkNew(ChiRuntime* rt, size_t size, size_t align) {
      */
     if (!chunk)
         chiErr("Block manager failed to allocate chunk: size=%Z align=%Z heapSize=%Z: %m",
-               size, align, atomic_load_explicit(&rt->totalHeapChunkSize, memory_order_relaxed));
-    size_t heapSize = heapGrow(rt, size);
-    chiEvent(rt, BLOCK_CHUNK_NEW, .size = size, .align = align,
+               size, align, atomic_load_explicit(&bm->rt->heapTotalSize, memory_order_relaxed));
+    size_t heapSize = heapGrow(bm->rt, size);
+    chiEvent(bm->rt, BLOCK_CHUNK_NEW, .size = size, .align = align,
              .start = (uintptr_t)chunk->start, .heapSize = heapSize);
     return chunk;
 }
 
-void chiBlockManagerChunkFree(ChiRuntime* rt, ChiChunk* chunk) {
-    size_t heapSize = heapShrink(rt, chunk->size);
-    chiEvent(rt, BLOCK_CHUNK_FREE, .size = chunk->size, .start = (uintptr_t)chunk->start,
+void chiBlockManagerChunkFree(ChiBlockManager* bm, ChiChunk* chunk) {
+    size_t heapSize = heapShrink(bm->rt, chunk->size);
+    chiEvent(bm->rt, BLOCK_CHUNK_FREE, .size = chunk->size, .start = (uintptr_t)chunk->start,
              .heapSize = heapSize);
     chiChunkFree(chunk);
 }
 
 ChiChunk* chiHeapChunkNew(ChiHeap* heap, size_t size, ChiNewFlags flags) {
     ChiRuntime* rt = CHI_OUTER(ChiRuntime, heap, heap);
-    if ((flags & CHI_NEW_TRY) && heapLimitReached(rt, size))
+    if ((flags & CHI_NEW_TRY) &&
+        atomic_load_explicit(&rt->heapTotalSize, memory_order_relaxed) + size > rt->heapOverflowLimit)
         return 0;
     ChiChunk* chunk = chiChunkNew(size, 0);
     if (!chunk) {
         if ((flags & CHI_NEW_TRY))
             return 0;
-        chiErr("Heap failed to allocate chunk: size=%Z totalHeapChunkSize=%Z: %m",
-               size, atomic_load_explicit(&rt->totalHeapChunkSize, memory_order_relaxed));
+        chiErr("Heap failed to allocate chunk: chunkSize=%Z heapTotalSize=%Z: %m",
+               size, atomic_load_explicit(&rt->heapTotalSize, memory_order_relaxed));
     }
     size_t heapSize = heapGrow(rt, size);
     chiEvent(rt, HEAP_CHUNK_NEW,
@@ -104,27 +88,21 @@ void chiHeapChunkFree(ChiHeap* heap, ChiChunk* chunk) {
 
 void chiHeapLimitReached(ChiHeap* heap) {
     ChiRuntime* rt = CHI_OUTER(ChiRuntime, heap, heap);
-    HeapLimits limits = heapLimits(&rt->option);
-    chiEvent(rt, HEAP_LIMIT,
-             .heapSize = atomic_load_explicit(&rt->totalHeapChunkSize, memory_order_relaxed),
-             .softLimit = limits.soft,
-             .hardLimit = limits.hard,
-             .limit = CHI_HEAP_LIMIT_ALLOC);
+    chiEvent0(rt, HEAP_LIMIT_GC);
     chiGCTrigger(rt);
 }
 
 #if CHI_SYSTEM_HAS_INTERRUPT
 static ChiMicros timerHandler(ChiTimer* timer) {
     ChiRuntime* rt = CHI_OUTER(ChiRuntime, interrupts, CHI_OUTER(ChiInterrupts, timer, timer));
-    chiEvent0(rt, TICK);
 #if CHI_SYSTEM_HAS_STATS
     if (chiEventEnabled(rt, SYSTEM_STATS)) {
-        ChiSystemStats stats;
-        chiSystemStats(&stats);
-        chiEventStruct(rt, SYSTEM_STATS, &stats);
+        ChiSystemStats ss;
+        chiSystemStats(&ss);
+        chiEventStruct(rt, SYSTEM_STATS, &ss);
     }
 #endif
-    chiProcessorRequestAll(rt, CHI_REQUEST_TICK);
+    chiProcessorRequestAll(rt, CHI_REQUEST_TIMERINTERRUPT);
     return timer->timeout;
 }
 
@@ -137,8 +115,8 @@ static void signalHandler(ChiSigHandler* handler, ChiSig sig) {
         chiProcessorRequestMain(rt, CHI_REQUEST_USERINTERRUPT);
         break;
 
-    case CHI_SIG_DUMPSTACK:
-        chiProcessorRequestAll(rt, CHI_REQUEST_DUMPSTACK);
+    case CHI_SIG_DUMP:
+        chiProcessorRequestAll(rt, CHI_REQUEST_DUMP);
         break;
     }
 }
@@ -162,12 +140,12 @@ static void hookFree(ChiRuntime* rt) {
         hookVecFree(rt->hooks + i);
 }
 
-void chiHook(ChiRuntime* rt, ChiHookType type, ChiHookFn fn) {
+void _chiHook(ChiRuntime* rt, ChiHookType type, ChiHookFn(void) fn) {
     hookVecAppend(rt->hooks + type, (ChiHook){ .type = type, .fn = fn });
 }
 
-void chiHookRun(ChiHookType type, void* ctx) {
-    const ChiHookVec* v = (type <= CHI_HOOK_PROC ? ((ChiProcessor*)ctx)->rt : ((ChiWorker*)ctx)->rt)->hooks + type;
+void _chiHookRun(ChiRuntime* rt, ChiHookType type, void* ctx) {
+    const ChiHookVec* v = rt->hooks + type;
     if (type & 1) {
         for (size_t i = v->used; i --> 0;)
             CHI_VEC_AT(v, i).fn(type, ctx);
@@ -176,6 +154,9 @@ void chiHookRun(ChiHookType type, void* ctx) {
             CHI_VEC_AT(v, i).fn(type, ctx);
     }
 }
+
+CHI_EXTERN_CONT_DECL(z_Main)
+CHI_EXTERN_CONT_DECL(z_System__EntryPoints)
 
 static void setupStack(ChiProcessor* proc) {
     proc->thread = chiThreadNewUninitialized(proc);
@@ -194,17 +175,19 @@ static ChiProcessor* setup(ChiRuntime* rt) {
     CHI_IF(CHI_STATS_ENABLED, chiStatsSetup(&rt->stats, opt->stats.tableCell, opt->stats.json));
     chiEventSetup(rt);
     ChiProcessor* proc = chiProcessorBegin(rt);
+    rt->heapOverflowLimit = (size_t)(((uint64_t)opt->heap.limit.overflow * opt->heap.limit.max) / 100);
     chiHeapSetup(&rt->heap,
                  opt->heap.small.segment, opt->heap.small.page,
                  opt->heap.medium.segment, opt->heap.medium.page,
                  opt->heap.limit.full, opt->heap.limit.init);
     chiGCSetup(rt);
     chiProcessorSetup(proc);
-    rt->entryPoint.unhandled = chiNewVariadicFlags(proc, CHI_FN(2), CHI_NEW_SHARED | CHI_NEW_CLEAN,
-                                                   chiFromCont(&chiEntryPointUnhandledDefault));
-    chiGCRoot(rt, rt->entryPoint.unhandled);
+    rt->fail = chiNewInl(proc, CHI_FAIL, 1, CHI_NEW_SHARED | CHI_NEW_CLEAN);
+    *(ChiWord*)chiRawPayload(rt->fail) = 0;
+    chiGCRoot(rt, rt->fail);
     setupStack(proc);
     CHI_IF(CHI_SYSTEM_HAS_INTERRUPT, setupInterrupt(&rt->interrupts, opt->interval));
+    chiGCRoot(rt, rt->fail);
     return proc;
 }
 
@@ -233,17 +216,17 @@ void chiRuntimeEnter(ChiRuntime* rt, int argc, char** argv) {
 }
 
 uint64_t chiCurrentTimeNanos(void) {
-    return CHI_UN(Nanos, chiNanosDelta(chiClockMonotonicFine(), CHI_CURRENT_RUNTIME->timeRef.start.real));
+    return CHI_UN(Nanos, chiNanosDelta(chiClockFine(), CHI_CURRENT_RUNTIME->timeRef.start));
 }
 
 uint64_t chiCurrentTimeMillis(void) {
-    return CHI_UN(Millis, chiNanosToMillis(chiNanosDelta(chiClockMonotonicFast(), CHI_CURRENT_RUNTIME->timeRef.start.real)));
+    return CHI_UN(Millis, chiNanosToMillis(chiNanosDelta(chiClockFast(), CHI_CURRENT_RUNTIME->timeRef.start)));
 }
 
 void chiRuntimeInit(ChiRuntime* rt, ChiExitHandler exitHandler) {
     CHI_ZERO_STRUCT(rt);
     chiRuntimeOptionDefaults(&rt->option);
-    rt->timeRef.start = chiTime();
+    rt->timeRef.start = chiClockFine();
     rt->exitHandler = exitHandler;
 }
 
@@ -252,16 +235,21 @@ static ChiOptionResult parseOptions(ChiRuntimeOption* opt, ChiChunkOption* chunk
     CHI_NOWARN_UNUSED(profOption);
     CHI_NOWARN_UNUSED(chunkOption);
     CHI_AUTO_SINK(helpSink, chiSinkColor(CHI_SINK_COLOR_AUTO));
-    const ChiOptionList list[] =
-        { { chiRuntimeOptionList, opt },
-          CHI_IF(CHI_SYSTEM_HAS_MALLOC, { chiChunkOptionList, chunkOption },)
-          CHI_IF(CHI_PROF_ENABLED, { chiProfOptionList, profOption },)
-          { 0, 0 }
-        };
-    const ChiOptionParser parser =
+    ChiOptionParser parser =
         { .help = helpSink,
           .usage = chiStderr,
-          .list = list
+          .assocs = (ChiOptionAssoc[])
+          { { &chiGeneralOptions, opt },
+            { &chiStackOptions, opt },
+            { &chiNurseryOptions, opt },
+            { &chiHeapOptions, opt },
+            { &chiGCOptions, opt },
+            CHI_IF(CHI_SYSTEM_HAS_MALLOC, { &chiChunkOptions, chunkOption },)
+            CHI_IF(CHI_EVENT_ENABLED, { &chiEventOptions, opt },)
+            CHI_IF(CHI_STATS_ENABLED, { &chiStatsOptions, opt },)
+            CHI_IF(CHI_PROF_ENABLED, { &chiProfOptions, profOption },)
+            { 0 }
+          }
         };
     ChiOptionResult res = chiOptionEnv(&parser, "CHI_NATIVE_OPTS");
     if (res == CHI_OPTRESULT_OK)

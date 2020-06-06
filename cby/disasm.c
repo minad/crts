@@ -11,15 +11,11 @@
 
 #define REG         FgMagenta"@%u"FgDefault
 #define VAL(x)      FgRed x FgDefault
-#define NAME(n)     " "FgGreen #n FgDefault "="
-#define ARGU(x)     NAME(x)VAL("%u")
-#define ARGD(x)     NAME(x)VAL("%d")
-#define ARGR(x)     NAME(x)REG
-#define ARGQ(x)     NAME(x)VAL("%qS")
-#define FFIREF      " "FgCyan"<%08x %S>"FgDefault
+#define NAME(n)     FgGreen #n FgDefault "="
+#define FFIREF      FgCyan"<%08x %S>"FgDefault
 #define FFIREF_NAME ({ const CbyCode* _oldip = IP; IP = ffiref + 4; const ChiStringRef _name = FETCH_STRING; IP = _oldip; _name; })
 #define FFIREF_ARGS (uint32_t)(ffiref - codeStart), FFIREF_NAME
-#define FNREF       " "FgCyan"<%08x %S>"FgDefault
+#define FNREF       FgCyan"<%08x %S>"FgDefault
 #define FNREF_ARGS  (uint32_t)(fnref - codeStart), ({ cbyReadLocation(fnref, &loc); loc.fn; })
 
 #define _CBY_FFI_TYPE_NAME(name, libffi, dcarg, dccall, type) #type,
@@ -44,25 +40,11 @@ bool cbyDisasm(ChiSink* sink, const CbyCode* codeStart, const CbyCode* codeEnd) 
                 ChiStringRef name = FETCH_STRING;
                 uint32_t rtype = FETCH8;
                 uint32_t nargs = FETCH8;
-                chiSinkFmt(sink, FgWhite"%8u"FgDefault"    #%-*u"ARGQ(name)NAME(rtype)VAL("%s")ARGU(nargs)NAME(atypes)"[",
+                chiSinkFmt(sink, FgWhite"%8u"FgDefault"    #%-*u "NAME(name)VAL("%qS")" "NAME(rtype)VAL("%s")" "NAME(nargs)VAL("%u")" "NAME(atypes)"[",
                            off, OPCODE_MAXLEN - 1, i, name, ffiTypeName[rtype], nargs);
                 for (uint32_t j = 0; j < nargs; ++j)
                     chiSinkFmt(sink, "%*w"VAL("%s"), j > 0, ffiTypeName[FETCH8]);
                 chiSinkPuts(sink, "]\n");
-            }
-        }
-    }
-
-    {
-        const uint32_t exportCount = FETCH32;
-        const CbyCode* exportBegin = IP;
-        if (exportCount > 0) {
-            chiSinkFmt(sink, "\n"FgWhite"%08x"FgDefault" "TitleBegin"[exports]"TitleEnd"\n", (uint32_t)(exportBegin - codeStart));
-            for (uint32_t i = 0; i < exportCount; ++i) {
-                ChiStringRef name = FETCH_STRING;
-                int32_t idx = (int32_t)FETCH32;
-                chiSinkFmt(sink, FgWhite"%8u"FgDefault"   "ARGQ(name)ARGD(idx)"\n",
-                           2 * i, name, idx);
             }
         }
     }
@@ -80,6 +62,7 @@ bool cbyDisasm(ChiSink* sink, const CbyCode* codeStart, const CbyCode* codeEnd) 
     }
 
     {
+        FETCH32; // mainIdx
         uint32_t initOff = FETCH32;
         init = IP + initOff;
     }
@@ -125,7 +108,7 @@ const CbyCode* cbyDisasmInsn(ChiSink* sink, const CbyCode* IP, const CbyCode* fn
         size_t n = strlen(cbyOpName[opCode]);
         chiSinkFmt(sink, FgBlue"%s"FgDefault"%*w", cbyOpName[opCode], OPCODE_MAXLEN - (int)n);
     } else if (opCode < OPCODE_COUNT) {
-        chiSinkFmt(sink, FgBlue"prim"FgDefault"%*w %s", OPCODE_MAXLEN - 4, cbyOpName[opCode]);
+        chiSinkFmt(sink, FgBlue"prim"FgDefault"%*w%s", OPCODE_MAXLEN - 3, cbyOpName[opCode]);
     } else {
         chiSinkFmt(sink, "Invalid opcode %d\n", opCode);
         return 0;

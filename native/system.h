@@ -12,10 +12,6 @@ enum {
     CHI_EXIT_FATAL   = 2,
 };
 
-typedef struct {
-    ChiNanos real, cpu;
-} ChiTime;
-
 struct ChiTimer_ {
     ChiMicros (*handler)(ChiTimer*);
     ChiMicros timeout;
@@ -55,17 +51,6 @@ struct ChiSigHandler_ {
 
 CHI_DEFINE_AUTO_LOCK(ChiMutex, chiMutexLock, chiMutexUnlock)
 #define CHI_LOCK_MUTEX(m) CHI_AUTO_LOCK(ChiMutex, m)
-
-CHI_INL ChiTime chiTime(void) {
-    return (ChiTime){ .real = chiClockMonotonicFine(), .cpu = chiClockCpu() };
-}
-
-CHI_INL ChiTime chiTimeDelta(ChiTime a, ChiTime b) {
-    return (ChiTime){
-        .real = chiNanosDelta(a.real, b.real),
-        .cpu  = chiNanosDelta(a.cpu, b.cpu),
-    };
-}
 
 CHI_NEWTYPE(Trigger, _Atomic(bool))
 

@@ -29,8 +29,6 @@ CHI_INL float     chi_Prim_float32Expm1(float x)                  { return expm1
 CHI_INL float     chi_Prim_float32Floor(float x)                  { return floorf(x); }
 CHI_INL float     chi_Prim_float32Log(float x)                    { return logf(x); }
 CHI_INL float     chi_Prim_float32Log1p(float x)                  { return log1pf(x); }
-CHI_INL float     chi_Prim_float32Max(float x, float y)           { return x != x || y != y ? 0.0f/0.0f : (x > y ? x : y); }
-CHI_INL float     chi_Prim_float32Min(float x, float y)           { return x != x || y != y ? 0.0f/0.0f : (x < y ? x : y); }
 CHI_INL float     chi_Prim_float32Mul(float x, float y)           { return x * y; }
 CHI_INL float     chi_Prim_float32Neg(float x)                    { return -x; }
 CHI_INL float     chi_Prim_float32Pow(float x, float y)           { return powf(x, y); }
@@ -65,8 +63,6 @@ CHI_INL double    chi_Prim_float64Expm1(double x)                 { return expm1
 CHI_INL double    chi_Prim_float64Floor(double x)                 { return floor(x); }
 CHI_INL double    chi_Prim_float64Log(double x)                   { return log(x); }
 CHI_INL double    chi_Prim_float64Log1p(double x)                 { return log1p(x); }
-CHI_INL double    chi_Prim_float64Max(double x, double y)         { return x != x || y != y ? 0.0/0.0 : (x > y ? x : y); }
-CHI_INL double    chi_Prim_float64Min(double x, double y)         { return x != x || y != y ? 0.0/0.0 : (x < y ? x : y); }
 CHI_INL double    chi_Prim_float64Mul(double x, double y)         { return x * y; }
 CHI_INL double    chi_Prim_float64Neg(double x)                   { return -x; }
 CHI_INL double    chi_Prim_float64Pow(double x, double y)         { return pow(x, y); }
@@ -84,7 +80,9 @@ CHI_INL int64_t   chi_Prim_float64ToInt64(double x)               { return _chiF
 CHI_INL uint32_t  chi_Prim_float64ToUInt32(double x)              { return (uint32_t)(uint64_t)_chiFloat64ToInt64(x); }
 CHI_INL uint64_t  chi_Prim_float64ToUInt64(double x)              { return (uint64_t)_chiFloat64ToInt64(x); }
 CHI_INL int32_t   chi_Prim_int8ToInt32(int8_t x)                  { return x; }
+CHI_INL uint8_t   chi_Prim_int8ToUInt8(int8_t x)                  { return (uint8_t)x; }
 CHI_INL int32_t   chi_Prim_int16ToInt32(int16_t x)                { return x; }
+CHI_INL uint16_t  chi_Prim_int16ToUInt16(int16_t x)               { return (uint16_t)x; }
 CHI_INL Chili     chi_Prim_int32ToInt(int32_t x)                  { return chiInt64ToBigInt(x); }
 CHI_INL bool      chi_Prim_int32Eq(int32_t x, int32_t y)          { return x == y; }
 CHI_INL bool      chi_Prim_int32Le(int32_t x, int32_t y)          { return x <= y; }
@@ -153,8 +151,10 @@ CHI_INL bool      chi_Prim_stringLt(Chili x, Chili y)             { return chiSt
 CHI_INL bool      chi_Prim_stringNe(Chili x, Chili y)             { return !chiStringEq(x, y); }
 CHI_INL bool      chi_Prim_stringNull(Chili x)                    { return !chiTrue(x); }
 CHI_INL uint32_t  chi_Prim_uint16ToUInt32(uint16_t x)             { return x; }
+CHI_INL int16_t   chi_Prim_uint16ToInt16(uint16_t x)              { return (int16_t)x; }
 CHI_INL uint8_t   chi_Prim_uint32ToUInt8(uint32_t x)              { return (uint8_t)x; }
 CHI_INL uint32_t  chi_Prim_uint8ToUInt32(uint8_t x)               { return x; }
+CHI_INL int8_t    chi_Prim_uint8ToInt8(uint8_t x)                 { return (int8_t)x; }
 CHI_INL uint16_t  chi_Prim_uint32ToUInt16(uint32_t x)             { return (uint16_t)x; }
 CHI_INL Chili     chi_Prim_uint32ToInt(uint32_t x)                { return chiUInt64ToBigInt(x); }
 CHI_INL ChiChar   chi_Prim_uint32ToChar(uint32_t x)               { return chiChr(x); }
@@ -209,7 +209,7 @@ CHI_INL uint64_t  chi_Prim_float64ToBits(double x)                { return _chiF
 CHI_INL bool      chi_Prim_arrayCas(Chili c, uint32_t i, Chili o, Chili x)                    { return chiArrayCas(c, i, o, x); }
 CHI_INL void      chi_Prim_arrayCopy(Chili s, uint32_t si, Chili d, uint32_t di, uint32_t n)  { chiArrayCopy(s, si, d, di, n); }
 CHI_INL Chili     chi_Prim_arrayRead(Chili c, uint32_t i)                                     { return chiArrayRead(c, i); }
-CHI_INL uint32_t  chi_Prim_arraySize(Chili c)                                                 { return (uint32_t)_chiSize(c); }
+CHI_INL uint32_t  chi_Prim_arraySize(Chili c)                                                 { return chiArraySize(c); }
 CHI_INL void      chi_Prim_arrayWrite(Chili c, uint32_t i, Chili x)                           { chiArrayWrite(c, i, x); }
 CHI_INL int32_t   chi_Prim_bufferCmp(Chili a, uint32_t ai, Chili b, uint32_t bi, uint32_t n)  { return chiBufferCmp(a, ai, b, bi, n); }
 CHI_INL void      chi_Prim_bufferCopy(Chili s, uint32_t si, Chili d, uint32_t di, uint32_t n) { chiBufferCopy(s, si, d, di, n); }
@@ -246,8 +246,7 @@ CHI_INL uint32_t  chi_Prim_tag(Chili c)                                         
 #define _CHI_PRIM_STRINGBUILDER_CHAR(x, b, ch, sb) ({ Chili b = (sb); ChiChar x = (ch); if (CHI_UNLIKELY(!chiStringBuilderEnsure(b, 4))) KNOWN_JUMP(chiHeapOverflow); chiStringBuilderChar(b, x); b; })
 #define _CHI_PRIM_STRINGBUILDER_STRING(x, b, str, sb) ({ Chili b = (sb); ChiStringRef x = (str); if (CHI_UNLIKELY(!chiStringBuilderEnsure(b, x.size))) KNOWN_JUMP(chiHeapOverflow); chiStringBuilderString(b, x); b; })
 
-#define chi_Prim_lazyForce                 FORCE
-#define chi_Prim_arrayNew(s, x)            _CHI_PRIM_TRY(chiArrayNewFlags((s), (x), CHI_NEW_TRY))
+#define chi_Prim_arrayNew(s, x)            _CHI_PRIM_TRY(chiArrayNewFlags((s), (x), CHI_NEW_TRY | CHI_NEW_LOCAL))
 #define chi_Prim_bufferNew(s)              _CHI_PRIM_TRY(chiBufferNewFlags((s), 0, CHI_NEW_TRY))
 #define chi_Prim_arrayClone(c, i, s)       _CHI_PRIM_TRY(chiArrayTryClone((c), (i), (s)))
 #define chi_Prim_bufferClone(c, i, s)      _CHI_PRIM_TRY(chiBufferTryClone((c), (i), (s)))

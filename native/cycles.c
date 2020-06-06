@@ -9,7 +9,7 @@ uint32_t chiCpuCyclesOverhead(void) {
         uint64_t a, b;
         a = chiCpuCycles(); b = chiCpuCycles(); b = chiCpuCycles(); b = chiCpuCycles(); b = chiCpuCycles();
         b = chiCpuCycles(); b = chiCpuCycles(); b = chiCpuCycles(); b = chiCpuCycles(); b = chiCpuCycles();
-        min = CHI_MIN(min, (uint32_t)(b - a));
+        CHI_SETMIN(&min, (uint32_t)(b - a));
     }
     return result = min / 10;
 }

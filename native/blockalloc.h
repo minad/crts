@@ -1,15 +1,14 @@
 #pragma once
 
-#include "blockman.h"
+#include "block.h"
 
 /**
  * A block allocator is a thin layer
  * on top of the ChiBlockManager,
- * which is responsible for allocations of objects,
- * which live in multiple generations.
+ * which is responsible for allocations of objects.
  * The blocks used by the block allocator
  * are returned to the block manager after
- * a scavenger garbage collection.
+ * a scavenger run.
  *
  * @note The block allocator is not thread safe.
  *       Every processor maintains its own instances.
@@ -18,11 +17,9 @@ typedef struct {
     ChiBlockManager* manager;
     ChiBlockList     usedList;
     ChiBlock*        block;
-    size_t           limit;
 } ChiBlockAlloc;
 
-CHI_INTERN void chiBlockAllocLimitReached(ChiBlockManager*);
-CHI_INTERN void chiBlockAllocSetup(ChiBlockAlloc*, ChiBlockManager*, size_t);
+CHI_INTERN void chiBlockAllocSetup(ChiBlockAlloc*, ChiBlockManager*);
 CHI_INTERN void chiBlockAllocDestroy(ChiBlockAlloc*);
 CHI_INTERN CHI_RET_NONNULL ChiBlock* chiBlockAllocFresh(ChiBlockAlloc*);
 CHI_INTERN CHI_RET_NONNULL ChiBlock* chiBlockAllocTake(ChiBlockAlloc*);
@@ -54,14 +51,10 @@ CHI_INL CHI_WU size_t chiBlockAllocIndex(ChiBlock* b, void* p) {
 
 CHI_INL CHI_WU bool chiBlockAllocSetForward(ChiBlock* b, void* p) {
     size_t idx = chiBlockAllocIndex(b, p);
-    if (chiBitGet((const uintptr_t*)b->alloc.forward, idx))
-        return false;
-    chiBitSet((uintptr_t*)b->alloc.forward, idx, true);
-    return true;
-}
-
-CHI_INL CHI_WU bool chiBlockAllocGetForward(ChiBlock* b, void* p) {
-    return chiBitGet((const uintptr_t*)b->alloc.forward, chiBlockAllocIndex(b, p));
+    /* We speculatively always set the bit, since it seems faster.
+     * chiBitSet returns the old value
+     */
+    return !chiBitSet((uintptr_t*)b->alloc.forward, idx, true);
 }
 
 CHI_INL CHI_WU ChiBlock* chiBlockAllocBlock(void* p, uintptr_t blockMask) {
@@ -73,10 +66,6 @@ CHI_INL CHI_WU ChiBlock* chiBlockAllocBlock(void* p, uintptr_t blockMask) {
 
 CHI_INL CHI_WU bool chiBlockAllocSetForwardMasked(void* p, uintptr_t blockMask) {
     return chiBlockAllocSetForward(chiBlockAllocBlock(p, blockMask), p);
-}
-
-CHI_INL CHI_WU bool chiBlockAllocGetForwardMasked(void* p, uintptr_t blockMask) {
-    return chiBlockAllocGetForward(chiBlockAllocBlock(p, blockMask), p);
 }
 
 CHI_INL CHI_WU ChiWord* chiBlockAllocBase(ChiBlock* b, size_t blockSize) {

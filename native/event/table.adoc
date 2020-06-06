@@ -19,6 +19,7 @@
 |Instant|BLOCK_CHUNK_FREE|Runtime|ChiEventChunk|Block manager: Chunk freed
 |Instant|BLOCK_CHUNK_NEW|Runtime|ChiEventChunk|Block manager: New chunk allocated
 |Instant|ENTRY_BLACKHOLE|Library||Entry point: Blackhole
+|Instant|ENTRY_NOTIFY_INT|Library||Entry point: Notify interrupt
 |Instant|ENTRY_START|Library||Entry point: Start
 |Instant|ENTRY_TIMER_INT|Library||Entry point: Timer interrupt
 |Instant|ENTRY_UNHANDLED|Library||Entry point: Unhandled exception
@@ -30,14 +31,14 @@
 |Instant|FNLOG_ENTER_JMP|Thread|ChiEventFnLog|Logging: Interpreted function entered via jump
 |Instant|FNLOG_FFI|Thread|ChiEventFnLogFFI|Logging: Foreign function called in interpreter
 |Instant|FNLOG_LEAVE|Thread|ChiEventFnLog|Logging: Interpreted function left
-|Instant|GC_NOTIFY|Runtime||GC: Notify workers
 |Instant|GC_PHASE_GLOBAL|Processor|ChiEventGCPhase|GC: Handshake
 |Instant|GC_PHASE_LOCAL|Processor|ChiEventGCPhase|GC: Handshake
 |Instant|GC_TRIGGER|Runtime||Garbage collection triggered
 |Instant|HEAP_ALLOC_FAILED|Thread|ChiEventHeapAlloc|Heap: Allocation failed
 |Instant|HEAP_CHUNK_FREE|Runtime|ChiEventChunk|Heap: Chunk freed
 |Instant|HEAP_CHUNK_NEW|Runtime|ChiEventChunk|Heap: New Chunk allocated
-|Instant|HEAP_LIMIT|Runtime|ChiEventHeapLimit|Heap: Limit reached
+|Instant|HEAP_LIMIT_GC|Runtime||Heap: GC limit reached
+|Instant|HEAP_LIMIT_OVERFLOW|Runtime||Heap: Overflow limit reached
 |Instant|HEAP_USAGE|Processor|ChiEventHeapUsage|Heap usage statistics
 |Instant|LOG_BEGIN|Runtime||Beginning of event log
 |Instant|LOG_END|Runtime||End of event log
@@ -48,6 +49,7 @@
 |Instant|PROC_INIT|Processor||Processor: Initialized
 |Instant|PROC_MSG_RECV|Library|ChiEventProcMsgRecv|Processor: Receive message
 |Instant|PROC_MSG_SEND|Library|ChiEventProcMsgSend|Processor: Send message
+|Instant|PROC_NOTIFY|Thread|ChiEventProcNotify|Processor: Notify request
 |Instant|PROC_REQUEST|Runtime|ChiEventProcRequest|Processor: Request
 |Instant|PROC_STALL|Runtime|ChiEventProcStall|Processor: Stalling
 |Instant|PROC_SUSPEND|Thread|ChiEventProcSuspend|Processor: Suspend request
@@ -55,9 +57,11 @@
 |Instant|PROF_ENABLED|Worker||Profiling enabled
 |Instant|PROF_TRACE|Worker|ChiEventStackTrace|Profiling: Stack trace collected
 |Instant|SIGNAL|Runtime|ChiEventSignal|Signal received
-|Instant|STACK_ACTIVATE|Thread|ChiEventStackActive|Stack: Activation
-|Instant|STACK_DEACTIVATE|Thread|ChiEventStackActive|Stack: Deactivation
-|Instant|STACK_RESIZE|Thread|ChiEventStackSize|Stack: Resize
+|Instant|STACK_ACTIVATE|Thread|ChiEventStack|Stack: Activation
+|Instant|STACK_DEACTIVATE|Thread|ChiEventStack|Stack: Deactivation
+|Instant|STACK_GROW|Thread|ChiEventStackSize|Stack: Grow
+|Instant|STACK_SCANNED|Thread|ChiEventStack|Stack: Scanned
+|Instant|STACK_SHRINK|Thread|ChiEventStackSize|Stack: Shrink
 |Instant|STACK_TRACE|Thread|ChiEventStackTrace|Stack: Trace collected
 |Instant|STRBUILDER_OVERFLOW|Thread||String builder overflow
 |Instant|SYSTEM_STATS|Runtime|ChiEventSystemStats|System statistics
@@ -69,7 +73,6 @@
 |Instant|THREAD_TAKEOVER|Library|ChiEventThreadMigrate|Thread: Take over by other processor
 |Instant|THREAD_TERMINATED|Library||Thread: Terminated
 |Instant|THREAD_YIELD|Library|ChiEventThreadYield|Thread: Yield
-|Instant|TICK|Runtime||Timer tick received
 |Instant|USER_BUFFER|Library|ChiEventUserBuffer|User event: Binary data
 |Instant|USER_STRING|Library|ChiEventUserString|User event: String data
 |Instant|WORKER_DESTROY|Worker||Worker: Destroyed

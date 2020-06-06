@@ -5,27 +5,31 @@
  *
  *     1. Thunk unforced:
  *
- *         ┌─────┬───┐   ┌───────┬───┐   ┌──────────┬──────┬────────┐
- *         │ ... │ *─┼──▶│ THUNK │ *─┼──▶│ THUNK_FN │ Cont │ Var... │
- *         └─────┴───┘   └───────┴───┘   └──────────┴──────┴────────┘
+ *         ┌─────┬───┐   ┌───────┬──────┬──────┬────────┐
+ *         │ ... │ *─┼──▶│ THUNK │ Cont │ self │ Var... │
+ *         └─────┴───┘   └───────┴──────┴──────┴────────┘
  *
  *     2. Thunk blackholed:
  *
- *         ┌─────┬───┐   ┌───────┬───┐   ┌──────────┬─────────────────┬────────┐
- *         │ ... │ *─┼──▶│ THUNK │ *─┼──▶│ THUNK_FN │chiThunkBlackhole│ Var... │
- *         └─────┴───┘   └───────┴───┘   └──────────┴─────────────────┴────────┘
+ *         ┌─────┬───┐   ┌───────┬───────────────────┬──────┬────────┐
+ *         │ ... │ *─┼──▶│ THUNK │ chiThunkBlackhole │ self │ Var... │
+ *         └─────┴───┘   └───────┴───────────────────┴──────┴────────┘
  *
  *     3.a Thunk forced (Boxed):
  *
- *         ┌─────┬───┐   ┌───────┬───┐   ┌────────┐
- *         │ ... │ *─┼──▶│ THUNK │ *─┼──▶│ Object │
- *         └─────┴───┘   └───────┴───┘   └────────┘
+ *         ┌─────┬───┐   ┌───────┬───────────────────┬───┬────────┐
+ *         │ ... │ *─┼──▶│ THUNK │ chiThunkBlackhole │ * │ Var... │
+ *         └─────┴───┘   └───────┴───────────────────┴─┼─┴────────┘
+ *                                                     ▼
+ *                                                 ┌────────┐
+ *                                                 │ Object │
+ *                                                 └────────┘
  *
  *     3.b Thunk forced (Unboxed):
  *
- *         ┌─────┬───┐   ┌───────┬───┐
- *         │ ... │ *─┼──▶│ THUNK │ U │
- *         └─────┴───┘   └───────┴───┘
+ *         ┌─────┬───┐   ┌───────┬───────────────────┬───┬────────┐
+ *         │ ... │ *─┼──▶│ THUNK │ chiThunkBlackhole │ U │ Var... │
+ *         └─────┴───┘   └───────┴───────────────────┴───┴────────┘
  *
  *     4.a Collapsed (Boxed):
  *
@@ -40,20 +44,20 @@
  *         └─────┴───┘
  */
 
-CHI_OBJECT(THUNK, Thunk, ChiField val)
+CHI_OBJECT(THUNK, Thunk, ChiField cont, val; Chili clos[])
+
+CHI_EXPORT_CONT_DECL(CHI_PRIVATE(chiThunkBlackhole))
+CHI_EXPORT_CONT_DECL(CHI_PRIVATE(chiThunkUpdateCont))
 
 CHI_INL CHI_WU bool CHI_PRIVATE(chiThunkForced)(Chili thunk, Chili* val) {
-    if (_chiUnboxed(thunk) || _chiType(thunk) != CHI_THUNK) { // Collapsed thunk
-        *val = thunk;
-        return true;
-    }
     *val = _chiFieldRead(&_chiToThunk(thunk)->val);
-    return _chiUnboxed(*val) || _chiType(*val) != CHI_THUNK_FN; // Evaluated thunk
+    return !chiIdentical(*val, thunk);
 }
 
-CHI_INL CHI_WU bool CHI_PRIVATE(chiThunkCollapsible)(Chili val) {
-    if (_chiUnboxed(val))
-        return true;
-    ChiType t = _chiType(val);
-    return t != CHI_THUNK_FN && t != CHI_THUNK;
+CHI_INL CHI_WU bool CHI_PRIVATE(chiThunkCollapsible)(ChiThunk* thunk, Chili* collapsed) {
+    // Thunks which reference other thunks are not collapsible.
+    // - Unforced thunks are referencing themselves
+    // - Forwarded thunks reference the forwarded thunk
+    *collapsed = _chiFieldRead(&thunk->val);
+    return !_chiRefType(*collapsed, CHI_THUNK);
 }

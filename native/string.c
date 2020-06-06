@@ -99,10 +99,10 @@ Chili chiStaticString(const ChiStaticBytes* s) {
 }
 
 Chili chiStringBuilderTryNew(uint32_t cap) {
-    cap = CHI_MAX(cap, 32);
+    CHI_SETMAX(&cap, 32);
     Chili str = chiNewFlags(CHI_PRESTRING, CHI_BYTES_TO_WORDS(cap + TRAILING_SIZE_BYTE), CHI_NEW_TRY);
     if (!chiSuccess(str))
-        return CHI_FAIL;
+        return str;
     Chili b = chiNew(CHI_STRINGBUILDER, CHI_SIZEOF_WORDS(ChiStringBuilder));
     chiFieldInit(&chiToStringBuilder(b)->buf, str);
     chiToStringBuilder(b)->size = CHI_FALSE;
@@ -121,7 +121,7 @@ bool chiStringBuilderTryGrow(Chili b, uint32_t n) {
 
     uint64_t cap = chiToUInt32(sb->cap);
     while ((uint64_t)chiToUInt32(sb->size) + n > cap)
-        cap *= 2;
+        cap = (cap * CHI_STRINGBUILDER_GROWTH) / 100;
 
     // new capacity too large
     if (CHI_UNLIKELY(cap >= UINT32_MAX))
@@ -136,7 +136,7 @@ bool chiStringBuilderTryGrow(Chili b, uint32_t n) {
     memcpy(chiToPreString(newBuf)->bytes,
            chiToPreString(chiFieldRead(&sb->buf))->bytes,
            chiToUInt32(sb->size));
-    chiFieldWrite(proc, b, &sb->buf, newBuf);
+    chiFieldWrite(proc, b, &sb->buf, newBuf, CHI_BARRIER_ALWAYS_LOCAL);
     sb->cap = chiFromUInt32((uint32_t)cap);
 
     return true;
@@ -147,7 +147,7 @@ Chili chiStringBuilderBuild(Chili b) {
 
     Chili buf = chiFieldRead(&sb->buf);
     if (CHI_POISON_ENABLED)
-        chiFieldWrite(CHI_CURRENT_PROCESSOR, b, &sb->buf, CHI_FALSE);
+        chiFieldWrite(CHI_CURRENT_PROCESSOR, b, &sb->buf, CHI_FALSE, CHI_BARRIER_ALWAYS_LOCAL);
 
     uint32_t size = chiToUInt32(sb->size);
     uint8_t* bytes = chiToPreString(buf)->bytes;
@@ -178,7 +178,7 @@ Chili chiStringBuilderBuild(Chili b) {
  * However it must still be ensured that the string does not contain inner zero bytes.
  */
 Chili chiStringPin(Chili c) {
-    if (!chiTrue(c) || (!chiUnboxed(c) && chiGen(c) == CHI_GEN_MAJOR))
+    if (!chiTrue(c) || chiRefMajor(c))
         return c;
 
     ChiProcessor* proc = CHI_CURRENT_PROCESSOR;

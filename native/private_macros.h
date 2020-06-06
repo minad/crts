@@ -48,13 +48,14 @@
 #define CHI_ZERO_STRUCT(p)    memset((p), 0, CHI_SIZEOF_STRUCT(p))
 #define CHI_ZERO_ARRAY(p)     memset((p), 0, CHI_SIZEOF_ARRAY(p))
 
-#define CHI_DIV_ROUNDUP(i, r) (((i) + (r) - 1) / (r))
-#define CHI_ROUNDUP(i, r)     (CHI_DIV_ROUNDUP((i), (r)) * (r))
+#define CHI_DIV_CEIL(i, r)    (((i) + (r) - 1) / (r))
+#define CHI_CEIL(i, r)        (CHI_DIV_CEIL((i), (r)) * (r))
+#define CHI_FLOOR(i, r)       (((i) / (r)) * (r))
 
 #define CHI_ALIGNUP(i, a)     (((i) + (a) - 1) & CHI_ALIGNMASK(a))
 #define CHI_ALIGNMASK(a)      (~((a) - 1))
 
-#define CHI_BYTES_TO_WORDS(i) CHI_DIV_ROUNDUP((i), CHI_WORDSIZE)
+#define CHI_BYTES_TO_WORDS(i) CHI_DIV_CEIL((i), CHI_WORDSIZE)
 #define CHI_SIZEOF_WORDS(x)   CHI_BYTES_TO_WORDS(sizeof (x))
 
 #define _CHI_ONCE(mutex, init, ...)                                     \
@@ -90,14 +91,6 @@
         _Static_assert(__builtin_types_compatible_p(const t, typeof(x)), "invalid const cast"); \
         (t)(uintptr_t)(x);                                              \
     })
-
-#define _CHI_ALIGN_CAST(v, x, t)                                        \
-    ({                                                                  \
-        uint8_t* v = (x);                                               \
-        CHI_ASSERT(((uintptr_t)v) % _Alignof(typeof(*v)) == 0);         \
-        (t)(uintptr_t)v;                                                \
-    })
-#define CHI_ALIGN_CAST(x, t) _CHI_ALIGN_CAST(CHI_GENSYM, (x), t)
 
 #if CHI_COUNT_ENABLED
 #  define chiCount(c, n)       (c += (n))

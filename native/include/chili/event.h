@@ -11,6 +11,7 @@ CHI_EXPORT void chiEvent_THREAD_SCHED_END(uint32_t);
 CHI_EXPORT void chiEvent_USER_DURATION_BEGIN(void);
 CHI_EXPORT void chiEvent_USER_DURATION_END(void);
 CHI_EXPORT void chiEvent_ENTRY_BLACKHOLE(void);
+CHI_EXPORT void chiEvent_ENTRY_NOTIFY_INT(void);
 CHI_EXPORT void chiEvent_ENTRY_START(void);
 CHI_EXPORT void chiEvent_ENTRY_TIMER_INT(void);
 CHI_EXPORT void chiEvent_ENTRY_UNHANDLED(void);
@@ -34,6 +35,7 @@ CHI_EXPORT_INL void chiEvent_THREAD_SCHED_END(uint32_t CHI_UNUSED(a0)) {}
 CHI_EXPORT_INL void chiEvent_USER_DURATION_BEGIN(void) {}
 CHI_EXPORT_INL void chiEvent_USER_DURATION_END(void) {}
 CHI_EXPORT_INL void chiEvent_ENTRY_BLACKHOLE(void) {}
+CHI_EXPORT_INL void chiEvent_ENTRY_NOTIFY_INT(void) {}
 CHI_EXPORT_INL void chiEvent_ENTRY_START(void) {}
 CHI_EXPORT_INL void chiEvent_ENTRY_TIMER_INT(void) {}
 CHI_EXPORT_INL void chiEvent_ENTRY_UNHANDLED(void) {}

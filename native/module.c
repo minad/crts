@@ -18,17 +18,19 @@ struct ChiModuleEntry_ {
 
 CHI_STATIC_CONT_DECL(initModuleCont)
 CHI_STATIC_CONT_DECL(initImportCont)
-CHI_STATIC_CONT_DECL(initImport)
 
-STATIC_CONT(initModuleCont, .size = 2) {
+STATIC_CONT(initModuleCont, .na = 1, .size = 2) {
     PROLOGUE(initModuleCont);
+    Chili res = AGET(0);
+    UNDEF_ARGS(0);
+
     SP -= 2;
     ChiCont init = chiToCont(SP[0]);
     ChiProcessor* proc = CHI_CURRENT_PROCESSOR;
     ChiRuntime* rt = proc->rt;
     ChiModuleEntry* e = moduleHashInsert(&rt->moduleHash, moduleHashFn(init));
     e->init = init;
-    e->val = A(0);
+    e->val = res;
 
     if (chiEventEnabled(proc, MODULE_INIT)) {
         ChiLocResolve resolve;
@@ -39,51 +41,45 @@ STATIC_CONT(initModuleCont, .size = 2) {
 
     chiPromoteLocal(proc, &e->val);
     chiGCRoot(rt, e->val);
-    RET(e->val);
+    ASET(0, e->val);
+    RET;
 }
 
-STATIC_CONT(initImportCont, .size = 3) {
+STATIC_CONT(initImportCont, .na = 1, .size = CHI_VASIZE) {
     PROLOGUE(initImportCont);
-    SP -= 3;
-    Chili ret = A(0);
-    uint32_t nimports = chiToUInt32(SP[0]);
-    uint32_t idx = chiToUInt32(SP[1]);
-    SP[(int32_t)idx - (int32_t)nimports - 2] = ret;
-    A(0) = chiFromUInt32(nimports);
-    A(1) = chiFromUInt32(idx);
-    KNOWN_JUMP(initImport);
+    Chili ret = AGET(0);
+    UNDEF_ARGS(0);
+
+    uint32_t nimports = chiToUInt32(SP[-2]) - 4;
+    uint32_t idx = chiToUInt32(SP[-3]);
+    SP[(int32_t)idx - (int32_t)nimports - 4] = ret;
+
+    if (!idx) {
+        SP -= 3;
+        RET;
+    }
+
+    --idx;
+    SP[-3] = chiFromUInt32(idx);
+    JUMP_FN(SP[(int32_t)idx - (int32_t)nimports - 4]);
 }
 
-STATIC_CONT(initImport, .na = 1) {
-    PROLOGUE(initImport);
-    LIMITS(.stack = 3);
-
-    uint32_t nimports = chiToUInt32(A(0));
-    uint32_t idx = chiToUInt32(A(1));
-
-    if (idx == nimports)
-        RET(CHI_FALSE);
-
-    SP[0] = chiFromUInt32(nimports);
-    SP[1] = chiFromUInt32(idx + 1);
-    SP[2] = chiFromCont(&initImportCont);
-    SP += 3;
-
-    JUMP_FN(SP[(int32_t)idx + 1 - (int32_t)nimports - 2 - 3]);
-}
-
-CONT(chiInitModule, .na = 2) {
+CONT(chiInitModule, .na = 3) {
     PROLOGUE(chiInitModule);
+    ChiCont init = chiToCont(AGET(0));
+    uint32_t nimports = chiToUInt32(AGET(1));
+    ChiCont* imports = (ChiCont*)chiToPtr(AGET(2));
+    LIMITS_PROC(.stack = 2 + // initModuleCont
+                nimports + 1 + // init continuations with all imports
+                3); // initImportCont
+    UNDEF_ARGS(0);
 
-    ChiCont init = chiToCont(A(0));
-    uint32_t nimports = chiToUInt32(A(1));
-    ChiCont* imports = (ChiCont*)chiToPtr(A(2));
-    LIMITS(.stack = 2 + nimports + 1);
-
-    ChiRuntime* rt = CHI_CURRENT_RUNTIME;
-    ChiModuleEntry* e = moduleHashFind(&rt->moduleHash, init);
-    if (e)
-        RET(e->val);
+    ChiProcessor* proc = CHI_CURRENT_PROCESSOR;
+    ChiModuleEntry* e = moduleHashFind(&proc->rt->moduleHash, init);
+    if (e) {
+        ASET(0, e->val);
+        RET;
+    }
 
     SP[0] = chiFromCont(init);
     SP[1] = chiFromCont(&initModuleCont);
@@ -96,7 +92,15 @@ CONT(chiInitModule, .na = 2) {
     CHI_ASSERT(chiContInfo(init)->size == nimports + 1);
     CHI_ASSERT(chiFrameSize(SP - 1) == nimports + 1);
 
-    A(0) = chiFromUInt32(nimports);
-    A(1) = CHI_FALSE;
-    KNOWN_JUMP(initImport);
+    if (!nimports)
+        RET;
+
+    SP[0] = chiFromUInt32(nimports - 1);
+    SP[1] = chiFromUInt32(nimports + 4);
+    SP[2] = chiFromCont(&initImportCont);
+    SP += 3;
+
+    chiStackDebugWalk(chiThreadStack(proc->thread), SP, SL);
+
+    JUMP(chiContFn(imports[nimports - 1]));
 }

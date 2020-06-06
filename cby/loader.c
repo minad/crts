@@ -12,6 +12,20 @@
 #  include <zlib.h>
 #endif
 
+struct CbyArchive_ {
+    char* file;
+    Zip* zip;
+};
+
+#define HT_NOSTRUCT
+#define HT_HASH       CbyArchiveHash
+#define HT_ENTRY      CbyArchive
+#define HT_PREFIX     archiveHash
+#define HT_KEYEQ      streq
+#define HT_KEYTYPE const char*
+#define HT_KEY(e)     e->file
+#include "native/generic/hashtable.h"
+
 #define VEC_TYPE   char*
 #define VEC_PREFIX stringVec
 #define VEC        StringVec
@@ -125,9 +139,9 @@ static Chili moduleLoaded(ChiProcessor* proc, Chili mod, ChiStringRef file) {
     const char *path = cbyInterpreter(proc)->ml.path;
     Chili name = chiToCbyModule(mod)->name;
     chiEvent(proc, MODULE_LOAD,
-              .module = chiStringRef(&name),
-              .file = file,
-              .path = chiStringRef(path ? path : ""));
+             .module = chiStringRef(&name),
+             .file = file,
+             .path = chiStringRef(path ? path : ""));
     return chiNewRight(proc, mod);
 }
 
@@ -153,32 +167,28 @@ static void listDirModules(ChiSink* sink, const char* path, StringVec* vec) {
         pushNameExt(entry, vec);
 }
 
-static void freeArchive(CbyArchiveCache* cache) {
-    if (cache->handle) {
-        zipClose((Zip*)cache->handle);
-        chiFree(cache->name);
-        cache->handle = cache->name = 0;
+static void freeArchives(CbyArchiveHash* hash) {
+    CHI_HT_FOREACH(CbyArchiveHash, a, hash) {
+        zipClose(a->zip);
+        chiFree(a->file);
     }
+    archiveHashFree(hash);
 }
 
-static Zip* loadArchive(CbyArchiveCache* cache, const char* file, ZipResult* res) {
-    if (cache->handle && streq(cache->name, file)) {
-        *res = ZIP_OK;
-        return (Zip*)cache->handle;
+static Zip* loadArchive(CbyArchiveHash* hash, const char* file, ZipResult* res) {
+    CbyArchive* a;
+    if (archiveHashCreate(hash, file, &a)) {
+        Zip* z = zipOpen(file, res);
+        if (!z)
+            return 0;
+        a->zip = z;
+        a->file = chiCStringDup(file);
     }
-
-    Zip* z = zipOpen(file, res);
-    if (z) {
-        freeArchive(cache);
-        cache->handle = z;
-        cache->name = chiCStringDup(file);
-    }
-
-    return z;
+    return a->zip;
 }
 
 static char* findMainModule(Zip* z) {
-    ZipFile* f = zipFind(z, CHI_STRINGREF(CBY_ARCHIVE_MAIN));
+    ZipFile* f = zipFind(z, CBY_ARCHIVE_MAIN);
     if (f) {
         char* name = chiCStringAlloc(f->uncompressedSize);
         if (zipRead(z, f, name) == ZIP_OK)
@@ -205,7 +215,7 @@ static Chili loadArchiveModule(ChiProcessor* proc, const char* file, ChiStringRe
 
     CHI_STRING_SINK(nameSink);
     chiSinkFmt(nameSink, "%S"CBY_MODULE_EXT, mainMod);
-    ChiStringRef name = chiSinkString(nameSink);
+    const char* name = chiSinkCString(nameSink);
 
     ZipFile* f = zipFind(z, name);
     if (!f)
@@ -218,7 +228,7 @@ static Chili loadArchiveModule(ChiProcessor* proc, const char* file, ChiStringRe
                       name, file, zipResultName[res]);
 
     CHI_STRING_SINK(qualFileSink);
-    chiSinkFmt(qualFileSink, "%s:%S", file, name);
+    chiSinkFmt(qualFileSink, "%s:%s", file, name);
     return parseModule(proc, chiSinkString(qualFileSink), code);
 }
 
@@ -248,12 +258,10 @@ static void listArchiveModules(ChiSink* sink, const char* file, StringVec* vec) 
  *     ├────────────────┬──────────────────────────┤  │
  *     │ ffiCount       │ FFI entries...           │  │
  *     ├────────────────┼──────────────────────────┤  │ Header
- *     │ exportCount    │ Export entries...        │  │
- *     ├────────────────┼──────────────────────────┤  │
  *     │ importCount    │ Import entries...        │  │
- *     ├────────────────┴──────────────────────────┤  │
- *     │ initOffset                                │  │
- *     ├────────────────┬──────────────────────────┤ ─┘
+ *     ├────────────────┼──────────────────────────┤  │
+ *     │ mainIdx        │ initOffset               │  │
+ *     ├────────────────┼──────────────────────────┤ ─┘
  *     │ codeSize       │ Functions...             │
  *     ├────────────────┴──────────────────────────┤
  *     │ crc32 checksum                            │
@@ -302,14 +310,6 @@ static Chili parseModule(ChiProcessor* proc, ChiStringRef file, Chili code) {
     for (uint32_t i = 0; i < ffiCount; ++i)
         m->ffi[i] = newFFI(proc, &IP, name);
 
-    const uint32_t exportCount = FETCH32;
-    m->base.exports = chiArrayNewUninitialized(proc, exportCount, CHI_NEW_DEFAULT);
-    for (uint32_t i = 0; i < exportCount; ++i) {
-        Chili exportName = chiStringNew(proc, FETCH_STRING);
-        int32_t exportIdx = (int32_t)FETCH32;
-        chiArrayInit(m->base.exports, i, chiNewTuple(proc, exportName, chiFromInt32(exportIdx)));
-    }
-
     const uint32_t importCount = FETCH32;
     m->base.imports = chiArrayNewUninitialized(proc, importCount, CHI_NEW_DEFAULT);
     for (uint32_t i = 0; i < importCount; ++i) {
@@ -317,6 +317,7 @@ static Chili parseModule(ChiProcessor* proc, ChiStringRef file, Chili code) {
         chiArrayInit(m->base.imports, i, importName);
     }
 
+    m->base.main = chiFromInt32((int32_t)FETCH32);
     m->base.init = chiFromIP(IP);
     return moduleLoaded(proc, mod, file);
 }
@@ -346,16 +347,11 @@ static Chili initNativeModule(ChiProcessor* proc, const char* file, const ChiMod
     m->base.init = chiFromCont(desc->init);
     m->handle = chiFromPtr(h);
 
-    m->base.exports = chiArrayNewUninitialized(proc, desc->exportCount, CHI_NEW_DEFAULT);
-    for (uint32_t i = 0; i < desc->exportCount; ++i)
-        chiArrayInit(m->base.exports, i, chiNewTuple(proc,
-                                                     chiStringNew(proc, desc->exportName[i]),
-                                                     chiFromInt32(desc->exportIdx[i])));
-
     m->base.imports = chiArrayNewUninitialized(proc, desc->importCount, CHI_NEW_DEFAULT);
     for (uint32_t i = 0; i < desc->importCount; ++i)
         chiArrayInit(m->base.imports, i, chiStringNew(proc, desc->importName[i]));
 
+    m->base.main = chiFromInt32(desc->mainIdx);
     return moduleLoaded(proc, mod, chiStringRef(file));
 }
 
@@ -473,7 +469,9 @@ Chili cbyModuleLoadByName(ChiProcessor* proc, ChiStringRef name) {
 }
 
 void cbyModuleLoaderDestroy(CbyModuleLoader* ml) {
-    CHI_IF(CBY_ARCHIVE_ENABLED, freeArchive(&ml->cache));
+    CbyArchiveHash* cache = CHI_AND(CBY_ARCHIVE_ENABLED, &ml->cache);
+    if (cache)
+        freeArchives(cache);
     chiFree(ml->path);
 }
 
@@ -514,18 +512,6 @@ void cbyModuleListing(CbyModuleLoader* ml, ChiSink* sink) {
         }
     }
     stringVecFree(&vec);
-}
-
-int32_t cbyModuleExport(const Chili c, const char* name) {
-    const CbyModule* m = chiToCbyModule(c);
-    ChiStringRef nameRef = chiStringRef(name);
-    const uint32_t exportCount = (uint32_t)chiSize(m->exports);
-    for (uint32_t i = 0; i < exportCount; ++i) {
-        Chili p = chiArrayRead(m->exports, i), n = chiIdx(p, 0);
-        if (chiStringRefEq(chiStringRef(&n), nameRef))
-            return chiToInt32(chiIdx(p, 1));
-    }
-    return -2;
 }
 
 Chili cbyModuleParse(Chili name, Chili code) {

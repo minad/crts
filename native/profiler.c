@@ -30,7 +30,7 @@ typedef struct {
 } Key;
 
 typedef struct {
-    ChiWord id;
+    uint32_t tid;
     char* name;
 } NameRecord;
 
@@ -53,8 +53,8 @@ typedef struct  {
 
 #define HT_HASH        NameHash
 #define HT_ENTRY       NameRecord
-#define HT_KEY(e)      e->id
-#define HT_HASHFN(k)   chiHashWord(k)
+#define HT_KEY(e)      e->tid
+#define HT_HASHFN(k)   CHI_WRAP(Hash, k)
 #define HT_EXISTS(e)   e->name
 #define HT_PREFIX      nameHash
 #include "generic/hashtable.h"
@@ -83,7 +83,7 @@ struct ChiProfilerWS_ {
 #include "generic/list.h"
 
 struct ChiProfiler_ {
-    ChiProfOption profOpt;
+    ChiProfOption opt;
     RecordHash    recordHash;
     PtrVec        freeVec;
     ChiTimer      timer;
@@ -105,12 +105,12 @@ static ChiMicros profilerTimerHandler(ChiTimer* timer) {
         CHI_LOCK_MUTEX(&prof->wsMutex);
         CHI_LIST_FOREACH(ChiProfilerWS, link, ws, &prof->wsList) {
             chiTraceTriggerSet(ws->worker,
-                               prof->profOpt.alloc ? -1 :
+                               prof->opt.alloc ? -1 :
                                chiTraceTriggerGet(ws->worker) + 1);
         }
     }
     uint64_t
-        interval = 1000000 / prof->profOpt.rate,
+        interval = 1000000 / prof->opt.rate,
         jitter = chiRand(prof->randState) % (interval / 2) - (interval / 4);
     return chiMicros(interval + jitter % (interval / 2) - (interval / 4));
 }
@@ -188,13 +188,13 @@ typedef struct  {
     uint64_t self, sum;
 } AccumRecord;
 
-#define HT_HASH        AccumHash
-#define HT_ENTRY       AccumRecord
-#define HT_PREFIX      accumHash
-#define HT_KEY(e)      chiStringRef(e->name)
-#define HT_EXISTS(e)   e->name
-#define HT_KEYEQ(a, b) chiStringRefEq(a, b)
-#define HT_HASHFN      chiHashStringRef
+#define HT_HASH    AccumHash
+#define HT_ENTRY   AccumRecord
+#define HT_PREFIX  accumHash
+#define HT_KEY(e)  e->name
+#define HT_KEYEQ   streq
+#define HT_KEYTYPE const char*
+#define HT_HASHFN  chiHashCString
 #include "generic/hashtable.h"
 
 #define S_SUFFIX     AccumRecordBySelf
@@ -207,10 +207,10 @@ typedef struct  {
 #define S_LESS(a, b) ((b)->sum == (a)->sum ? (b)->self < (a)->self : (b)->sum < (a)->sum)
 #include "generic/sort.h"
 
-static void addAccumRecord(AccumHash* accumHash, ChiStringRef name, uint64_t count, bool self) {
+static void addAccumRecord(AccumHash* accumHash, const char* name, uint64_t count, bool self) {
     AccumRecord* a;
     if (accumHashCreate(accumHash, name, &a))
-        a->name = chiCStringUnsafeDup(name);
+        a->name = chiCStringDup(name);
     a->self += self * count;
     a->sum += count;
 }
@@ -222,7 +222,7 @@ static void accumProfile(AccumHash* accumHash, const RecordHash* recordHash,
         // ignore suspend stacks
         if (r->key.depth >= 1 && r->key.frame[0].type == CHI_LOC_NAME &&
             (streq((const char*)r->key.frame[0].id, "runtime;suspend") ||
-             streq((const char*)r->key.frame[0].id, "runtime;sync")))
+             streq((const char*)r->key.frame[0].id, "runtime;park")))
             continue;
 
         *totalSelf += r->count;
@@ -232,11 +232,11 @@ static void accumProfile(AccumHash* accumHash, const RecordHash* recordHash,
                 const char* name = (const char*)r->key.frame[i].id, *tok, *end;
                 while ((tok = strsplit(&name, ';', &end))) {
                     chiSinkFmt(sink, "[%b]", (uint32_t)(end - tok), tok);
-                    addAccumRecord(accumHash, chiSinkString(sink), r->count, !i && !name);
+                    addAccumRecord(accumHash, chiSinkCString(sink), r->count, !i && !name);
                 }
             } else {
                 printFrame(sink, r->key.frame + i, true, mangled);
-                addAccumRecord(accumHash, chiSinkString(sink), r->count, !i);
+                addAccumRecord(accumHash, chiSinkCString(sink), r->count, !i);
             }
         }
     }
@@ -302,11 +302,11 @@ CHI_INL void recordAdd(RecordHash* hash, Key* k, uint64_t count, uint32_t maxSta
 
 static void storeRecord(ChiWorker* worker, Key* key, size_t alloc, uintptr_t stack) {
     ChiRuntime* rt = worker->rt;
-    CHI_ASSERT(key->depth <= rt->profiler->profOpt.maxDepth);
+    CHI_ASSERT(key->depth <= rt->profiler->opt.maxDepth);
 
-    uint64_t count = rt->profiler->profOpt.alloc ? alloc : (uint64_t)chiTraceTriggerGet(worker);
+    uint64_t count = rt->profiler->opt.alloc ? alloc : (uint64_t)chiTraceTriggerGet(worker);
     chiTraceTriggerSet(worker, 0);
-    recordAdd(&worker->profilerWS->recordHash, key, count, rt->profiler->profOpt.maxStacks);
+    recordAdd(&worker->profilerWS->recordHash, key, count, rt->profiler->opt.maxStacks);
 
     if (chiEventEnabled(worker, PROF_TRACE)) {
         CHI_STRING_SINK(sink);
@@ -322,24 +322,30 @@ static void addThreadFrame(ChiProcessor* proc, Key* key) {
     if (!chiTrue(name)) {
         addFrame(key, CHI_LOC_NAME, "unnamed thread");
     } else {
+        NameHash* hash = &proc->worker->profilerWS->nameHash;
         NameRecord* nr;
         uint32_t tid = chiThreadId(proc->thread);
-        if (nameHashCreate(&proc->worker->profilerWS->nameHash, tid, &nr)) {
-            nr->name = chiCStringUnsafeDup(chiStringRef(&name));
-            nr->id = tid;
+        if (nameHashCreate(hash, tid, &nr)) {
+            if (hash->used <= proc->rt->profiler->opt.maxStacks) {
+                nr->name = chiCStringUnsafeDup(chiStringRef(&name));
+                nr->tid = tid;
+            } else {
+                --hash->used;
+                nr = 0;
+            }
         }
-        addFrame(key, CHI_LOC_THREAD, nr->name);
+        if (nr)
+            addFrame(key, CHI_LOC_THREAD, nr->name);
     }
 }
 
-static void captureStack(ChiRuntime* rt, ChiStack* stack, Chili* sp, Key* key) {
+static void captureStack(ChiRuntime* rt, Chili stack, Chili* sp, Key* key) {
     ChiStackWalk w = chiStackWalkInit(stack, sp,
-                                      // three extra frames: incomplete, thread, processor
-                                      rt->profiler->profOpt.maxDepth - 3,
+                                      rt->profiler->opt.maxDepth - 5, // additional frames
                                       rt->option.stack.traceCycles);
     while (chiStackWalk(&w)) {
 #if CHI_CBY_SUPPORT_ENABLED
-        if (chiFrame(w.frame) == CHI_FRAME_INTERP) {
+        if (chiFrameInfo(w.frame)->interp) {
             CbyFn* fn = chiToCbyFn(w.frame[-3]);
             addFrame(key, CHI_LOC_INTERP, chiToIP(fn->ip));
             continue;
@@ -347,7 +353,7 @@ static void captureStack(ChiRuntime* rt, ChiStack* stack, Chili* sp, Key* key) {
 #endif
         addFrame(key, CHI_LOC_NATIVE, chiToCont(*w.frame));
     }
-    if (w.frame >= stack->base)
+    if (w.incomplete)
         addFrame(key, CHI_LOC_INCOMPLETE, 0);
 }
 
@@ -361,8 +367,7 @@ void chiTraceHandler(const ChiTracePoint* tp) {
         addFrame(key, CHI_LOC_NATIVE, tp->cont);
         Chili stackObj = chiThreadStack(tp->proc->thread);
         stack = chiAddress(stackObj);
-        ChiStack* s = chiToStack(stackObj);
-        captureStack(worker->rt, s, tp->frame ? tp->frame : s->sp, key);
+        captureStack(worker->rt, stackObj, tp->frame ? tp->frame : chiToStack(stackObj)->sp, key);
     }
     if (tp->thread)
         addThreadFrame(tp->proc, key);
@@ -380,7 +385,7 @@ void _profTrace(ChiProcessor* proc, Chili fn, Chili* frame, const CbyCode* ffi, 
         addFrame(key, CHI_LOC_FFI, ffi);
     addFrame(key, CHI_LOC_INTERP, chiToIP(f->ip));
     Chili stack = chiThreadStack(proc->thread);
-    captureStack(worker->rt, chiToStack(stack), frame, key);
+    captureStack(worker->rt, stack, frame, key);
     addThreadFrame(proc, key);
     addFrame(key, CHI_LOC_WORKER, worker->profilerWS->workerName);
     storeRecord(worker, key, alloc, chiAddress(stack));
@@ -394,7 +399,7 @@ static void profilerEnable(ChiWorker* worker, bool enabled) {
         return;
     if (enabled) {
         prof->timer = (ChiTimer)
-            { .timeout = chiMicros(1000000 / prof->profOpt.rate),
+            { .timeout = chiMicros(1000000 / prof->opt.rate),
               .handler = profilerTimerHandler };
         chiTimerInstall(&prof->timer);
         chiEvent0(worker, PROF_ENABLED);
@@ -418,23 +423,23 @@ static void profilerDestroy(ChiWorker* worker) {
                     "          Use the build with full profiling support instead!\n");
 
 #if CHI_STATS_ENABLED
-    if (prof->profOpt.flat) {
+    if (prof->opt.flat) {
         CHI_HT_AUTO(AccumHash, accum);
         uint64_t totalSum = 0, totalSelf = 0;
         accumProfile(&accum, &prof->recordHash, &totalSum, &totalSelf, opt->stack.traceMangled);
         sortAccumRecordBySelf(accum.entry, accum.capacity);
         addFlatTable(&rt->stats, opt->stats.tableRows,
-                     prof->profOpt.alloc ? "allocation profile self" : "profile self", totalSum, totalSelf, &accum);
+                     prof->opt.alloc ? "allocation profile self" : "profile self", totalSum, totalSelf, &accum);
         sortAccumRecordBySum(accum.entry, accum.capacity);
         addFlatTable(&rt->stats, opt->stats.tableRows,
-                     prof->profOpt.alloc ? "allocation profile sum" : "profile sum", totalSum, totalSelf, &accum);
+                     prof->opt.alloc ? "allocation profile sum" : "profile sum", totalSum, totalSelf, &accum);
         CHI_HT_FOREACH(AccumHash, r, &accum)
             chiFree(r->name);
     }
 #endif
 
-    if (prof->profOpt.file[0])
-        printSamples(prof->profOpt.file, CHI_AND(CHI_COLOR_ENABLED, opt->color),
+    if (prof->opt.file[0])
+        printSamples(prof->opt.file, CHI_AND(CHI_COLOR_ENABLED, opt->color),
                      opt->stack.traceMangled, &prof->recordHash);
 
     CHI_HT_FOREACH(RecordHash, r, &prof->recordHash)
@@ -448,11 +453,10 @@ static void profilerDestroy(ChiWorker* worker) {
     chiFree(prof);
 }
 
-static void profilerWorkerStop(ChiHookType CHI_UNUSED(type), void* ctx) {
-    ChiWorker* worker = (ChiWorker*)ctx;
+static void profilerWorkerStop(ChiHookType CHI_UNUSED(type), ChiWorker* worker) {
     ChiProfiler* prof = worker->rt->profiler;
     ChiProfilerWS* ws = worker->profilerWS;
-    uint32_t maxStacks = prof->profOpt.maxStacks;
+    uint32_t maxStacks = prof->opt.maxStacks;
     CHI_ASSERT(worker);
     CHI_ASSERT(ws);
     {
@@ -461,11 +465,11 @@ static void profilerWorkerStop(ChiHookType CHI_UNUSED(type), void* ctx) {
             recordAdd(&prof->recordHash, &r->key, r->count, maxStacks);
             chiFree(r->key.frame);
         }
-        recordHashFree(&ws->recordHash);
         CHI_HT_FOREACH(NameHash, r, &ws->nameHash)
             ptrVecAppend(&prof->freeVec, r->name);
         ptrVecAppend(&prof->freeVec, ws->workerName);
     }
+    recordHashFree(&ws->recordHash);
     nameHashFree(&ws->nameHash);
     profilerWSListDelete(ws);
     chiFree(ws);
@@ -473,10 +477,9 @@ static void profilerWorkerStop(ChiHookType CHI_UNUSED(type), void* ctx) {
         profilerDestroy(worker);
 }
 
-static void profilerWorkerStart(ChiHookType CHI_UNUSED(type), void* ctx) {
-    ChiWorker* worker = (ChiWorker*)ctx;
+static void profilerWorkerStart(ChiHookType CHI_UNUSED(type), ChiWorker* worker) {
     ChiProfiler* prof = worker->rt->profiler;
-    size_t framesSize = sizeof (ChiLoc) * prof->profOpt.maxDepth;
+    size_t framesSize = sizeof (ChiLoc) * prof->opt.maxDepth;
     ChiProfilerWS* ws = worker->profilerWS = (ChiProfilerWS*)chiZalloc(sizeof (ChiProfilerWS) + framesSize);
     profilerWSListPoison(ws);
     ws->worker = worker;
@@ -487,47 +490,44 @@ static void profilerWorkerStart(ChiHookType CHI_UNUSED(type), void* ctx) {
         profilerWSListAppend(&prof->wsList, ws);
     }
     if (chiWorkerMain(worker))
-        profilerEnable(worker, !prof->profOpt.off);
+        profilerEnable(worker, !prof->opt.off);
 }
 
 void chiProfilerEnable(bool enabled) {
     profilerEnable(CHI_CURRENT_PROCESSOR->worker, enabled);
 }
 
-void chiProfilerSetup(ChiRuntime* rt, const ChiProfOption* profOpt) {
+void chiProfilerSetup(ChiRuntime* rt, const ChiProfOption* opt) {
     ChiProfiler* prof = chiZallocObj(ChiProfiler);
     chiRandInit(prof->randState, 0);
-    prof->profOpt = *profOpt;
+    prof->opt = *opt;
     chiMutexInit(&prof->wsMutex);
     chiMutexInit(&prof->timerMutex);
     rt->profiler = prof;
     profilerWSListInit(&prof->wsList);
-    chiHook(rt, CHI_HOOK_WORKER_START, profilerWorkerStart);
-    chiHook(rt, CHI_HOOK_WORKER_STOP, profilerWorkerStop);
+    chiHookWorker(rt, START, profilerWorkerStart);
+    chiHookWorker(rt, STOP, profilerWorkerStop);
 }
 
-static ChiOptionResult setProfFile(const ChiOptionParser* CHI_UNUSED(parser),
-                                   const ChiOptionList* list,
-                                   const ChiOption* CHI_UNUSED(opt),
+static ChiOptionResult setProfFile(ChiOptionParser* CHI_UNUSED(parser),
+                                   ChiOptionAssoc* assoc,
+                                   ChiOption* CHI_UNUSED(opt),
                                    const void* CHI_UNUSED(val)) {
-    ChiProfOption* opt = (ChiProfOption*)list->target;
+    ChiProfOption* opt = (ChiProfOption*)assoc->target;
     chiFmt(opt->file, sizeof (opt->file), "prof.%u", chiPid());
     return CHI_OPTRESULT_OK;
 }
 
 #define CHI_OPT_STRUCT ChiProfOption
-CHI_INTERN const ChiOption chiProfOptionList[] = {
-    CHI_OPT_TITLE("PROFILER")
-    CHI_OPT_FLAG(flat, "flat", "Print flat profile")
-    CHI_OPT_CB(FLAG, setProfFile, "prof", "Write stack samples to 'prof.pid'")
-    CHI_OPT_STRING(file, "prof:o", "Write stack samples log to given file")
-    CHI_OPT_UINT32(rate, 1, 10000, "prof:r", "Sample rate, per second")
-    CHI_OPT_UINT32(maxDepth, 5, 10000, "prof:d", "Stack capturing depth")
-    CHI_OPT_UINT32(maxStacks, 1, 10000, "prof:s", "Number of different stacks to record")
-    CHI_OPT_FLAG(alloc, "prof:a", "Profile allocations")
-    CHI_OPT_FLAG(off, "prof:off", "Start with sampling turned off")
-    CHI_OPT_END
-};
+CHI_INTERN CHI_OPT_GROUP(chiProfOptions, "PROFILER",
+                         CHI_OPT_FLAG(flat, "flat", "Print flat profile")
+                         CHI_OPT_CB(FLAG, setProfFile, "prof", "Write stack samples to 'prof.pid'")
+                         CHI_OPT_STRING(file, "prof:o", "Write stack samples log to given file")
+                         CHI_OPT_UINT32(rate, 1, 10000, "prof:r", "Sample rate, per second")
+                         CHI_OPT_UINT32(maxDepth, 5, 10000, "prof:d", "Stack capturing depth")
+                         CHI_OPT_UINT32(maxStacks, 1, 10000, "prof:s", "Number of different stacks to record")
+                         CHI_OPT_FLAG(alloc, "prof:a", "Profile allocations")
+                         CHI_OPT_FLAG(off, "prof:off", "Start with sampling turned off"))
 #undef CHI_OPT_STRUCT
 
 #endif

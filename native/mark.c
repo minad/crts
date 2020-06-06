@@ -4,8 +4,9 @@
 #include "timeout.h"
 
 CHI_FLAGTYPE(MarkFlags,
-             MARK_RECURSIVE = 1,
-             MARK_COLLAPSE  = 2)
+             MARK_DEFAULT  = 0,
+             MARK_RECURSE  = 1,
+             MARK_COLLAPSE = 2)
 
 /**
  * State of the object scanner
@@ -13,18 +14,17 @@ CHI_FLAGTYPE(MarkFlags,
  * reachable objects as gray.
  */
 typedef struct {
-    ChiBlockVec   gray;
-    ChiTimeout*   timeout;
-    uint32_t      depth;
-    bool          collapse;
+    ChiObjVec    gray;
+    ChiTimeout*  timeout;
+    uint32_t     depth;
     ChiMarkState markState;
     CHI_IF(CHI_COUNT_ENABLED, ChiScanStats stats;)
 } MarkState;
 
 static void scan(MarkState*, Chili);
 
-CHI_INL bool _mark(MarkState* state, Chili c, Chili* collapsed, MarkFlags flags) {
-    if (chiUnboxed(c) || chiGen(c) != CHI_GEN_MAJOR)
+CHI_INL bool doMark(MarkState* state, Chili c, Chili* collapsed, MarkFlags flags) {
+    if (!chiRefMajor(c))
         return false;
 
     CHI_CHECK_OBJECT_ALIVE(state->markState, c);
@@ -39,33 +39,20 @@ CHI_INL bool _mark(MarkState* state, Chili c, Chili* collapsed, MarkFlags flags)
     ChiColor color = chiObjectColor(obj);
     if (chiColorEq(color, state->markState.white)) {
         chiObjectSetColor(obj, state->markState.gray);
-        if ((flags & MARK_RECURSIVE) && state->depth > 0 && chiTimeoutTick(state->timeout)) {
+        if ((flags & MARK_RECURSE) && state->depth > 0 && chiTimeoutTick(state->timeout)) {
             --state->depth;
             scan(state, c);
             ++state->depth;
         } else {
-            chiBlockVecPush(&state->gray, c);
+            chiObjVecPush(&state->gray, c);
         }
     }
 
-    /*
-     * Thunk collapsing is only available on 64-bit platforms for now,
-     * since we overwrite the 64-bit field non-atomically while mutators
-     * might be accessing it. On 32-bit platforms, the non-atomic 64-bit reads
-     * might read a partial value.
-     * TODO: One possible solution could be to implement thunk collapsing as
-     * during a short stop the world pause. The collapsible thunks should then
-     * be collected in a queue.
-     *
-     * Do not collapse unforced and nested thunks.
-     */
-    if (!CHI_ARCH_32BIT
+    // Do not collapse unforced and nested thunks.
+    if (CHI_MARK_COLLAPSE_ENABLED
         && (flags & MARK_COLLAPSE)
-        && type == CHI_THUNK
-        && state->collapse) {
-        *collapsed = chiFieldRead(&((ChiThunk*)obj->payload)->val);
-        return chiThunkCollapsible(*collapsed);
-    }
+        && type == CHI_THUNK)
+        return chiThunkCollapsible((ChiThunk*)obj->payload, collapsed);
 
     return false;
 }
@@ -73,7 +60,7 @@ CHI_INL bool _mark(MarkState* state, Chili c, Chili* collapsed, MarkFlags flags)
 CHI_INL void markAtomic(MarkState* state, ChiField* p, MarkFlags flags) {
     for (;;) {
         Chili collapsed, c = chiFieldRead(p);
-        if (!_mark(state, c, &collapsed, flags) || !chiAtomicCas(p, c, collapsed))
+        if (!doMark(state, c, &collapsed, flags) || !chiAtomicCas(p, c, collapsed))
             break;
         chiCount(state->stats.collapsed, 1);
     }
@@ -82,16 +69,14 @@ CHI_INL void markAtomic(MarkState* state, ChiField* p, MarkFlags flags) {
 CHI_INL void mark(MarkState* state, Chili* p, MarkFlags flags) {
     for (;;) {
         Chili collapsed;
-        if (!_mark(state, *p, &collapsed, flags))
+        if (!doMark(state, *p, &collapsed, flags))
             break;
         *p = collapsed;
         chiCount(state->stats.collapsed, 1);
     }
 }
 
-static void scanStack(MarkState* state, Chili c) {
-    CHI_CHECK_OBJECT_ALIVE(state->markState, c);
-    ChiObject* obj = chiObjectUnchecked(c);
+static void scanStack(MarkState* state, ChiObject* obj) {
     /* If we fail to lock the stack, the stack scanning
      * is taken care of by the mutator in chiStackActivate
      * or by the scavenger.
@@ -101,82 +86,96 @@ static void scanStack(MarkState* state, Chili c) {
         if (!chiColorEq(color, state->markState.black)) {
             chiObjectSetColor(obj, state->markState.black);
             ChiStack* stack = (ChiStack*)obj->payload;
-            // mark non recursively since we don't want to keep the stack locked for long
+            /* No MARK_RECUSIVE: We don't want to keep the stack locked for long
+             * No MARK_COLLAPSE: updateCont fails if the thunks on the stack are
+             *                   collapsed behind its back.
+             */
             for (Chili* p = stack->base; p < stack->sp; ++p)
-                mark(state, p, MARK_COLLAPSE);
+                mark(state, p, MARK_DEFAULT);
             chiCountObject(state->stats.stack, (size_t)(stack->sp - stack->base));
         }
         chiObjectUnlock(obj);
     }
 }
 
+static bool alreadyBlack(MarkState* state, ChiObject* obj) {
+    ChiColor color = chiObjectColor(obj);
+    if (chiColorEq(color, state->markState.black))
+        return true;
+    chiObjectSetColor(obj, state->markState.black);
+    return false;
+}
+
 static void scanThread(MarkState* state, ChiObject* obj) {
+    if (alreadyBlack(state, obj))
+        return;
     ChiThread* t = (ChiThread*)obj->payload;
-    markAtomic(state, &t->state, MARK_RECURSIVE);
-    scanStack(state, chiFieldRead(&t->stack));
+    markAtomic(state, &t->state, MARK_RECURSE);
+    markAtomic(state, &t->stack, MARK_RECURSE);
     chiCountObject(state->stats.object, CHI_SIZEOF_WORDS(ChiThread));
 }
 
 static void scanThunk(MarkState* state, ChiObject* obj) {
-    markAtomic(state, &((ChiThunk*)obj->payload)->val, MARK_RECURSIVE | MARK_COLLAPSE);
-    chiCountObject(state->stats.object, CHI_SIZEOF_WORDS(ChiThunk));
+    if (alreadyBlack(state, obj))
+        return;
+    chiCountObject(state->stats.object, obj->size);
+    ChiThunk* thunk = (ChiThunk*)obj->payload;
+    markAtomic(state, &thunk->val, MARK_RECURSE | MARK_COLLAPSE);
+    for (Chili *p = thunk->clos, *end = p + obj->size - 2; p < end; ++p)
+        mark(state, p, MARK_RECURSE | MARK_COLLAPSE);
 }
 
 static void scanStringBuilder(MarkState* state, ChiObject* obj) {
-    markAtomic(state, &((ChiStringBuilder*)obj->payload)->buf, MARK_RECURSIVE);
+    if (alreadyBlack(state, obj))
+        return;
     chiCountObject(state->stats.object, CHI_SIZEOF_WORDS(ChiStringBuilder));
+    markAtomic(state, &((ChiStringBuilder*)obj->payload)->buf, MARK_RECURSE);
 }
 
 static void scanArray(MarkState* state, ChiObject* obj) {
-    size_t size = chiObjectSize(obj);
-    for (ChiField* payload = (ChiField*)obj->payload, *p = payload; p < payload + size; ++p)
-        markAtomic(state, p, MARK_RECURSIVE | MARK_COLLAPSE);
-    chiCountObject(state->stats.object, size);
+    if (alreadyBlack(state, obj))
+        return;
+    chiCountObject(state->stats.object, obj->size);
+    for (ChiField *p = (ChiField*)obj->payload, *end = p + obj->size; p < end; ++p)
+        markAtomic(state, p, MARK_RECURSE | MARK_COLLAPSE);
 }
 
 static void scanImmutableObject(MarkState* state, ChiObject* obj) {
-    size_t size = chiObjectSize(obj);
-    for (Chili* payload = (Chili*)obj->payload, *p = payload; p < payload + size; ++p)
-        mark(state, p, MARK_RECURSIVE | MARK_COLLAPSE);
-    chiCountObject(state->stats.object, size);
+    if (alreadyBlack(state, obj))
+        return;
+    chiCountObject(state->stats.object, obj->size);
+    for (Chili *p = (Chili*)obj->payload, *end = p + obj->size; p < end; ++p)
+        mark(state, p, MARK_RECURSE | MARK_COLLAPSE);
 }
 
 static void scan(MarkState* state, Chili c) {
-    CHI_ASSERT(!chiUnboxed(c));
+    CHI_ASSERT(chiRefMajor(c));
     CHI_ASSERT(!chiRaw(chiType(c)));
-    CHI_ASSERT(chiGen(c) == CHI_GEN_MAJOR);
-
     CHI_CHECK_OBJECT_ALIVE(state->markState, c);
     ChiObject* obj = chiObjectUnchecked(c);
-    ChiColor color = chiObjectColor(obj);
-    if (!chiColorEq(color, state->markState.gray))
-        return;
-    chiObjectSetColor(obj, state->markState.black);
-
     switch (chiType(c)) {
-    case CHI_ARRAY: scanArray(state, obj); break;
+    case CHI_ARRAY_SMALL: case CHI_ARRAY_LARGE: scanArray(state, obj); break;
     case CHI_THUNK: scanThunk(state, obj); break;
     case CHI_STRINGBUILDER: scanStringBuilder(state, obj); break;
     case CHI_THREAD: scanThread(state, obj); break;
+    case CHI_STACK: scanStack(state, obj); break;
     case CHI_FIRST_TAG...CHI_LAST_IMMUTABLE: scanImmutableObject(state, obj); break;
-    case CHI_STACK...CHI_LAST_TYPE: CHI_BUG("Invalid value %C found in gray list", c);
+    case CHI_POISON_TAG...CHI_LAST_TYPE: CHI_BUG("Invalid value %C found in gray list", c);
     }
 }
 
-void chiMarkSlice(ChiGrayVec* gray, uint32_t depth, bool collapse, ChiMarkState markState,
+void chiMarkSlice(ChiGrayVec* gray, uint32_t depth, ChiMarkState markState,
                   ChiScanStats* stats, ChiTimeout* timeout) {
     MarkState state =
         { .timeout = timeout,
           .depth = depth,
-          .collapse = collapse,
           .markState = markState,
         };
-    chiBlockVecInit(&state.gray, gray->vec.manager);
-    chiBlockVecJoin(&state.gray, &gray->vec);
+    chiObjVecFrom(&state.gray, &gray->vec);
     Chili c;
-    while (chiTimeoutTick(timeout) && chiBlockVecPop(&state.gray, &c))
+    while (chiTimeoutTick(timeout) && chiObjVecPop(&state.gray, &c))
         scan(&state, c);
-    chiBlockVecJoin(&gray->vec, &state.gray);
-    chiGrayUpdateNull(gray);
+    chiObjVecFrom(&gray->vec, &state.gray);
+    chiGrayVecUpdateNull(gray);
     CHI_CHOICE(CHI_COUNT_ENABLED, *stats = state.stats, CHI_NOWARN_UNUSED(stats));
 }

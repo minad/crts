@@ -55,6 +55,8 @@ static void check_bin(const char* name, bool nonzero, mpz_bin_t f1, z_bin_t f2, 
         gmp_printf("%s returned invalid result\na = %Zd\nb = %Zd\nr = %Zd\nR = %Zd\n",
                    name, a1, b1, r1, u1);
         mpz_clear(u1);
+    } else if (u2.size && !u2.d[u2.size - 1]) {
+        gmp_printf("%s returned non-normalized result\n", name);
     }
 
     mpz_clear(r1);

@@ -30,8 +30,6 @@ typedef uint32_t ChiSig;
 
 typedef uint32_t ChiGCPhase;
 
-typedef uint32_t ChiHeapLimit;
-
 typedef uint32_t ChiThreadPhase;
 
 typedef struct {
@@ -50,21 +48,23 @@ typedef struct {
 typedef struct {
     ChiNanos cpuTimeUser;
     ChiNanos cpuTimeSystem;
-    size_t   residentSize;
+    size_t   maxResidentSize;
+    size_t   currResidentSize;
     uint64_t pageFault;
-    uint64_t contextSwitch;
+    uint64_t voluntaryContextSwitch;
+    uint64_t involuntaryContextSwitch;
 } ChiSystemStats;
 
 typedef struct {
-    uint64_t allocWords;
-    size_t   totalWords;
+    uint64_t allocSize;
+    size_t   totalSize;
 } ChiHeapClassUsage;
 
 typedef struct {
     ChiHeapClassUsage small;
     ChiHeapClassUsage medium;
     ChiHeapClassUsage large;
-    size_t            totalChunkWords;
+    size_t            totalSize;
 } ChiHeapUsage;
 
 typedef struct {
@@ -89,13 +89,14 @@ typedef struct {
 } ChiScavengerRawCount;
 
 typedef struct {
-    ChiObjectCount major;
-    ChiObjectCount stacks;
+    ChiObjectCount object;
+    ChiObjectCount stack;
+    ChiObjectCount card;
 } ChiScavengerDirtyCount;
 
 typedef struct {
-    size_t usedWords;
-    size_t totalWords;
+    size_t usedSize;
+    size_t totalSize;
 } ChiMinorHeapUsage;
 
 typedef struct {
@@ -132,12 +133,10 @@ typedef struct {
 } ChiScanStats;
 
 typedef struct {
-    uintptr_t oldStack;
-    uintptr_t newStack;
-    size_t reqSize;
-    size_t oldSize;
-    size_t newSize;
-    size_t usedSize;
+    uintptr_t stack;
+    size_t size;
+    size_t step;
+    size_t copied;
 } ChiEventStackSize;
 
 typedef struct {
@@ -147,8 +146,7 @@ typedef struct {
 
 typedef struct {
     uintptr_t stack;
-    bool scanned;
-} ChiEventStackActive;
+} ChiEventStack;
 
 typedef struct {
     ChiStringRef name;
@@ -157,7 +155,6 @@ typedef struct {
 typedef struct {
     ChiStringRef name;
     ChiStringRef trace;
-    bool         handled;
 } ChiEventException;
 
 typedef struct {
@@ -212,19 +209,15 @@ typedef struct {
 } ChiEventSignal;
 
 typedef struct {
-    size_t heapSize;
-    size_t softLimit;
-    size_t hardLimit;
-    ChiHeapLimit limit;
-} ChiEventHeapLimit;
-
-typedef struct {
     ChiStringRef type;
     size_t       size;
 } ChiEventHeapAlloc;
 
 typedef struct {
-    ChiWid suspendWid;
+    ChiWid notifyWid;
+} ChiEventProcNotify;
+
+typedef struct {
     uint32_t ms;
 } ChiEventProcSuspend;
 
@@ -288,6 +281,7 @@ provider chili {
   probe block__chunk__free(ChiRuntime*, ChiEventChunk*);
   probe block__chunk__new(ChiRuntime*, ChiEventChunk*);
   probe entry__blackhole(ChiProcessor*);
+  probe entry__notify__int(ChiProcessor*);
   probe entry__start(ChiProcessor*);
   probe entry__timer__int(ChiProcessor*);
   probe entry__unhandled(ChiProcessor*);
@@ -299,14 +293,14 @@ provider chili {
   probe fnlog__enter__jmp(ChiProcessor*, ChiEventFnLog*);
   probe fnlog__ffi(ChiProcessor*, ChiEventFnLogFFI*);
   probe fnlog__leave(ChiProcessor*, ChiEventFnLog*);
-  probe gc__notify(ChiRuntime*);
   probe gc__phase__global(ChiProcessor*, ChiEventGCPhase*);
   probe gc__phase__local(ChiProcessor*, ChiEventGCPhase*);
   probe gc__trigger(ChiRuntime*);
   probe heap__alloc__failed(ChiProcessor*, ChiEventHeapAlloc*);
   probe heap__chunk__free(ChiRuntime*, ChiEventChunk*);
   probe heap__chunk__new(ChiRuntime*, ChiEventChunk*);
-  probe heap__limit(ChiRuntime*, ChiEventHeapLimit*);
+  probe heap__limit__gc(ChiRuntime*);
+  probe heap__limit__overflow(ChiRuntime*);
   probe heap__usage(ChiProcessor*, ChiEventHeapUsage*);
   probe log__begin(ChiRuntime*);
   probe log__end(ChiRuntime*);
@@ -317,6 +311,7 @@ provider chili {
   probe proc__init(ChiProcessor*);
   probe proc__msg__recv(ChiProcessor*, ChiEventProcMsgRecv*);
   probe proc__msg__send(ChiProcessor*, ChiEventProcMsgSend*);
+  probe proc__notify(ChiProcessor*, ChiEventProcNotify*);
   probe proc__request(ChiRuntime*, ChiEventProcRequest*);
   probe proc__stall(ChiRuntime*, ChiEventProcStall*);
   probe proc__suspend(ChiProcessor*, ChiEventProcSuspend*);
@@ -324,9 +319,11 @@ provider chili {
   probe prof__enabled(ChiWorker*);
   probe prof__trace(ChiWorker*, ChiEventStackTrace*);
   probe signal(ChiRuntime*, ChiEventSignal*);
-  probe stack__activate(ChiProcessor*, ChiEventStackActive*);
-  probe stack__deactivate(ChiProcessor*, ChiEventStackActive*);
-  probe stack__resize(ChiProcessor*, ChiEventStackSize*);
+  probe stack__activate(ChiProcessor*, ChiEventStack*);
+  probe stack__deactivate(ChiProcessor*, ChiEventStack*);
+  probe stack__grow(ChiProcessor*, ChiEventStackSize*);
+  probe stack__scanned(ChiProcessor*, ChiEventStack*);
+  probe stack__shrink(ChiProcessor*, ChiEventStackSize*);
   probe stack__trace(ChiProcessor*, ChiEventStackTrace*);
   probe strbuilder__overflow(ChiProcessor*);
   probe system__stats(ChiRuntime*, ChiEventSystemStats*);
@@ -338,7 +335,6 @@ provider chili {
   probe thread__takeover(ChiProcessor*, ChiEventThreadMigrate*);
   probe thread__terminated(ChiProcessor*);
   probe thread__yield(ChiProcessor*, ChiEventThreadYield*);
-  probe tick(ChiRuntime*);
   probe user__buffer(ChiProcessor*, ChiEventUserBuffer*);
   probe user__string(ChiProcessor*, ChiEventUserString*);
   probe worker__destroy(ChiWorker*);

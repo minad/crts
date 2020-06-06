@@ -21,6 +21,10 @@ void chiEvent_ENTRY_BLACKHOLE(void) {
     chiEvent0(CHI_CURRENT_PROCESSOR, ENTRY_BLACKHOLE);
 }
 
+void chiEvent_ENTRY_NOTIFY_INT(void) {
+    chiEvent0(CHI_CURRENT_PROCESSOR, ENTRY_NOTIFY_INT);
+}
+
 void chiEvent_ENTRY_START(void) {
     chiEvent0(CHI_CURRENT_PROCESSOR, ENTRY_START);
 }

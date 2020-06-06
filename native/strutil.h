@@ -33,18 +33,22 @@ CHI_INL const char* strskip(const char* s, char c) {
     return s;
 }
 
+#ifndef __GLIBC__
+CHI_INL char* _strchrnul(const char* s, int c) {
+    while (*s && *s != c)
+        ++s;
+    return CHI_CONST_CAST(s, char*);
+}
+#define strchrnul _strchrnul
+#endif
+
 CHI_INL const char* strsplit(const char** rest, char sep, const char** end) {
     for (;;) {
-        const char* tok = *rest, *p;
+        const char* tok = *rest;
         if (!tok || !*tok)
             return 0;
-        if ((p = strchr(tok, sep))) {
-            *rest = p + 1;
-            *end = p;
-        } else {
-            *rest = 0;
-            *end = tok + strlen(tok);
-        }
+        *end = strchrnul(tok, sep);
+        *rest = **end == sep ? *end + 1 : 0;
         if (*end != tok)
             return tok;
     }

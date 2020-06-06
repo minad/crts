@@ -14,15 +14,9 @@ CHI_INL bool chiColorUsed(ChiColor c) {
     return !!(CHI_UN(Color, c) & _CHI_COLOR_USED);
 }
 
-CHI_INL void chiObjectSetDirty(ChiObject* o, bool set) {
-    uint32_t flags = atomic_load_explicit(&o->flags, memory_order_relaxed);
-    atomic_store_explicit(&o->flags, (uint8_t)(set ? flags | _CHI_OBJECT_DIRTY : flags & ~(uint32_t)_CHI_OBJECT_DIRTY),
-                          memory_order_relaxed);
-}
-
 CHI_INL void chiObjectSetSize(ChiObject* o, size_t size) {
     CHI_ASSERT(size <= UINT32_MAX);
-    atomic_store_explicit(&o->size, (uint32_t)size, memory_order_relaxed);
+    o->size = (uint32_t)size;
 }
 
 CHI_INL void chiObjectSetColor(ChiObject* o, ChiColor set) {

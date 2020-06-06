@@ -16,18 +16,25 @@ struct _ChiRegStore {
 #define JUMP(c)       __tailcall__((ChiContFn*)(c), _chiReg, _chiRegSP, _chiRegSL, _chiRegHP, _chiRegA0, _chiRegA1)
 #define FIRST_JUMP(n) ({ CHI_CONT_FN(n)(_chiReg, _chiRegSP, _chiRegSL, _chiRegHP, _chiRegA0, _chiRegA1); CHI_UNREACHABLE; })
 
-#define SP   _chiRegSP
-#define HP   _chiRegHP
-#define SLRW _chiRegSL
-#define A(i) (*({ size_t _i = (i); CHI_ASSERT(_i < CHI_AMAX); _i == 0 ? &_chiRegA0 : _i == 1 ? &_chiRegA1 : _chiReg->a + _i - 2; }))
+#define SP    _chiRegSP
+#define HP    _chiRegHP
+#define SLRW  _chiRegSL
+#define _A(i) ((i) == 0 ? &_chiRegA0 : (i) == 1 ? &_chiRegA1 : _chiReg->a + (i) - 2)
 
-#define _PROLOGUE(na)                           \
+#define _PROLOGUE                               \
     CHI_NOWARN_UNUSED(_chiReg);                 \
     CHI_NOWARN_UNUSED(_chiRegSP);               \
     CHI_NOWARN_UNUSED(_chiRegSL);               \
     CHI_NOWARN_UNUSED(_chiRegHP);               \
     CHI_NOWARN_UNUSED(_chiRegA0);               \
-    if ((na) < 1) CHI_UNDEF(_chiRegA1)
+    CHI_NOWARN_UNUSED(_chiRegA1)
+
+
+#define _UNDEF_ARGS(n)                          \
+    ({                                          \
+        if ((n) <= 0) CHI_UNDEF(_chiRegA0);     \
+        if ((n) <= 1) CHI_UNDEF(_chiRegA1);     \
+    })
 
 #define CALLCONV_INIT                                                   \
     struct _ChiRegStore _chiRegStore = {}, *_chiReg = &_chiRegStore;   \

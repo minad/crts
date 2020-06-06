@@ -35,14 +35,10 @@ enum {
 };
 
 /**
- * Returned by *Try* functions in case of failure
- */
-#define CHI_FAIL       (Chili){ _CHILI_REFTAG | CHI_BF_INIT(_CHILI_BF_TYPE, CHI_FAIL_TAG) }
-
-/**
  * Poisoned value
  */
 #define _CHILI_POISON    (Chili){ _CHILI_REFTAG | CHI_BF_INIT(_CHILI_BF_TYPE, CHI_POISON_TAG) }
+
 #define _CHILI_NAN       (UINT64_C(0xFFF) << 51)
 #define _CHILI_LARGE     CHI_BF_MAX(_CHILI_BF_SIZE)
 #define _CHILI_REFTAG    CHI_BF_SHIFTED_MASK(_CHILI_BF_REFTAG)
@@ -102,13 +98,15 @@ typedef enum {
     CHI_GEN_MAJOR   = CHI_BF_MAX(_CHILI_BF_GEN),
 } ChiGen;
 
-CHI_FLAGTYPE(ChiObjectFlags,
-             _CHI_OBJECT_SHARED = 1,
-             _CHI_OBJECT_DIRTY  = 2)
-
 enum { _CHI_OBJECT_HEADER_SIZE = 1 };
 
 typedef struct ChiObject_ ChiObject;
+
+typedef struct CHI_PACKED {
+    bool dirty : 1;
+    bool CHI_CHOICE(CHI_SYSTEM_HAS_TASK, shared, _unused) : 1;
+    uint8_t _pad : 6;
+} ChiObjectFlags;
 
 /**
  * An object allocated on the major heap consists
@@ -120,9 +118,10 @@ struct CHI_WORD_ALIGNED ChiObject_ {
         ChiAtomicWord header;
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
         struct {
-            _Atomic(uint8_t)  color, owner, flags; // lowest address: must be lowest bits because of next pointer
+            _Atomic(uint8_t)  color, owner; // lowest address: must be lowest bits because of next pointer
             _Atomic(bool)     lock;
-            _Atomic(uint32_t) size;
+            ChiObjectFlags    flags;
+            uint32_t          size;
         };
         struct {
             ChiObject* next;
@@ -130,9 +129,10 @@ struct CHI_WORD_ALIGNED ChiObject_ {
         } free;
 #else
         struct {
-            _Atomic(uint32_t) size;
+            uint32_t          size;
+            ChiObjectFlags    flags;
             _Atomic(bool)     lock;
-            _Atomic(uint8_t)  flags, owner, color; // biggest address: must be lowest bits because of next pointer
+            _Atomic(uint8_t)  owner, color; // biggest address: must be lowest bits because of next pointer
         };
         struct {
             CHI_IF(CHI_ARCH_32BIT, uint32_t _pad;)
@@ -236,61 +236,48 @@ typedef struct {
     Chili THREAD;
     Chili PROC;
     Chili PLOCAL;
+    Chili YIELD;
     CHI_IF(CHI_TRACEPOINTS_CONT_ENABLED, _Atomic(int32_t) TRACEPOINT;)
     CHI_IF(CHI_FNLOG_ENABLED, bool FNLOG;)
-    uint8_t APPN;
+    uint8_t VAARGS;
 } ChiAuxRegs;
 
 #include CHI_STRINGIZE(callconv/CHI_CALLCONV.h)
 typedef CHI_CONT_PROTO((ChiContFn));
 
-/**
- * Each continuation has a frame type corresponding to the
- * format of the stack frame. For generic frames the type is ::CHI_FRAME_DEFAULT.
- * However there are continuations which use a different frame format.
+/*
+ * The frame format depends on the frame type.
  * It is necessary to know the precise format of the stack frames for stack walking.
  *
- *                    ┌───────────────┬───────────────┬─────┐
- *     DEFAULT        │ ChiCont       │ Payload       │ ... │
- *                    └───────────────┴───────────────┴─────┘
+ *                           ┌───────────────┬───────────────┬─────┐
+ *     Generic               │ ChiCont       │ Payload       │ ... │
+ *                           └───────────────┴───────────────┴─────┘
  *
- *                    ┌───────────────┬───────────────┐
- *     CATCH          │ ChiCont       │ Old Handler   │
- *                    └───────────────┴───────────────┘
+ *                           ┌───────────────┬───────────────┐
+ *     chiExceptionCatchCont │ ChiCont       │ Old Handler   │
+ *                           └───────────────┴───────────────┘
  *
- *                    ┌───────────────┬───────────────┐
- *     UPDATE         │ ChiCont       │ Thunk/Blackh. │
- *                    └───────────────┴───────────────┘
+ *                           ┌───────────────┬───────────────┐
+ *     chiThunkUpdateCont    │ ChiCont       │ Thunk/Blackh. │
+ *                           └───────────────┴───────────────┘
  *
- *                    ┌───────────────┬───────────────┬───────────────┬─────┐
- *     INTERP/VASIZE  │ ChiCont       │ Frame Size    │ Payload       │ ... │
- *                    └───────────────┴───────────────┴───────────────┴─────┘
+ *                           ┌───────────────┬───────────────┬───────────────┬─────┐
+ *     Interpreter/VASIZE    │ ChiCont       │ Frame Size    │ Payload       │ ... │
+ *                           └───────────────┴───────────────┴───────────────┴─────┘
  *
- *                    ┌───────────────┬───────────────┬───────────────┬─────┬───────────────┐
- *     RESTORE        │ ChiCont       │ Frame Size    │ Arguments     │ ... │ ChiCont       │
- *                    └───────────────┴───────────────┴───────────────┴─────┴───────────────┘
- *
- *                    ┌───────────────┐
- *     APPN/VAARGS    │ ChiCont       │
- *                    └───────────────┘
+ *                           ┌───────────────┬───────────────┬───────────────┬─────┬───────────────┐
+ *     chiRestoreCont        │ ChiCont       │ Frame Size    │ Arguments     │ ... │ ChiCont       │
+ *                           └───────────────┴───────────────┴───────────────┴─────┴───────────────┘
  *
  * @note ::CHI_VAARGS and ::CHI_VASIZE are not stored in the
  *       type field of ::ChiContInfo but in the respective na and size field.
- *       Notable ::CHI_VASIZE continuations are ::chiRestoreCont and ::chiOverAppN.
+ *       Notable ::CHI_VASIZE continuations are ::chiRestoreCont and ::overAppN.
  */
-typedef enum {
-    CHI_FRAME_DEFAULT,
-    CHI_FRAME_CATCH,
-    CHI_FRAME_UPDATE,
-    CHI_FRAME_APPN,
-    CHI_FRAME_RESTORE,
-    CHI_IF(CHI_CBY_SUPPORT_ENABLED, CHI_FRAME_INTERP)
-} ChiFrame;
 
 /**
  * Frame with variable number of arguments.
  * If ChiContInfo::na == CHI_VAARGS, the number of arguments
- * must be taken from the NA register.
+ * must be stored in the AUX.VAARGS register.
  */
 enum { CHI_VAARGS = 0x1F };
 
@@ -303,8 +290,8 @@ enum { CHI_VASIZE = 0xFFFFFF };
 
 /**
  * Continuation information.
- * In particular, this includes the ChiFrameType
- * and the size of the frame.
+ * In particular, this includes the number of arguments and the size of the frame.
+
  *
  * @warning The size can be CHI_VASIZE and na can be
  *          CHI_VAARGS.
@@ -322,9 +309,9 @@ typedef const struct {
 } _ChiContInfoLoc;
 typedef const struct CHI_PACKED CHI_ALIGNED(CHI_CONT_PREFIX_ALIGN) {
     uint32_t    trap; // Trap instruction, signals that invalid instructions follow
-    ChiFrame    type    : 3;
-    uint8_t     na      : 5;
     uint32_t    size    : 24;
+    uint8_t     na      : 7;
+    CHI_IF(CHI_CBY_SUPPORT_ENABLED, bool interp : 1;)
     CHI_IF(CHI_LOC_ENABLED, _ChiContInfoLoc* loc;)
 } ChiContInfo;
 typedef ChiContFn* ChiCont;
@@ -336,9 +323,9 @@ typedef ChiContFn* ChiCont;
 #else
 typedef const struct CHI_PACKED {
     ChiContFn*  fn;
-    ChiFrame    type : 3;
-    uint8_t     na   : 5;
     uint32_t    size : 24;
+    uint8_t     na   : 7;
+    CHI_IF(CHI_CBY_SUPPORT_ENABLED, bool interp : 1;)
     CHI_IF(CHI_LOC_ENABLED, uint32_t line : 24; const char* file; char name[];)
 } ChiContInfo;
 typedef ChiContInfo* ChiCont;
@@ -354,13 +341,11 @@ typedef ChiContInfo* ChiCont;
  * Descriptor used for modules provided by dynamic libraries
  */
 typedef const struct {
-    const char*        name;
     ChiCont            init;
-    const char* const* exportName;
-    const int32_t*     exportIdx;
-    const char* const* importName;
-    uint32_t           exportCount;
+    int32_t            mainIdx;
     uint32_t           importCount;
+    const char* const* importName;
+    char               name[];
 }  ChiModuleDesc;
 
 typedef struct {
@@ -393,7 +378,6 @@ typedef struct {
 typedef enum {
     CHI_FIRST_TAG = 0,               // START: first adt tag, first closure arity
     CHI_LAST_TAG = 487 - CHI_AMAX,   // END: last adt tag, last closure arity
-    CHI_THUNK_FN,                     // must be just before CHI_FIRST_FN for chiFnOrThunkArity
     CHI_FIRST_FN,
     CHI_LAST_FN = CHI_FIRST_FN + CHI_AMAX - 1,
     CBY_INTERP_MODULE,                 // used by interpreter
@@ -401,15 +385,16 @@ typedef enum {
     CHI_LAST_IMMUTABLE = CBY_NATIVE_MODULE, // END: Immutable objects, which do not need atomic access
     CHI_FIRST_MUTABLE,               // START: mutable, special treatment by gc
     CHI_STRINGBUILDER = CHI_FIRST_MUTABLE,
-    CHI_ARRAY,
+    CHI_ARRAY_SMALL,
+    CHI_ARRAY_LARGE,
     CHI_THUNK,
     CHI_LAST_MUTABLE = CHI_THUNK,    // END: mutable
     CHI_THREAD,                      // thread is mutable, but needs special treatment by gc
     CHI_STACK,                       // stack is mutable, but needs special treatment by gc
     CHI_POISON_TAG,
-    CHI_FAIL_TAG,
     CHI_FIRST_RAW,                   // START: raw objects, no scanning necessary
-    CHI_PRESTRING = CHI_FIRST_RAW,
+    CHI_FAIL = CHI_FIRST_RAW,
+    CHI_PRESTRING,
     CHI_BIGINT_POS,
     CHI_BIGINT_NEG,
     CBY_FFI,                         // used by interpreter
@@ -422,7 +407,7 @@ typedef enum {
 
 _Static_assert(CHI_LAST_TYPE == CHI_BF_MAX(_CHILI_BF_TYPE), "CHI_LAST_TYPE is wrong");
 
-CHI_EXPORT_CONT_DECL(chiMigrate)
+CHI_EXPORT_CONT_DECL(chiPromoteAll)
 CHI_EXPORT_CONT_DECL(chiStackTrace)
 CHI_EXPORT_CONT_DECL(chiInitModule)
 CHI_EXPORT_CONT_DECL(chiExceptionThrow)
@@ -433,33 +418,12 @@ CHI_EXPORT_CONT_DECL(CHI_PRIVATE(chiApp2))
 CHI_EXPORT_CONT_DECL(CHI_PRIVATE(chiApp3))
 CHI_EXPORT_CONT_DECL(CHI_PRIVATE(chiApp4))
 CHI_EXPORT_CONT_DECL(CHI_PRIVATE(chiAppN))
-CHI_EXPORT_CONT_DECL(CHI_PRIVATE(chiThunkForce))
-CHI_EXPORT_CONT_DECL(CHI_PRIVATE(chiInterrupt))
-CHI_EXPORT_CONT_DECL(CHI_PRIVATE(chiOverApp1))
-CHI_EXPORT_CONT_DECL(CHI_PRIVATE(chiOverApp2))
-CHI_EXPORT_CONT_DECL(CHI_PRIVATE(chiOverApp3))
-CHI_EXPORT_CONT_DECL(CHI_PRIVATE(chiOverApp4))
-CHI_EXPORT_CONT_DECL(CHI_PRIVATE(chiOverAppN))
-CHI_EXPORT_CONT_DECL(CHI_PRIVATE(chiPartial1of2))
-CHI_EXPORT_CONT_DECL(CHI_PRIVATE(chiPartial1of3))
-CHI_EXPORT_CONT_DECL(CHI_PRIVATE(chiPartial1of4))
-CHI_EXPORT_CONT_DECL(CHI_PRIVATE(chiPartial2of3))
-CHI_EXPORT_CONT_DECL(CHI_PRIVATE(chiPartial2of4))
-CHI_EXPORT_CONT_DECL(CHI_PRIVATE(chiPartial3of4))
-CHI_EXPORT_CONT_DECL(CHI_PRIVATE(chiPartialNofM))
+CHI_EXPORT_CONT_DECL(CHI_PRIVATE(chiYieldClos))
+CHI_EXPORT_CONT_DECL(CHI_PRIVATE(chiYieldCont))
 CHI_EXPORT_CONT_DECL(CHI_PRIVATE(chiProtectEnd))
 
 CHI_LOCAL ChiContFn* const _chiAppTable[] =
     { CHI_CONT_FN(_chiApp1), CHI_CONT_FN(_chiApp2), CHI_CONT_FN(_chiApp3), CHI_CONT_FN(_chiApp4) };
-CHI_LOCAL const ChiCont _chiOverAppTable[] =
-    { &_chiOverApp1, &_chiOverApp2, &_chiOverApp3, &_chiOverApp4 };
-#define CHI_PARTIAL_TABLE(args, arity, ...)                             \
-    CHI_LOCAL const ChiCont _chiPartialTable##args[CHI_AMAX - args - 1] = \
-        { __VA_ARGS__, [arity - args ... CHI_AMAX - args - 2] = &_chiPartialNofM };
-CHI_PARTIAL_TABLE(1, 4, &_chiPartial1of2, &_chiPartial1of3, &_chiPartial1of4)
-CHI_PARTIAL_TABLE(2, 4, &_chiPartial2of3, &_chiPartial2of4)
-CHI_PARTIAL_TABLE(3, 4, &_chiPartial3of4)
-#undef CHI_PARTIAL_TABLE
 
 CHI_FLAGTYPE(ChiNewFlags,
              CHI_NEW_DEFAULT       = 0,
@@ -467,7 +431,8 @@ CHI_FLAGTYPE(ChiNewFlags,
              CHI_NEW_UNINITIALIZED = 2,
              CHI_NEW_LOCAL         = 4, // incompatible with CHI_NEW_SHARED
              CHI_NEW_SHARED        = 8, // requires CHI_NEW_CLEAN
-             CHI_NEW_CLEAN         = 16)
+             CHI_NEW_CLEAN         = 16,
+             CHI_NEW_CARDS         = 32) // requires CHI_NEW_LOCAL
 
 _Noreturn void chiMain(int, char**);
 CHI_EXPORT void chiExit(uint8_t);
@@ -490,13 +455,15 @@ CHI_EXPORT_INL void chiProfilerEnable(bool CHI_UNUSED(x)) {}
 #endif
 
 CHI_INL bool CHI_PRIVATE(chiBitGet)(const uintptr_t* bits, size_t n) {
-    size_t w = 8 * sizeof (uintptr_t);
-    return !!((bits[n / w] >> (n & (w - 1))) & 1);
+    size_t w = 8 * sizeof (uintptr_t), s = n & (w - 1);
+    return !!((bits[n / w] >> s) & 1);
 }
 
-CHI_INL void CHI_PRIVATE(chiBitSet)(uintptr_t* bits, size_t n, bool x) {
+CHI_INL bool CHI_PRIVATE(chiBitSet)(uintptr_t* bits, size_t n, bool x) {
     size_t w = 8 * sizeof (uintptr_t), s = n & (w - 1);
-    bits[n / w] = (bits[n / w] & ~(1UL << s)) | ((uintptr_t)x << s);
+    uintptr_t old = bits[n / w];
+    bits[n / w] = (old & ~(1UL << s)) | ((uintptr_t)x << s);
+    return !!((old >> s) & 1);
 }
 
 CHI_INL CHI_WU float CHI_PRIVATE(chiBitsToFloat32)(uint32_t x) {
@@ -517,12 +484,13 @@ CHI_INL CHI_WU uint64_t CHI_PRIVATE(chiFloat64ToBits)(double x) {
 
 // We manually unpack the double to get a sane conversion to integers
 CHI_INL CHI_WU int64_t CHI_PRIVATE(chiFloat64ToInt64)(double x) {
-    if (!__builtin_isfinite(x))
-        return 0;
-    const uint64_t bits = _chiFloat64ToBits(x);
-    const int exp = ((int)(bits >> 52) & 0x7FF) - 1023 - 52;
-    const int64_t frac = (int64_t)(bits & (-UINT64_C(1) >> 12)) | (INT64_C(1) << 52);
-    const int64_t sign = bits >> 63 ? -1 : 1;
+    uint64_t bits = _chiFloat64ToBits(x);
+    int32_t exp = (int32_t)((bits >> 52) & 0x7FF);
+    if (exp == 0x7FF)
+        return 0; // convention: return 0 for +-inf, NaN
+    exp -= 1023 + 52;
+    int64_t frac = (int64_t)(bits & (-UINT64_C(1) >> 12)) | (INT64_C(1) << 52);
+    int64_t sign = bits >> 63 ? -1 : 1;
     if (exp < -63 || exp > 63)
         return 0;
     return sign * (exp < 0 ? frac >> -exp : frac << exp);
@@ -557,12 +525,12 @@ CHI_INL CHI_WU bool CHI_PRIVATE(chiUnboxed63)(Chili c) {
 }
 
 /**
- * Returns true if the Chili contains an unboxed value.
+ * Returns true if the Chili is a reference.
  */
-CHI_INL CHI_WU bool CHI_PRIVATE(chiUnboxed)(Chili c) {
-    bool unboxed = CHI_NANBOXING_ENABLED ? CHILI_UN(c) <= _CHILI_REFTAG : !CHI_BF_GET(_CHILI_BF_REFTAG, CHILI_UN(c));
-    CHI_ASSERT(!CHI_POISON_OBJECT_ENABLED || unboxed || CHI_BF_GET(_CHILI_BF_TYPE, CHILI_UN(c)) != CHI_POISON_TAG);
-    return unboxed;
+CHI_INL CHI_WU bool CHI_PRIVATE(chiRef)(Chili c) {
+    bool ref = CHI_NANBOXING_ENABLED ? CHILI_UN(c) > _CHILI_REFTAG : CHI_BF_GET(_CHILI_BF_REFTAG, CHILI_UN(c));
+    CHI_ASSERT(!CHI_POISON_OBJECT_ENABLED || !ref || CHI_BF_GET(_CHILI_BF_TYPE, CHILI_UN(c)) != CHI_POISON_TAG);
+    return ref;
 }
 
 /**
@@ -570,7 +538,7 @@ CHI_INL CHI_WU bool CHI_PRIVATE(chiUnboxed)(Chili c) {
  */
 CHI_INL CHI_WU Chili CHI_PRIVATE(chiFromUnboxed)(ChiWord v) {
     Chili c = (Chili){ v };
-    CHI_ASSERT(_chiUnboxed(c));
+    CHI_ASSERT(!_chiRef(c));
     return c;
 }
 
@@ -578,7 +546,7 @@ CHI_INL CHI_WU Chili CHI_PRIVATE(chiFromUnboxed)(ChiWord v) {
  * Unpack unboxed value
  */
 CHI_INL CHI_WU ChiWord CHI_PRIVATE(chiToUnboxed)(Chili c) {
-    CHI_ASSERT(_chiUnboxed(c));
+    CHI_ASSERT(!_chiRef(c));
     return CHILI_UN(c);
 }
 
@@ -587,7 +555,7 @@ CHI_INL CHI_WU ChiType CHI_PRIVATE(chiType)(Chili c) {
     return CHI_BF_GET(_CHILI_BF_TYPE, CHILI_UN(c));
 }
 
-CHI_INL CHI_WU size_t CHI_PRIVATE(chiSizeField)(Chili c) {
+CHI_INL CHI_WU size_t _chiSizeField(Chili c) {
     CHI_ASSERT_TAGGED(c);
     return CHI_BF_GET(_CHILI_BF_SIZE, CHILI_UN(c));
 }
@@ -602,15 +570,34 @@ CHI_INL CHI_WU CHI_ASSUME_WORD_ALIGNED void* _chiPtrField(Chili c) {
 #ifdef _CHILI_BF_PTR_START
     return (void*)CHI_BF_GET(_CHILI_BF_PTR_START, CHILI_UN(c));
 #else
-    return (void*)(CHI_BF_GET(_CHILI_BF_PTR, CHILI_UN(c)) | CHI_CHUNK_START);
+    return (void*)(CHI_BF_GET(_CHILI_BF_PTR, CHILI_UN(c)) CHI_IF(CHI_NANBOXING_ENABLED, | CHI_CHUNK_START));
 #endif
+}
+
+/**
+ * Returns true for reference of given type. This branchless function should be used
+ * instead of the combination `chiRef(c) && chiType(c) == t`.
+ */
+CHI_INL CHI_WU bool CHI_PRIVATE(chiRefType)(Chili c, ChiType t) {
+    CHI_ASSERT(t != 0);
+    return (CHILI_UN(c) & (_CHILI_REFTAG | CHI_BF_SHIFTED_MASK(_CHILI_BF_TYPE))) ==
+        (_CHILI_REFTAG | ((ChiWord)t << CHI_BF_SHIFT(_CHILI_BF_TYPE)));
+}
+
+/**
+ * Returns true for reference to major generation. This brancless function should be used
+ * instead of the combination `chiRef(c) && chiGen(c) == CHI_GEN_MAJOR`.
+ */
+CHI_INL CHI_WU bool CHI_PRIVATE(chiRefMajor)(Chili c) {
+    return (CHILI_UN(c) & (_CHILI_REFTAG | CHI_BF_SHIFTED_MASK(_CHILI_BF_GEN))) ==
+        (_CHILI_REFTAG | ((ChiWord)CHI_GEN_MAJOR << CHI_BF_SHIFT(_CHILI_BF_GEN)));
 }
 
 /**
  * Returns heap generation of object
  */
 CHI_INL ChiGen CHI_PRIVATE(chiGen)(Chili c) {
-    CHI_ASSERT(!_chiUnboxed(c));
+    CHI_ASSERT(_chiRef(c));
     return CHI_BF_GET(_CHILI_BF_GEN, CHILI_UN(c));
 }
 
@@ -629,7 +616,7 @@ CHI_INL CHI_WU Chili CHI_PRIVATE(chiWrap)(void* p, size_t s, ChiType t, ChiGen g
 #ifdef _CHILI_BF_PTR_START
             | CHI_BF_INIT(_CHILI_BF_PTR_START, (uintptr_t)p)
 #else
-            | CHI_BF_INIT(_CHILI_BF_PTR, (uintptr_t)p & ~CHI_CHUNK_START)
+            | CHI_BF_INIT(_CHILI_BF_PTR, (uintptr_t)p CHI_IF(CHI_NANBOXING_ENABLED, & ~CHI_CHUNK_START))
 #endif
             | CHI_BF_INIT(_CHILI_BF_SIZE, s)
             | CHI_BF_INIT(_CHILI_BF_TYPE, t)
@@ -662,16 +649,9 @@ CHI_INL CHI_WU ChiObject* CHI_PRIVATE(chiObjectUnchecked)(Chili c) {
     return (ChiObject*)_chiPtrField(c) - 1;
 }
 
-CHI_INL CHI_WU size_t CHI_PRIVATE(chiObjectSize)(const ChiObject* o) {
-    return atomic_load_explicit(&o->size, memory_order_relaxed);
-}
-
-CHI_INL CHI_WU bool CHI_PRIVATE(chiObjectDirty)(const ChiObject* o) {
-    return !!(atomic_load_explicit(&o->flags, memory_order_relaxed) & _CHI_OBJECT_DIRTY);
-}
-
 CHI_INL CHI_WU bool CHI_PRIVATE(chiObjectShared)(const ChiObject* o) {
-    return CHI_SYSTEM_HAS_TASK && !!(atomic_load_explicit(&o->flags, memory_order_relaxed) & _CHI_OBJECT_SHARED);
+    CHI_NOWARN_UNUSED(o);
+    return CHI_AND(CHI_SYSTEM_HAS_TASK, o->flags.shared);
 }
 
 CHI_INL CHI_WU ChiColor CHI_PRIVATE(chiObjectColor)(const ChiObject* o) {
@@ -712,7 +692,6 @@ CHI_INL void _chiDebugCheckObjectAlive(ChiMarkState s, Chili c) {
 }
 
 CHI_INL void _chiDebugCheckObject(Chili c) {
-    CHI_ASSERT(!_chiUnboxed(c));
     if (_chiGen(c) == CHI_GEN_MAJOR) {
         ChiObject* obj = _chiObjectUnchecked(c);
         if (!_chiDebugData.protect)
@@ -726,14 +705,14 @@ CHI_INL void _chiDebugCheckObject(Chili c) {
 }
 
 CHI_INL void _chiDebugCheckRef(Chili c, size_t i, Chili r) {
-    if (_chiUnboxed(r) || _chiGen(c) != CHI_GEN_MAJOR)
+    if (!_chiRef(r) || _chiGen(c) != CHI_GEN_MAJOR)
         return;
     ChiObject* obj = _chiObjectUnchecked(c);
     if (_chiObjectShared(obj)) {
         if (_chiGen(r) != CHI_GEN_MAJOR || !_chiObjectShared(_chiObjectUnchecked(r)))
             CHI_BUG("Processor %u: Illegal shared to local reference %C@%zu -> %C", _chiDebugData.wid, c, i, r);
     } else {
-        if (_chiGen(r) != CHI_GEN_MAJOR && !_chiObjectDirty(obj))
+        if (_chiGen(r) != CHI_GEN_MAJOR && !obj->flags.dirty)
             CHI_BUG("Processor %u: Illegal non-dirty reference %C@%zu -> %C", _chiDebugData.wid, c, i, r);
     }
 }
@@ -758,12 +737,20 @@ CHI_INL CHI_WU CHI_ASSUME_WORD_ALIGNED CHI_RET_NONNULL void* CHI_PRIVATE(chiRawP
 
 CHI_INL CHI_WU CHI_ASSUME_WORD_ALIGNED Chili* CHI_PRIVATE(chiPayload)(Chili c) {
     CHI_ASSERT(!_chiRaw(_chiType(c)));
+    CHI_ASSERT(_chiType(c) != CHI_STACK);
     return (Chili*)_chiRawPayload(c);
+}
+
+CHI_INL CHI_WU size_t CHI_PRIVATE(chiSizeSmall)(Chili c) {
+    CHI_ASSERT(_chiGen(c) != CHI_GEN_MAJOR);
+    size_t s = _chiSizeField(c);
+    CHI_ASSERT(s != _CHILI_LARGE);
+    return s;
 }
 
 CHI_INL CHI_WU size_t CHI_PRIVATE(chiSize)(Chili c) {
     size_t s = _chiSizeField(c);
-    return s != _CHILI_LARGE ? s : _chiObjectSize(_chiObject(c));
+    return s != _CHILI_LARGE ? s : _chiObject(c)->size;
 }
 
 CHI_INL CHI_WU uint32_t chiToUInt32(Chili c) {
@@ -810,41 +797,6 @@ CHI_INL CHI_WU float chiToFloat32(Chili c) {
 }
 
 /**
- * Return true if function closure
- */
-CHI_INL CHI_WU bool CHI_PRIVATE(chiFn)(ChiType t) {
-    return t >= CHI_FIRST_FN && t <= CHI_LAST_FN;
-}
-
-/**
- * Arity of function type
- */
-CHI_INL CHI_WU uint32_t CHI_PRIVATE(chiFnTypeArity)(ChiType t) {
-    CHI_ASSERT(_chiFn(t));
-    return (uint32_t)(t - CHI_FIRST_FN + 1);
-}
-
-/**
- * Arity of function
- */
-CHI_INL CHI_WU uint32_t CHI_PRIVATE(chiFnArity)(Chili c) {
-    return _chiFnTypeArity(_chiType(c));
-}
-
-CHI_INL CHI_WU bool CHI_PRIVATE(chiFnOrThunk)(ChiType t) {
-    return t >= CHI_THUNK_FN && t <= CHI_LAST_FN;
-}
-
-CHI_INL CHI_WU uint32_t CHI_PRIVATE(chiFnOrThunkTypeArity)(ChiType t) {
-    CHI_ASSERT(_chiFnOrThunk(t));
-    return t - CHI_THUNK_FN;
-}
-
-CHI_INL CHI_WU uint32_t CHI_PRIVATE(chiFnOrThunkArity)(Chili c) {
-    return _chiFnOrThunkTypeArity(_chiType(c));
-}
-
-/**
  * Do nothing, chiTouch is just used to keep value alive
  */
 CHI_EXPORT_INL void chiTouch(Chili CHI_UNUSED(c)) {
@@ -861,7 +813,7 @@ CHI_INL CHI_WU bool chiIdentical(Chili a, Chili b) {
  * Immutable access
  */
 CHI_INL CHI_WU Chili chiIdx(Chili c, size_t i) {
-    CHI_ASSERT(_chiType(c) <= CHI_LAST_IMMUTABLE);
+    CHI_ASSERT(_chiType(c) <= CHI_LAST_IMMUTABLE || (_chiType(c) == CHI_THUNK && i != 1));
     CHI_ASSERT(i < _chiSize(c));
     Chili v = _chiPayload(c)[i];
     CHI_CHECK_REF(c, i, v);
@@ -869,10 +821,10 @@ CHI_INL CHI_WU Chili chiIdx(Chili c, size_t i) {
 }
 
 /**
- * Immutable init
+ * Immutable/thunk init
  */
 CHI_INL void CHI_PRIVATE(chiInit)(Chili c, Chili* p, Chili v) {
-    CHI_ASSERT(_chiType(c) <= CHI_LAST_IMMUTABLE);
+    CHI_ASSERT(_chiType(c) <= CHI_LAST_IMMUTABLE || _chiType(c) == CHI_THUNK);
     CHI_ASSERT(p >= _chiPayload(c));
     CHI_ASSERT(p < _chiPayload(c) + _chiSize(c));
     CHI_CHECK_REF(c, (size_t)(p - _chiPayload(c)), v);
@@ -910,7 +862,7 @@ CHI_INL CHI_WU bool chiTrue(Chili c) {
  * True in case of *Try* function succeeded.
  */
 CHI_EXPORT_INL CHI_WU bool chiSuccess(Chili c) {
-    return CHI_LIKELY(!chiIdentical(c, CHI_FAIL));
+    return CHI_LIKELY(!_chiRefType(c, CHI_FAIL));
 }
 
 /**
@@ -949,14 +901,44 @@ CHI_INL CHI_WU ChiCont chiToCont(Chili c) {
 #endif
 }
 
-CHI_INL CHI_WU ChiContFn* CHI_PRIVATE(chiContFn)(Chili c) {
+CHI_INL CHI_WU ChiContFn* CHI_PRIVATE(chiContFn)(ChiCont c) {
+    return CHI_CHOICE(CHI_CONT_PREFIX, c, c->fn);
+}
+
+CHI_INL CHI_WU ChiContFn* CHI_PRIVATE(chiToContFn)(Chili c) {
 #if !CHI_CONT_PREFIX && CHI_ARCH_32BIT
     ChiContFn* fn = (ChiContFn*)chiToPtr(c);
     CHI_ASSERT(fn == chiToCont(c)->fn);
     return fn;
-#elif CHI_CONT_PREFIX
-    return chiToCont(c);
 #else
-    return chiToCont(c)->fn;
+    return _chiContFn(chiToCont(c));
 #endif
+}
+
+CHI_INL CHI_WU ChiContInfo* CHI_PRIVATE(chiContInfo)(ChiCont cont) {
+    return CHI_CHOICE(CHI_CONT_PREFIX, CHI_ALIGN_CAST((uint8_t*)cont - CHI_CONT_PREFIX_ALIGN, ChiContInfo*), cont);
+}
+
+/**
+ * Return true if function closure
+ */
+CHI_INL CHI_WU bool CHI_PRIVATE(chiFn)(ChiType t) {
+    return t >= CHI_FIRST_FN && t <= CHI_LAST_FN;
+}
+
+/**
+ * Arity of function type
+ */
+CHI_INL CHI_WU uint32_t CHI_PRIVATE(chiFnTypeArity)(ChiType t) {
+    CHI_ASSERT(_chiFn(t));
+    return (uint32_t)(t - CHI_FIRST_FN + 1);
+}
+
+/**
+ * Arity of function
+ */
+CHI_INL CHI_WU uint32_t CHI_PRIVATE(chiFnArity)(Chili c) {
+    uint32_t a = _chiFnTypeArity(_chiType(c));
+    CHI_ASSERT(({ uint32_t n = _chiContInfo(chiToCont(chiIdx(c, 0)))->na; n == CHI_VAARGS || n == a + 1; }));
+    return a;
 }

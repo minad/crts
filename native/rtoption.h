@@ -22,40 +22,39 @@ typedef enum { CHI_FOREACH_SINK_COLOR(_CHI_SINK_COLOR,) CHI_SINK_BINARY, CHI_SIN
 typedef struct {
     ChiMillis       interval;
     struct {
+        uint32_t    aging;
+        ChiMicros   slice;
+        ChiGCMode   mode;
+        CHI_IF(CHI_GC_CONC_ENABLED, uint32_t worker;)
         struct {
-            uint32_t    aging;
-            bool        noCollapse;
-        } scav;
-        struct {
-            ChiMicros   slice;
-            ChiGCMode   mode;
-            CHI_IF(CHI_GC_CONC_ENABLED, uint32_t worker;)
-            bool        noCollapse;
-        } major;
+            size_t  block;
+            size_t  chunk;
+        } gray;
     } gc;
     struct {
-        size_t      size;
+        size_t      limit;
         size_t      chunk;
-        uint32_t    nursery;
-    } block;
+        size_t      block;
+    } nursery;
     struct {
         struct {
             size_t   init;
             size_t   max;
             uint32_t full;
-            uint32_t soft;
-            uint32_t hard;
+            uint32_t overflow;
         } limit;
         struct {
             size_t   segment;
             size_t   page;
         } small, medium;
-        uint32_t    scanDepth;
+        uint32_t     scanDepth;
+        bool         noCard;
     } heap;
     struct {
-        uint32_t    init;
-        uint32_t    max;
-        uint32_t    growth;
+        size_t      init;
+        size_t      limit;
+        size_t      step;
+        size_t      hot;
         uint32_t    trace;
         bool        traceMangled;
         bool        traceCycles;
@@ -77,12 +76,18 @@ typedef struct {
         bool        json;
         bool        cumulative;
         bool        enabled;
-        bool        verbose;
+        bool        histogram;
     } stats;)
     CHI_IF(CHI_COLOR_ENABLED, ChiSinkColor color;)
     CHI_IF(CHI_SYSTEM_HAS_TASK, uint32_t processors;)
 } ChiRuntimeOption;
 
-CHI_EXTERN const ChiOption chiRuntimeOptionList[];
+CHI_EXTERN ChiOptionGroup chiGeneralOptions;
+CHI_EXTERN ChiOptionGroup chiStackOptions;
+CHI_EXTERN ChiOptionGroup chiNurseryOptions;
+CHI_EXTERN ChiOptionGroup chiHeapOptions;
+CHI_EXTERN ChiOptionGroup chiGCOptions;
+CHI_IF(CHI_EVENT_ENABLED, CHI_EXTERN ChiOptionGroup chiEventOptions;)
+CHI_IF(CHI_STATS_ENABLED, CHI_EXTERN ChiOptionGroup chiStatsOptions;)
 CHI_INTERN void chiRuntimeOptionDefaults(ChiRuntimeOption*);
 CHI_INTERN void chiRuntimeOptionValidate(ChiRuntimeOption*);
