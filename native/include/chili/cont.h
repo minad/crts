@@ -154,9 +154,7 @@
     ({                                                                  \
         Chili thk = (val);                                              \
         ASET(0, thk);                                                   \
-        if ((CHI_MARK_COLLAPSE_ENABLED ||                               \
-             CHI_SCAV_COLLAPSE_ENABLED) &&                              \
-            !_chiRefType(thk, CHI_THUNK))                               \
+        if (!_chiIsThunk(thk))                                          \
             ret;                                                        \
         else                                                            \
             JUMP_FN(_chiFieldRead(&_chiToThunk(thk)->cont));            \

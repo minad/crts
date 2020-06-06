@@ -36,6 +36,7 @@
 #define chiInit _chiInit
 #define chiInt64Pack _chiInt64Pack
 #define chiInt64Unpack _chiInt64Unpack
+#define chiIsThunk _chiIsThunk
 #define chiLikely _chiLikely
 #define chiObject _chiObject
 #define chiObjectColor _chiObjectColor

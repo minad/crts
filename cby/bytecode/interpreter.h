@@ -2279,9 +2279,7 @@ OP_BEGIN(lazyForce)
      * optimized for the interpreter reentry.
      * Furthermore we push the update frame here instead of in the continuation.
      */
-    if ((CHI_MARK_COLLAPSE_ENABLED ||
-         CHI_SCAV_COLLAPSE_ENABLED) &&
-        !_chiRefType(thk, CHI_THUNK)) {
+    if (!chiIsThunk(thk)) {
         Chili v0 = thk;
         {    _Static_assert(1 <= CBY_CONTEXT_SIZE, "Too many return values");
     INSN_LEAVE;

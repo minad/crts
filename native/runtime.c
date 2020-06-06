@@ -110,22 +110,15 @@ STATIC_CONT(blackholeCont, .size = 1) {
     KNOWN_JUMP(chiThunkBlackhole);
 }
 
-STATIC_CONT(thunkReturn, .na = 1) {
-    PROLOGUE_INVARIANTS(thunkReturn);
-    Chili thunk = AGET(0);
-    UNDEF_ARGS(0);
-    ASET(0, chiFieldRead(&chiToThunk(thunk)->val));
-    RET;
-}
-
 CONT(chiThunkBlackhole, .na = 1) {
     PROLOGUE_INVARIANTS(chiThunkBlackhole);
     UNDEF_ARGS(1);
     Chili thunk = AGET(0), val;
+    if (!chiIsThunk(thunk)) {
+        ASET(0, thunk);
+        RET;
+    }
     if (chiThunkForced(thunk, &val)) {
-        // Thunk forced twice, assume more forces?
-        // TODO: Investigate if we should better do this directly in chiThunkUpdateCont!
-        chiFieldInit(&chiToThunk(thunk)->cont, chiFromCont(&thunkReturn));
         ASET(0, val);
         RET;
     }
@@ -786,7 +779,7 @@ CHI_PARTIAL_TABLE(4, 5, &partial4of5)
             AUNDEF(1 + arity + i);                                      \
         }                                                               \
         SP += rest;                                                     \
-        if ((__builtin_constant_p(args) ? args - 1 : rest) - 1 < CHI_DIM(overAppTable)) { \
+        if ((__builtin_constant_p(args) ? args - 1 : rest) < CHI_DIM(overAppTable) + 1) { \
             *SP++ = chiFromCont(overAppTable[rest - 1]);                \
         } else {                                                        \
             *SP++ = _chiFromUnboxed(rest + 2);                          \

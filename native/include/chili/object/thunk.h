@@ -49,6 +49,11 @@ CHI_OBJECT(THUNK, Thunk, ChiField cont, val; Chili clos[])
 CHI_EXPORT_CONT_DECL(CHI_PRIVATE(chiThunkBlackhole))
 CHI_EXPORT_CONT_DECL(CHI_PRIVATE(chiThunkUpdateCont))
 
+CHI_INL CHI_WU bool CHI_PRIVATE(chiIsThunk)(Chili thunk) {
+    return (!CHI_MARK_COLLAPSE_ENABLED && !CHI_SCAV_COLLAPSE_ENABLED) ||
+        _chiRefType(thunk, CHI_THUNK);
+}
+
 CHI_INL CHI_WU bool CHI_PRIVATE(chiThunkForced)(Chili thunk, Chili* val) {
     *val = _chiFieldRead(&_chiToThunk(thunk)->val);
     return !chiIdentical(*val, thunk);

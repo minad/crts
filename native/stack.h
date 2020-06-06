@@ -114,11 +114,14 @@ CHI_INL bool chiStackWalk(ChiStackWalk* w) {
 
 CHI_INL void chiStackDebugWalk(Chili stack, const Chili* sp, const Chili* sl) {
     chiStackCheckCanary(sl);
-    if (CHI_STACK_DEBUG_WALK) {
-        const Chili *base = chiToStack(stack)->base, *p = sp - 1;
-        for (size_t depth = 0;
-             p >= base && (CHI_STACK_DEBUG_WALK < 0 || depth < (size_t)(CHI_STACK_DEBUG_WALK ? CHI_STACK_DEBUG_WALK : 1));
-             ++depth, p -= chiFrameSize(p));
-        CHI_ASSERT(CHI_STACK_DEBUG_WALK >= 0 || p == base - 1);
-    }
+#if CHI_STACK_DEBUG_WALK == 0
+    CHI_NOWARN_UNUSED(stack);
+    CHI_NOWARN_UNUSED(sp);
+#else
+    const Chili *base = chiToStack(stack)->base, *p = sp - 1;
+    for (size_t depth = 0;
+         p >= base && (CHI_STACK_DEBUG_WALK < 0 || depth < (size_t)CHI_STACK_DEBUG_WALK);
+         ++depth, p -= chiFrameSize(p));
+    CHI_ASSERT(CHI_STACK_DEBUG_WALK >= 0 || p == base - 1);
+#endif
 }
